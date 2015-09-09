@@ -79,7 +79,7 @@ class Game():
     def UnknownEvent(self, iev):
         raise ValueError('Unknown input event %r'%(repr(iev),))
     def ev_Move(self, iev):
-        if (self.board[srcpair] & 0x0F) in (Board.PC_EMPTY, Board.PC_ASIAN):
+        if (self.board[srcpair] & 0x0F) in (Board.PC_EMPTY, Board.PC_KING):
             return MoveInvalid(pleb, MoveInvalid.POS_CANT_MOVE_THAT)
         elif (self.board[srcpair] & 0x10) == 0
         if self.board.CanMove(iev.srcpair, iev.dstpair):
@@ -103,7 +103,7 @@ class Board():
     PC_EMPTY = 0x00
     PC_WHITE = 0x01
     PC_BLACK = 0x02
-    PC_ASIAN = 0x03
+    PC_KING = 0x03
     PC_F_CONFLICT = 0x10
     PC_F_GOAL = 0x20
 
@@ -117,7 +117,7 @@ class Board():
     def _FindKing(self):
         for colidx, col in enumerate(self.columns):
             for rowidx, row in enumerate(col):
-                if (self[col, row] & 0x0F) == self.PC_ASIAN:
+                if (self[col, row] & 0x0F) == self.PC_KING:
                     self.king = (col, row)
                     return self.king
     def SetPlayerGoal(self, pair, pleb):
@@ -150,7 +150,7 @@ class Board():
                 if (self[start] & 0x0F) != self.PC_EMPTY:
                     nearest[axis] = start
                     break
-        assert all((self[i] & 0x0F) != self.PC_ASIAN for i in nearest.itervalues())
+        assert all((self[i] & 0x0F) != self.PC_KING for i in nearest.itervalues())
         colpri, coldir = self._DoKing(nearest[(1, 0)], nearest[(-1, 0)])
         rowpri, rowdir = self._DoKing(nearest[(0, 1)], nearest[(0, -1)])
         colpair = self.king[0] + coldir, self.king[1]
