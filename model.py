@@ -212,7 +212,7 @@ class Board():
             return self.agent, rowpair
         return self.agent, self.agent
     @staticmethod
-    def L2Norm(p1, p2):
+    def L1Norm(p1, p2):
         return abs(p1[0] - p2[0]), abs(p2[1] - p2[1])
 
     PRI_UNBAL = 0x30000
@@ -228,16 +228,16 @@ class Board():
         if (pospc, negpc) in [(self.PC_WHITE, self.PC_BLACK), (self.PC_BLACK, self.PC_WHITE)]:
             whpair = (pospair if pospc == self.PC_WHITE else negpair)
             blpair = (pospair if pospc == self.PC_BLACK else negpair)
-            whdist = self.L2Norm(self.agent, white)
-            bldist = self.L2Norm(self.agent, black)
+            whdist = self.L1Norm(self.agent, white)
+            bldist = self.L1Norm(self.agent, black)
             if whdist <= 1:
                 return self.PRI_NONE, 0
             return self.PRI_UNBAL | ((maxdist - whdist) << 8) | bldist, (1 if whpair == pospair else -1)
         # (2) Check toward white
         # (2a) check both directions
         if pospc == self.PC_WHITE and negpc == self.PC_WHITE:
-            posdist = self.L2Norm(self.agent, pospair)
-            negdist = self.L2Norm(self.agent, negpair)
+            posdist = self.L1Norm(self.agent, pospair)
+            negdist = self.L1Norm(self.agent, negpair)
             if posdist == negdist:
                 return self.PRI_NONE, 0
             if 1 in (posdist, negdist):
@@ -246,20 +246,20 @@ class Board():
         # (2b) check for singular pieces
         if (pospc, negpc) in [(self.PC_WHITE, self.PC_EMPTY), (self.PC_EMPTY, self.PC_WHITE)]:
             pair = (pospair if pospc == self.PC_WHITE else negpair)
-            dist = self.L2Norm(self.agent, pair)
+            dist = self.L1Norm(self.agent, pair)
             return self.PRI_TOWARD | (maxdist - dist), (1 if pair == pospair else -1)
         # (3) Check away from black
         # (3a) check both directions
         if pospc == self.PC_BLACK and negpc == self.PC_BLACK:
-            posdist = self.L2Norm(self.agent, pospair)
-            negdist = self.L2Norm(self.agent, negpair)
+            posdist = self.L1Norm(self.agent, pospair)
+            negdist = self.L1Norm(self.agent, negpair)
             if posdist == negdist:
                 return self.PRI_NONE, 0
             return self.PRI_AWAY | (maxdist - min(posdist, negdist)), (-1 if posdist < negdist else 1)
         # (3b) check for singular pieces
         if (pospc, negpc) in [(self.PC_BLACK, self.PC_EMPTY), (self.PC_EMPTY, self.PC_BLACK)]:
             pair = (pospair if pospc == self.PC_BLACK else negpair)
-            dist = self.L2Norm(self.agent, pair)
+            dist = self.L1Norm(self.agent, pair)
             return self.PRI_AWAY | (maxdist - dist), (-1 if pair == pospair else 1)
         return self.PRI_NONE, 0
     def __getitem__(self, pair):
