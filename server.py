@@ -34,13 +34,16 @@ class FEGame(object):
     def __init__(self):
         self.private = false
         self.max_plebid = 0
-        self.plebs = {}
+        self.sess_plebs = {}
+        self.uuid_plebs = {}
         self.uuid = uuid.uuid4()
         self.committed_moves = []
         self.setup = None
 
     def add_pleb(self, name, sessid):
-        self.plebs[sessid] = FEPleb(self.max_plebid, name, uuid.uuid4())
+        pleb = FEPleb(self.max_plebid, name, uuid.uuid4())
+        self.sess_plebs[sessid] = pleb
+        self.uuid_plebs[pleb.uuid] = pleb
         self.max_plebid += 1
         return self.plebs[-1]
 
@@ -50,10 +53,17 @@ class FEGame(object):
     def pleb_uuids(self):
         return [pleb.uuid for pleb in self.plebs]
 
+    def pleb_from_sess(self, sess):
+        return self.sess_plebs.get(sess)
+
     def pleb_from_uuid(self, uuid):
-        return self.plebs.get(uuid)
+        return self.uuid_plebs.get(uuid)
 
     # TODO: Setup configuration (chosing initial board etc)
+
+def is_coord(thing):
+    # Coordinates are a [y, x] pair; JSON should deserialize them as a list.
+    return isinstance(thing, list) and len(thing) == 2
 
 # Map from UUID to dict.
 client_session_states = {}
@@ -65,24 +75,25 @@ app = Flask(__name__)
 app.secret_key = os.urandom(32)
 
 def sess_uuid():
-    if "uuid" not in session:
-        session["uuid"] = uuid.uuid4()
-    return session["uuid"]
+    if "sess" not in session:
+        session["sess"] = uuid.uuid4()
+    return session["sess"]
 
-def client_sess():
+def client_sess_state():
     uid = sess_uuid()
 
     if uid not in client_session_states:
         d = {}
         client_session_states[uid] = d
         d["in_games"] = []
+    return client_session_states.get(uid)
 
 @app.route("/game", methods=["GET"])
 def list_games():
     return jsonify([
         feg.mgame.serialize()
         for feg in current_games
-        if (not feg.private or sess_uuid() in feg.pleb_uuids())
+        if not feg.private or feg.pleb_from_sess(sess_uuid())
     ])
 
 @app.route("/game/<uuid:gameid>", methods=["GET"])
@@ -115,25 +126,25 @@ def subscribe_to_game(msg):
         return {"status": "error", "reqid": msg["reqid"], "error": "NEED_GAME_ID"}
     elif msg["game_id"] not in current_games:
         return {"status": "error", "reqid": msg["reqid"], "error": "GAME_NOT_EXIST"}
-    elif msg["game_id"] not in client_sess()["in_games"]:
+    elif msg["game_id"] not in client_sess_state()["in_games"]:
         return {"status": "error", "reqid": msg["reqid"], "error": "NOT_IN_GAME"}
     else:
         join_room(msg["game_id"])
 
 @socketio.on("submit_move")
 def submit_move(msg):
-    s = client_sess()
+    s = client_sess_state()
     if not verify_msg(msg):
         return bad_msg()
     if msg["game_id"] not in s["in_games"]:
         return {"status": "error", "reqid": msg["reqid"], "error": "NOT_IN_GAME"}
     elif msg["game_id"] not in current_games:
         return {"status": "error", "reqid": msg["reqid"], "error": "GAME_NOT_EXIST"}
-    elif not_corrd(msg.get("from")) or not_coord(msg.get("to")):
+    elif not is_coord(msg.get("from")) or not is_coord(msg.get("to")):
         return {"status": "error", "reqid": msg["reqid"], "error": "NEED_COORDS"}
     else:
         feg = current_games[msg["game_id"]]
-        plebid = feg.pleb_from_uuid(sess_uuid())
+        plebid = feg.pleb_from_sess(sess_uuid())
         iev = model.Move(plebid, msg["from"], msg["to"])
         oev = feg.mgame.Handle(iev)
         if len(feg.mgame.pending_moves) == len(feg.mgame.plebeians):

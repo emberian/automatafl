@@ -29,14 +29,6 @@ class MoveAck(OEvent):
     def serialize(self):
         return {"kind": "MOVE_ACK"}
 
-REASON_NAMES = {
-    1: "POS_OCCUPIED",
-    2: "POS_OOB",
-    3: "POS_CONFLICT",
-    4: "POS_CANT_MOVE_THAT",
-    5: "POS_CANT_MOVE_THERE",
-    6: "POS_MOVE_LOCKED_IN",
-}
 
 class MoveInvalid(OEvent):
     POS_OCCUPIED        = 1
@@ -45,6 +37,15 @@ class MoveInvalid(OEvent):
     POS_CANT_MOVE_THAT  = 4
     POS_CANT_MOVE_THERE = 5
     POS_MOVE_LOCKED_IN  = 6
+    
+    REASON_NAMES = {
+        1: "POS_OCCUPIED",
+        2: "POS_OOB",
+        3: "POS_CONFLICT",
+        4: "POS_CANT_MOVE_THAT",
+        5: "POS_CANT_MOVE_THERE",
+        6: "POS_MOVE_LOCKED_IN",
+    }
 
     def __init__(self, pleb, reason):
         assert(reason in [self.ALREADY_MOVED,
@@ -55,7 +56,7 @@ class MoveInvalid(OEvent):
 
     def serialize(self):
         return {"kind": "MOVE_INVALID",
-                "reason": REASON_NAMES[self.reason]}
+                "reason": MoveInvalid.REASON_NAMES[self.reason]}
 
 class TurnOver(OEvent):
     def serialize(self):
@@ -67,13 +68,6 @@ class Conflict(OEvent):
 
     def serialiaze(self):
         return {"kind": "CONFLICT", "square": 
-
-OCCUPANT_NAMES = {
-    0: "EMPTY",
-    1: "WHITE",
-    2: "BLACK",
-    3: "AGENT",
-}
 
 class Game():
     ST_INIT = 0
@@ -179,7 +173,7 @@ class Game():
             col = []
             for cell in column:
                 c = {}
-                c["occupant"] = OCCUPANT_NAMES[cell & 0x0F]
+                c["occupant"] = Board.OCCUPANT_NAMES[cell & 0x0F]
                 if cell & Board.PC_F_CONFLICT:
                     c["conflict"] = True
                 if cell & Board.PC_F_GOAL:
@@ -206,6 +200,14 @@ class Board():
     PC_AGENT = 0x03
     PC_F_CONFLICT = 0x10
     PC_F_GOAL = 0x20
+
+    OCCUPANT_NAMES = {
+        0: "EMPTY",
+        1: "WHITE",
+        2: "BLACK",
+        3: "AGENT",
+    }
+
 
     def __init__(self, *cols):
         self.columns = list(cols)
