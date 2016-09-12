@@ -23,8 +23,20 @@ class OEvent(Event):
     pass
 
 class MoveAck(OEvent):
-    def __init(self, pleb):
+    def __init__(self, pleb):
         self.pleb = pleb
+
+    def serialize(self):
+        return {"kind": "MOVE_ACK"}
+
+REASON_NAMES = {
+    1: "POS_OCCUPIED",
+    2: "POS_OOB",
+    3: "POS_CONFLICT",
+    4: "POS_CANT_MOVE_THAT",
+    5: "POS_CANT_MOVE_THERE",
+    6: "POS_MOVE_LOCKED_IN",
+}
 
 class MoveInvalid(OEvent):
     POS_OCCUPIED        = 1
@@ -41,12 +53,27 @@ class MoveInvalid(OEvent):
         self.pleb = pleb
         self.reason = reason
 
+    def serialize(self):
+        return {"kind": "MOVE_INVALID",
+                "reason": REASON_NAMES[self.reason]}
+
 class TurnOver(OEvent):
-    pass
+    def serialize(self):
+        return {"kind": "TURN_OVER"}
 
 class Conflict(OEvent):
     def __init__(self, square):
         self.square = square
+
+    def serialiaze(self):
+        return {"kind": "CONFLICT", "square": 
+
+OCCUPANT_NAMES = {
+    0: "EMPTY",
+    1: "WHITE",
+    2: "BLACK",
+    3: "AGENT",
+}
 
 class Game():
     ST_INIT = 0
@@ -70,6 +97,7 @@ class Game():
         2: [[(0, 0), (10, 0)], [(10, 0), (10, 10)]],
         4: [[(0, 0)], [(10, 0)], [(10, 10)], [(0, 10)]],
     }
+
     def __init__(self, *plebs, setup=None):
         if setup is None:
             setup = self.DEFAULT_SETUP
@@ -83,10 +111,13 @@ class Game():
                 for goal in goals:
                     self.board.SetPlayerGoal(goal, plebs[plidx])
         self.state = self.ST_INIT
+
     def Handle(self, iev):
         return getattr(self, 'ev_'+str(type(iev)), self.UnknownEvent)(iev)
+
     def UnknownEvent(self, iev):
         raise ValueError('Unknown input event %r'%(repr(iev),))
+
     def ev_Move(self, iev):
         # TODO: these should be in Board.CanMove
         if not self.board.CanMove(iev.srcpair, iev.dstpair):
@@ -105,6 +136,7 @@ class Game():
                 return MoveInvalid(pleb, MoveInvalid.POS_MOVE_LOCKED_IN)
             self.pending_moves[pleb] = (iev.srcpair, iev.dstpair)
             return MoveAck(pleb)
+
     def Resolve(self):
         seen_pieces = dict()
         seen_dests = dict()
@@ -141,9 +173,26 @@ class Game():
         # validity checking
         return []
 
+    def serialize(self):
+        columns = []
+        for column in self.board.columns:
+            col = []
+            for cell in column:
+                c = {}
+                c["occupant"] = OCCUPANT_NAMES[cell & 0x0F]
+                if cell & Board.PC_F_CONFLICT:
+                    c["conflict"] = True
+                if cell & Board.PC_F_GOAL:
+                    c["goal"] = cell >> 8
+
+                col.append(c)
+            columsn.append(col)
+        return columns
+
 class Plebeian():
     def __init__(self, id):
         self.id = id
+
     @staticmethod
     def ToID(obj):
         if isinstance(obj, Plebeian):
@@ -165,28 +214,34 @@ class Board():
         assert all(len(i) == len(cols[0]) for i in cols[1:])
         self.agent = None
         self._FindAgent()
+
     def _FindAgent(self):
         for colidx, col in enumerate(self.columns):
             for rowidx, row in enumerate(col):
                 if (self[col, row] & 0x0F) == self.PC_AGENT:
                     self.agent = (col, row)
                     return self.agent
+
     def SetPlayerGoal(self, pair, pleb):
         pleb = Plebeian.ToID(pleb)
         cell = self[pair]
         cell = (cell & 0xFF) | self.PC_F_GOAL | (pleb << 8)
         self[pair] = cell
+
     def CanMove(self, srcpair, dstpair):
         if (self[dstpair] & 0x1F) != self.PC_EMPTY:
             return False
+
     def Move(self, srcpair, dstpair):
         if self.CanMove(srcpair, dstpair):
             self[dstpair] = self[srcpair]
             self[srcpair] = (self[srcpair] & ~0x0F) | self.PC_EMPTY
             return True
         return False
+
     def InBoard(self, pair):
         return 0 <= pair[0] < self.width and 0 <= pair[1] < self.height
+
     def AgentStep(self):
         self._FindAgent()
         nearest = {}
@@ -211,6 +266,7 @@ class Board():
         if self.InBoard(rowpair):
             return self.agent, rowpair
         return self.agent, self.agent
+
     @staticmethod
     def L1Norm(p1, p2):
         return abs(p1[0] - p2[0]), abs(p2[1] - p2[1])
@@ -262,7 +318,9 @@ class Board():
             dist = self.L1Norm(self.agent, pair)
             return self.PRI_AWAY | (maxdist - dist), (-1 if pair == pospair else 1)
         return self.PRI_NONE, 0
+
     def __getitem__(self, pair):
         return self.columns[pair[0]][pair[1]]
+
     def __setitem__(self, pair, value):
         self.columns[pair[0]][pair[1]] = value
