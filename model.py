@@ -66,8 +66,8 @@ class Conflict(OEvent):
     def __init__(self, square):
         self.square = square
 
-    def serialiaze(self):
-        return {"kind": "CONFLICT", "square": 
+    def serialize(self):
+        return {"kind": "CONFLICT", "square": self.square}
 
 class Game():
     ST_INIT = 0

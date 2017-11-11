@@ -17,11 +17,12 @@ not-yet-implemented replay feature.
 """
 
 from contextlib import contextmanager
+import os
 import uuid
 
 from flask.json import jsonify
 from flask import Flask, session
-
+from flask_socketio import SocketIO, join_room, leave_room, send, emit
 import model
 
 class FEPleb(model.Plebeian):
@@ -63,7 +64,7 @@ class FEGame(object):
 
 def is_coord(thing):
     # Coordinates are a [y, x] pair; JSON should deserialize them as a list.
-    return isinstance(thing, list) and len(thing) == 2
+    return isinstance(thing, list) and len(thing) == 2 and isinstance(thing[0], int)
 
 # Map from UUID to dict.
 client_session_states = {}
@@ -73,6 +74,9 @@ current_games = {}
 
 app = Flask(__name__)
 app.secret_key = os.urandom(32)
+
+
+socketio = SocketIO(app)
 
 def sess_uuid():
     if "sess" not in session:
@@ -104,14 +108,18 @@ def get_game(gameid):
 
     return jsonify({"status": "ok", "board": feg.mgame.serialize()})
 
-@app.route("/game/<uuid:gameid/join", methods=["POST"])
+@app.route("/game/<uuid:gameid>/join", methods=["POST"])
 def join_game(gameid):
     feg = current_games.get(gameid, None)
     if feg is None:
         abort(404)
     if hasattr(feg, "mgame"):
         abort(403)
-    feg.add_pleb("some pleb", sess_uuid())
+    j = request.get_json()
+    if "name" not in j:
+        abort(400)
+
+    feg.add_pleb(j["name"], sess_uuid())
     return jsonify({"status": "ok"})
 
 @app.route("/game", methods=["POST"])
@@ -122,7 +130,9 @@ def make_game():
 
 @socketio.on("subscribe_to_game")
 def subscribe_to_game(msg):
-    if "game_id" not in msg:
+    if "reqid" not in msg:
+        return {"status": "error", "reqid": 0, "error": "NO_REQID"}
+    elif "game_id" not in msg:
         return {"status": "error", "reqid": msg["reqid"], "error": "NEED_GAME_ID"}
     elif msg["game_id"] not in current_games:
         return {"status": "error", "reqid": msg["reqid"], "error": "GAME_NOT_EXIST"}
@@ -130,13 +140,27 @@ def subscribe_to_game(msg):
         return {"status": "error", "reqid": msg["reqid"], "error": "NOT_IN_GAME"}
     else:
         join_room(msg["game_id"])
+        return {"status": "ok", "reqid": msg["reqid"]}
+
+@socketio.on("unsubscribe_from_game")
+def subscribe_to_game(msg):
+    if "reqid" not in msg:
+        return {"status": "error", "reqid": 0, "error": "NO_REQID"}
+    elif "game_id" not in msg:
+        return {"status": "error", "reqid": msg["reqid"], "error": "NEED_GAME_ID"}
+    else:
+        leave_room(msg["game_id"])
+        return {"status": "ok", "reqid": msg["reqid"]}
 
 @socketio.on("submit_move")
 def submit_move(msg):
     s = client_sess_state()
-    if not verify_msg(msg):
-        return bad_msg()
-    if msg["game_id"] not in s["in_games"]:
+
+    if "reqid" not in msg:
+        return {"status": "error", "reqid": 0, "error": "NO_REQID"}
+    elif "game_id" not in msg:
+        return {"status": "error", "reqid": msg["reqid"], "error": "NEED_GAME_ID"}
+    elif msg["game_id"] not in s["in_games"]:
         return {"status": "error", "reqid": msg["reqid"], "error": "NOT_IN_GAME"}
     elif msg["game_id"] not in current_games:
         return {"status": "error", "reqid": msg["reqid"], "error": "GAME_NOT_EXIST"}
@@ -152,3 +176,10 @@ def submit_move(msg):
             emit("resolved", {"status": "ok", "event": [c.serialize() for c in
                 conflicts]}, broadcast=True, room=feg.uuid)
         return {"status": "ok", "reqid": msg["reqid"], "event": oev.serialize()}
+
+@app.route("/")
+def index():
+    return app.send_static_file("index.html")
+
+if __name__ == "__main__":
+    socketio.run(app)
