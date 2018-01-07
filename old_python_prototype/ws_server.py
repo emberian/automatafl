@@ -287,7 +287,7 @@ class GameState(cmd.Cmd):
             if cli.state in games:
                 continue
             games.add(cli.state)
-        await self.print({'msg': 'games', 'list': list(games)})
+        await self.print({'msg': 'games', 'list': [i.first_cli.name for i in games]})
 
 class GameServerProtocol(asyncio.Protocol):
     ALL_CLIENTS = {}
