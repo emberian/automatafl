@@ -21,7 +21,7 @@ import os
 import uuid
 
 from flask.json import jsonify
-from flask import Flask, session
+from flask import Flask, session, abort
 from flask_socketio import SocketIO, join_room, leave_room, send, emit
 import model
 
@@ -32,14 +32,16 @@ class FEPleb(model.Plebeian):
         self.uuid = uuid
 
 class FEGame(object):
-    def __init__(self):
-        self.private = false
+    def __init__(self, name):
+        self.name = name
+        self.private = False
         self.max_plebid = 0
         self.sess_plebs = {}
         self.uuid_plebs = {}
         self.uuid = uuid.uuid4()
         self.committed_moves = []
         self.setup = None
+        self.mgame = None
 
     def add_pleb(self, name, sessid):
         pleb = FEPleb(self.max_plebid, name, uuid.uuid4())
@@ -59,6 +61,13 @@ class FEGame(object):
 
     def pleb_from_uuid(self, uuid):
         return self.uuid_plebs.get(uuid)
+
+    def serialize(self):
+        return {
+            'board': None if self.mgame is None else self.mgame.Serialize(),
+            'name': self.name,
+            'players': len(self.sess_plebs),
+        }
 
     # TODO: Setup configuration (chosing initial board etc)
 
@@ -95,8 +104,8 @@ def client_sess_state():
 @app.route("/game", methods=["GET"])
 def list_games():
     return jsonify([
-        feg.mgame.serialize()
-        for feg in current_games
+        feg.serialize()
+        for feg in current_games.values()
         if not feg.private or feg.pleb_from_sess(sess_uuid())
     ])
 
@@ -106,7 +115,7 @@ def get_game(gameid):
     if feg is None:
         abort(404)
 
-    return jsonify({"status": "ok", "board": feg.mgame.serialize()})
+    return jsonify({"status": "ok", "game": feg.serialize()})
 
 @app.route("/game/<uuid:gameid>/join", methods=["POST"])
 def join_game(gameid):
@@ -124,7 +133,11 @@ def join_game(gameid):
 
 @app.route("/game", methods=["POST"])
 def make_game():
-    feg = FEGame()
+    j = request.get_json()
+    if "name" not in j:
+        abort(400)
+
+    feg = FEGame(j["name"])
     current_games[feg.uuid] = feg
     return jsonify({"status": "ok", "uuid": feg.uuid})
 
@@ -132,6 +145,8 @@ def make_game():
 def subscribe_to_game(msg):
     if "reqid" not in msg:
         return {"status": "error", "reqid": 0, "error": "NO_REQID"}
+    elif "sessid" not in msg:
+        return {"status": "error", "reqid": msg["reqid"], "error": "NO_SESSID"}
     elif "game_id" not in msg:
         return {"status": "error", "reqid": msg["reqid"], "error": "NEED_GAME_ID"}
     elif msg["game_id"] not in current_games:
@@ -143,7 +158,7 @@ def subscribe_to_game(msg):
         return {"status": "ok", "reqid": msg["reqid"]}
 
 @socketio.on("unsubscribe_from_game")
-def subscribe_to_game(msg):
+def unsubscribe_from_game(msg):
     if "reqid" not in msg:
         return {"status": "error", "reqid": 0, "error": "NO_REQID"}
     elif "game_id" not in msg:

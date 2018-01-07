@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf8"/>
+		<script type="text/javascript">
+var SVG_NS = 'http://www.w3.org/2000/svg';
+
+var ws;
+var board;
+var board_sf;
+var chat;
+
+var width = 11, height = 11;
+
+function ws_open() {
+	console.log("Connection open");
+}
+
+function ws_close() {
+	console.log("Connection closed");
+}
+
+var msg_handlers = {}, kind_handlers = {};
+
+function ws_message(ev) {
+	var pkt = JSON.parse(ev.data)
+	console.log("Received:", pkt);
+	if(pkt.msg != undefined && msg_handlers[pkt.msg] != undefined) {
+		msg_handlers[pkt.msg](pkt);
+	}
+	if(pkt.kind != undefined && kind_handlers[pkt.kind] != undefined) {
+		kind_handlers[pkt.kind](pkt);
+	}
+}
+
+function send_cmd(parts) {
+	console.log("Commmand:", parts);
+	ws.send(parts.join(" ") + "\n");
+}
+
+function add_chat(msg) {
+	console.log("Chat:", msg);
+	chat.value += msg + "\n";
+	chat.scrollTop = chat.scrollHeight;
+}
+
+function setup_board() {
+	board.setAttribute('width', (width + 1) + 'cm');
+	board.setAttribute('height', (height + 1) + 'cm');
+
+	board_sf.setAttribute('width', (width + 1) + 'cm');
+	board_sf.setAttribute('height', (height + 1) + 'cm');
+	board_sf.setAttribute('viewBox', '0 0 ' + (width + 1) + ' ' + (height + 1));
+
+	for(var row = 0; row < height; row++) {
+		for(var col = 0; col < width; col++) {
+			var cell = document.createElementNS(SVG_NS, 'rect');
+			cell.setAttribute('x', col + 'cm');
+			cell.setAttribute('y', (height - row) + 'cm');
+			cell.setAttribute('width', '1cm');
+			cell.setAttribute('height', '1cm');
+			cell.style.stroke = '#000';
+			cell.style.strokeWidth = '1px';
+			cell.style.fill = '#fed';
+			cell.id = "cell" + col + '_' + row;
+			cell.dataset.row = row;
+			cell.dataset.col = col;
+			board.appendChild(cell);
+		}
+	}
+
+	board.appendChild(board_sf);
+}
+
+function board_cell(col, row) {
+	return board.querySelector("#cell" + col + "_" + row);
+}
+
+msg_handlers.error = function(pkt) {
+	alert(pkt.error);
+}
+
+function basic_error_handle(pkt) { if(pkt.error != undefined) alert(pkt.error); }
+
+msg_handlers.set_name = basic_error_handle;
+msg_handlers.join_game = basic_error_handle;
+msg_handlers.move = basic_error_handle;
+
+kind_handlers.MOVE_ACK = function(pkt) {
+	add_chat("Player " + pkt.pleb + "'s move is ready.");
+}
+
+var INVALID_REASONS = {
+	"POS_OCCUPIED": "A piece already occupies that position",
+	"POS_OOB": "Move is out of bounds or otherwise impossible",
+	"POS_CONFLICT": "Move involves a conflicted square that cannot be used",
+	"POS_CANT_MOVE_THAT": "Source is invalid",
+	"POS_CANT_MOVE_THERE": "Destination is invalid",
+	"POS_MOVE_LOCKED_IN": "You have already submitted your move",
+};
+
+kind_handlers.MOVE_INVALID = function(pkt) {
+	add_chat("Move is invalid: " + INVALID_REASONS[pkt.reason]);
+}
+
+var FILL_COLORS = ['#ca8', '#fff', '#000', '#ff0'];
+var move_ind = {}
+
+kind_handlers.MOVE = function(pkt) {
+	add_chat(
+		(pkt.pleb == null? "The Agent": "Player " + pkt.pleb) +
+		(pkt.success? " moves" : " tried to move") +
+		" from " + pkt.src[0] + "," + pkt.src[1] +
+		" to " + pkt.dst[0] + "," + pkt.dst[1] +
+		(pkt.success? "" : ", but it failed.")
+	);
+	if(pkt.pleb != null) {
+		var vert = Math.abs(pkt.src[1] - pkt.dst[1]) > Math.abs(pkt.src[0] - pkt.dst[0]);
+		var dx = vert? 1: 0;
+		var dy = vert? 0: 1;
+		if(pkt.pleb % 2 == 0) {
+			dx = -dx;
+			dy = -dy;
+		}
+		if(move_ind[pkt.pleb] == undefined) {
+			move_ind[pkt.pleb] = document.createElementNS(SVG_NS, 'path');
+			move_ind[pkt.pleb].style.strokeWidth = '0.1';
+			move_ind[pkt.pleb].style.fill = 'none';
+			board_sf.appendChild(move_ind[pkt.pleb]);
+		}
+		var ind = move_ind[pkt.pleb];
+		var mid = [(pkt.src[0] + pkt.dst[0]) / 2, (pkt.src[1] + pkt.dst[1]) / 2];
+		ind.setAttribute('d',
+			'M' + (pkt.src[0] + 0.5) + ' ' + ((height - pkt.src[1]) + 0.5) +
+			' Q' + (mid[0] + 0.5 + dx) + ' ' + ((height - mid[1]) + 0.5 + dy) +
+			' ' + (pkt.dst[0] + 0.5) + ' ' + ((height - pkt.dst[1]) + 0.5)
+		);
+		ind.style.stroke = pkt.success? '#000' : '#f00';
+	}
+	if(pkt.success && (pkt.src[0] != pkt.dst[0] || pkt.src[1] != pkt.dst[1])) {
+		var src = board_cell(pkt.src[0], pkt.src[1]);
+		var dst = board_cell(pkt.dst[0], pkt.dst[1]);
+		dst.style.fill = src.style.fill;
+		src.style.fill = FILL_COLORS[0];
+	}
+}
+
+var conf_marks = [];
+
+kind_handlers.CONFLICT = function(pkt) {
+	add_chat("Players " + pkt.plebs.join(", ") + " conflicted on square " + pkt.square);
+	var mark = document.createElementNS(SVG_NS, 'circle');
+	mark.setAttribute('cx', (pkt.square[0] + 0.5) + 'cm');
+	mark.setAttribute('cy', ((height - pkt.square[1]) + 0.5) + 'cm');
+	mark.setAttribute('r', '0.5cm');
+	mark.style.fill = 'rgba(127, 0, 0, 192)';
+	board.appendChild(mark);
+	conf_marks.push(mark);
+}
+
+var ag_ind = null;
+
+kind_handlers.TURN_OVER = function(pkt) {
+	while(conf_marks.length >= 1) {
+		var mark = conf_marks.shift();
+		board.removeChild(mark);
+	}
+	if(ag_ind == null) {
+		ag_ind = document.createElementNS(SVG_NS, 'path');
+		board_sf.appendChild(ag_ind);
+		ag_ind.style.stroke = '#770';
+		ag_ind.style.strokeWidth = '0.1';
+		ag_ind.style.zIndex = 100;
+	}
+	ag_ind.setAttribute('d',
+		'M' + (pkt.agent_src[0] + 0.5) + ' ' + ((height - pkt.agent_src[1]) + 0.5) +
+		' L' + (pkt.agent_dst[0] + 0.5) + ' ' + ((height - pkt.agent_dst[1]) + 0.5)
+	);
+}
+
+msg_handlers.state = function(pkt) {
+	var w, h;
+	w = pkt.columns.length;
+	h = pkt.columns[0].length;
+	if(w != width || h != height) {
+		width = w;
+		height = h;
+		setup_board();
+	}
+
+	for(var col = 0; col < width; col++) {
+		for(var row = 0; row < height; row++) {
+			board_cell(col, row).style.fill = FILL_COLORS[pkt.columns[col][row] & 0xF];
+		}
+	}
+}
+msg_handlers.ready = function(pkt) {
+	document.querySelector("#name").textContent = pkt.name;
+	document.querySelector("#game").textContent = pkt.room;
+}
+
+msg_handlers.say = function(pkt) {
+	add_chat("<" + pkt.name + "> " + pkt.text);
+}
+
+msg_handlers.be_p = function(pkt) {
+	add_chat(pkt.name + " is now player " + pkt.pleb);
+}
+
+var click_mark = null;
+var click_row, click_col;
+
+function board_click(ev) {
+	var row = parseInt(ev.target.dataset.row);
+	var col = parseInt(ev.target.dataset.col);
+	console.log("click", col, row);
+	if(click_mark == null) {
+		click_mark = document.createElementNS(SVG_NS, 'circle');
+		click_mark.setAttribute('cx', (col + 0.5) + 'cm');
+		click_mark.setAttribute('cy', ((height - row) + 0.5) + 'cm');
+		click_mark.setAttribute('r', '0.5cm');
+		click_mark.style.fill = 'rgba(0, 64, 0, 127)';
+		board.appendChild(click_mark);
+		click_row = row;
+		click_col = col;
+	} else {
+		board.removeChild(click_mark);
+		click_mark = null;
+		send_cmd(["move", click_col, click_row, col, row]);
+	}
+}
+
+function do_setname(form) {
+	send_cmd(["set_name", form.in_name.value]);
+	return false;
+}
+
+function do_joingame(form) {
+	send_cmd(["join_game", form.in_game.value]);
+	return false;
+}
+
+function do_chatmsg(form) {
+	send_cmd(["say", form.in_chat.value]);
+	return false;
+}
+
+function do_be_p1() {
+	send_cmd(["be_p", 1]);
+}
+
+function do_be_p2() {
+	send_cmd(["be_p", 2]);
+}
+
+function init() {
+	var host = "ws://" + (location.hostname.length > 0? location.hostname : "localhost") + ":8080/";
+	console.log("Connecting to " + host);
+	ws = new WebSocket(host)
+	ws.addEventListener("open", ws_open);
+	ws.addEventListener("message", ws_message);
+	ws.addEventListener("close", ws_close);
+
+	var bc = document.querySelector("#board_container");
+	board = document.createElementNS(SVG_NS, 'svg');
+	board.addEventListener("click", board_click);
+	bc.appendChild(board);
+
+	board_sf = document.createElementNS(SVG_NS, 'svg');
+	board_sf.setAttribute('overflow', 'visible');
+	board_sf.style.zIndex = 10;
+
+	chat = document.querySelector("#chat");
+	chat.value = "";
+
+	setup_board()
+}
+
+document.addEventListener("DOMContentLoaded", init)
+		</script>
+	</head>
+	<body>
+		<div id="controls">
+			<form action="#" onsubmit="return do_setname(this)">
+				<label id="name" for="in_name">(your name)</label><input type="text" name="in_name"/><button type="submit">Set Name</button>
+			</form>
+			<form action="#" onsubmit="return do_joingame(this)">
+				<label id="game" for="in_game">(your game)</label><input type="text" name="in_game"/><button type="submut">Join Game</button>
+			</form>
+			<button onclick="do_be_p1()">Be Player 1</button><button onclick="do_be_p2()">Be Player 2</button>
+		</div>
+		<div id="board_container"></div>
+		<textarea id="chat" style="width: 100%; height: 15em;" disabled="true"></textarea>
+		<form style="width: 100%;" action="#" onsubmit="return do_chatmsg(this)">
+			<input type="text" name="in_chat"/><button type="submit">Say</button>
+		</form>
+	</body>
+</html>
