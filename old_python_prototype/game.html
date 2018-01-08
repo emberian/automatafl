@@ -208,7 +208,7 @@ kind_handlers.CONFLICT = function(pkt) {
 	var mark = document.createElementNS(SVG_NS, 'circle');
 	mark.setAttribute('cx', (pkt.square[0] + 0.5));
 	mark.setAttribute('cy', ((height - pkt.square[1]) + 0.5));
-	mark.setAttribute('r', '0.5');
+	mark.setAttribute('r', '0.45');
 	mark.style.fill = 'rgba(127, 0, 0, 0.75)';
 	board.appendChild(mark);
 	conf_marks.push(mark);
@@ -258,6 +258,8 @@ msg_handlers.ready = function(pkt) {
 	if(pkt.pleb != null) {
 		s += " [Player " + pkt.pleb + "]";
 	}
+	var fm = document.querySelector("#fm_game");
+	if(fm.game != undefined) fm.game.value = pkt.room;
 	document.querySelector("#name").textContent = s;
 }
 
@@ -285,7 +287,7 @@ function board_click(ev) {
 		click_mark = document.createElementNS(SVG_NS, 'circle');
 		click_mark.setAttribute('cx', (col + 0.5));
 		click_mark.setAttribute('cy', ((height - row) + 0.5));
-		click_mark.setAttribute('r', '0.5');
+		click_mark.setAttribute('r', '0.45');
 		click_mark.style.fill = 'rgba(0, 64, 0, 0.5)';
 		board.appendChild(click_mark);
 		click_row = row;
@@ -352,8 +354,8 @@ document.addEventListener("DOMContentLoaded", init)
 	</head>
 	<body>
 		<div id="overlay" style="display: none; z-index: 1; background-color: rgba(0, 0, 0, 0.5); position: fixed; left: 0; top: 0; width: 100%; height: 100%;">
-			<div id="ov_games" style="display: none; margin: auto;">
-				<form action="#" onsubmit="return do_cpl_join_game(this)">
+			<div id="ov_games" style="display: none; margin: auto; border: 1px solid #000; background-color: #fff; padding: 0.5em 1em;">
+				<form action="#" onsubmit="return do_cpl_join_game(this)" id="fm_game">
 					<ul id="games"></ul>
 					<button type="submit">Join Game</button>
 				</form>

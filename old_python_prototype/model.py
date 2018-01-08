@@ -380,8 +380,8 @@ class Board():
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
     PRI_UNBAL = 0x30000
-    PRI_TOWARD = 0x20000
-    PRI_AWAY = 0x10000
+    PRI_AWAY = 0x20000
+    PRI_TOWARD = 0x10000
     PRI_NONE = 0
 
     def _DoAgent(self, pospair, negpair):
