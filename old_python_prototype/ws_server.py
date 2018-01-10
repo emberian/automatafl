@@ -45,7 +45,10 @@ class GameState(cmd.Cmd):
         return self.pleb_for(self.cli)
 
     async def print(self, obj):
-        await self.cli.tran.send(json.dumps(obj))
+        try:
+            await self.cli.tran.send(json.dumps(obj))
+        except websockets.ConnectionClosed:
+            await self.postloop()
 
     async def broadcast(self, obj, no_players=False):
         old_cli = self.cli
@@ -67,7 +70,7 @@ class GameState(cmd.Cmd):
         await self.prompt()
 
     async def postloop(self):
-        self.clis.remove(self.cli)
+        self.clis.discard(self.cli)
         if not self.clis:
             return
         if self.first_cli == self.cli:
@@ -336,6 +339,8 @@ async def handle_connection(ws, uri):
     try:
         async for msg in ws:
             await gsp.data_received(msg)
+    except websockets.ConnectionClosed:
+        print('Connection closed.')
     finally:
         await gsp.connection_lost(None)
 

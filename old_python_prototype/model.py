@@ -38,6 +38,7 @@ class MoveInvalid(OEvent):
     POS_CANT_MOVE_THAT  = 4
     POS_CANT_MOVE_THERE = 5
     POS_MOVE_LOCKED_IN  = 6
+    POS_ILLEGAL         = 7
     
     REASON_NAMES = {
         1: "POS_OCCUPIED",
@@ -46,6 +47,7 @@ class MoveInvalid(OEvent):
         4: "POS_CANT_MOVE_THAT",
         5: "POS_CANT_MOVE_THERE",
         6: "POS_MOVE_LOCKED_IN",
+        7: "POS_ILLEGAL",
     }
 
     def __init__(self, pleb, reason):
@@ -53,7 +55,8 @@ class MoveInvalid(OEvent):
                           self.POS_OOB, self.POS_CONFLICT,
                           self.POS_CANT_MOVE_THAT,
                           self.POS_CANT_MOVE_THERE,
-                          self.POS_OCCUPIED])
+                          self.POS_OCCUPIED,
+                          self.POS_ILLEGAL])
         self.pleb = pleb
         self.reason = reason
 
@@ -118,9 +121,9 @@ class Game():
             setup = self.DEFAULT_SETUP
         assert len(plebs) in self.DEFAULT_GOALS.keys()
         self.pending_moves = {}
+        self.locked = set()
         self.plebeians = list(plebs)
         self.board = Board(*setup)
-        self.not_conflicted = set()
         if setup is self.DEFAULT_SETUP:
             for plidx, goals in enumerate(self.DEFAULT_GOALS[len(plebs)]):
                 for goal in goals:
@@ -135,10 +138,14 @@ class Game():
 
     def ev_Move(self, iev):
         # TODO: these should be in Board.CanMove
-        if (self.board[iev.srcpair] & 0x0F) == Board.PC_AGENT:
+        if (tuple(iev.srcpair) == tuple(iev.dstpair)) or (not ((iev.srcpair[0] == iev.dstpair[0]) or (iev.srcpair[1] == iev.dstpair[1]))):
+            iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_ILLEGAL))
+        elif (self.board[iev.srcpair] & 0x0F) == Board.PC_AGENT:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_CANT_MOVE_THAT))
         elif (self.board[iev.srcpair] & Board.PC_F_CONFLICT) != 0 or (self.board[iev.dstpair] & Board.PC_F_CONFLICT) != 0:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_CONFLICT))
+        elif iev.plen in self.locked:
+            iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_MOVE_LOCKED_IN))
         else:
             self.pending_moves[iev.pleb] = (iev.srcpair, iev.dstpair)
             self.Broadcast(MoveAck(iev.pleb))
@@ -175,6 +182,7 @@ class Game():
                 conflicted_plebs |= conf_set
             for pleb in conflicted_plebs:
                 del self.pending_moves[pleb]
+            self.locked |= set(self.pending_moves.keys())
             for square, plebs in conflicts.items():
                 self.Broadcast(Conflict(square, *plebs))
                 self.board[square] |= Board.PC_F_CONFLICT
@@ -217,6 +225,7 @@ class Game():
         self.Broadcast(DoMove(None, src, dst, True))
 
     def ClearState(self):
+        self.locked.clear()
         for col in self.board.columns:
             for rowidx, cell in enumerate(col):
                 col[rowidx] &= ~Board.PC_F_CONFLICT
