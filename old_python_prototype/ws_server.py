@@ -278,6 +278,8 @@ class GameState(cmd.Cmd):
         if cli is None:
             await self.print({'msg': 'join_game', 'error': 'game does not exist'})
             return
+        if cli.state is self:
+            return  # Nothing to do
         self.cli.state = cli.state
         cli.state.clis.add(self.cli)
         self.clis.discard(self.cli)
@@ -290,7 +292,7 @@ class GameState(cmd.Cmd):
             if cli.state in games:
                 continue
             games.add(cli.state)
-        await self.print({'msg': 'games', 'list': [i.first_cli.name for i in games]})
+        await self.print({'msg': 'games', 'games': {i.first_cli.name: len(i.clis) for i in games}})
 
 class GameServerProtocol(asyncio.Protocol):
     ALL_CLIENTS = {}
@@ -337,7 +339,8 @@ async def handle_connection(ws, uri):
     gsp = GameServerProtocol()
     await gsp.connection_made(ws)
     try:
-        async for msg in ws:
+        while True:
+            msg = await ws.recv()
             await gsp.data_received(msg)
     except websockets.ConnectionClosed:
         print('Connection closed.')

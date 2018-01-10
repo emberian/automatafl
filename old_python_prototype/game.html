@@ -130,11 +130,11 @@ msg_handlers.games = function(pkt) {
 	while(ul.childNodes.length > 0) {
 		ul.removeChild(ul.firstChild);
 	}
-	for(var i = 0; i < pkt.list.length; i++) {
-		var game = pkt.list[i];
+	for(var game in pkt.games) {
+		var num = pkt.games[game];
 		var li = document.createElement('li');
 		var but = document.createElement('input');
-		var lbl = document.createTextNode(game);
+		var lbl = document.createTextNode(game + "(" + num + " joined)");
 		but.setAttribute('type', 'radio');
 		but.setAttribute('name', 'game');
 		but.setAttribute('value', game);

@@ -144,7 +144,7 @@ class Game():
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_CANT_MOVE_THAT))
         elif (self.board[iev.srcpair] & Board.PC_F_CONFLICT) != 0 or (self.board[iev.dstpair] & Board.PC_F_CONFLICT) != 0:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_CONFLICT))
-        elif iev.plen in self.locked:
+        elif iev.pleb in self.locked:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_MOVE_LOCKED_IN))
         else:
             self.pending_moves[iev.pleb] = (iev.srcpair, iev.dstpair)
