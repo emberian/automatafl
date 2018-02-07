@@ -39,6 +39,7 @@ class MoveInvalid(OEvent):
     POS_CANT_MOVE_THERE = 5
     POS_MOVE_LOCKED_IN  = 6
     POS_ILLEGAL         = 7
+    GAME_OVER           = 8
     
     REASON_NAMES = {
         1: "POS_OCCUPIED",
@@ -48,6 +49,7 @@ class MoveInvalid(OEvent):
         5: "POS_CANT_MOVE_THERE",
         6: "POS_MOVE_LOCKED_IN",
         7: "POS_ILLEGAL",
+        8: "GAME_OVER",
     }
 
     def __init__(self, pleb, reason):
@@ -56,7 +58,8 @@ class MoveInvalid(OEvent):
                           self.POS_CANT_MOVE_THAT,
                           self.POS_CANT_MOVE_THERE,
                           self.POS_OCCUPIED,
-                          self.POS_ILLEGAL])
+                          self.POS_ILLEGAL,
+                          self.GAME_OVER])
         self.pleb = pleb
         self.reason = reason
 
@@ -86,12 +89,13 @@ class Conflict(OEvent):
         return {"kind": "CONFLICT", "square": self.square, "plebs": [pleb.id for pleb in self.plebs]}
 
 class TurnOver(OEvent):
-    def __init__(self, asrc, adst):
+    def __init__(self, asrc, adst, winner=None):
         self.asrc = asrc
         self.adst = adst
+        self.winner = winner
 
     def Serialize(self):
-        return {"kind": "TURN_OVER", "agent_src": self.asrc, "agent_dst": self.adst}
+        return {"kind": "TURN_OVER", "agent_src": self.asrc, "agent_dst": self.adst, "winner": self.winner}
 
 class Game():
     ST_INIT = 0
@@ -138,7 +142,9 @@ class Game():
 
     def ev_Move(self, iev):
         # TODO: these should be in Board.CanMove
-        if (tuple(iev.srcpair) == tuple(iev.dstpair)) or (not ((iev.srcpair[0] == iev.dstpair[0]) or (iev.srcpair[1] == iev.dstpair[1]))):
+        if self.Winner() is not None:
+            iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.GAME_OVER))
+        elif (tuple(iev.srcpair) == tuple(iev.dstpair)) or (not ((iev.srcpair[0] == iev.dstpair[0]) or (iev.srcpair[1] == iev.dstpair[1]))):
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_ILLEGAL))
         elif (self.board[iev.srcpair] & 0x0F) == Board.PC_AGENT:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_CANT_MOVE_THAT))
@@ -188,7 +194,7 @@ class Game():
                 self.board[square] |= Board.PC_F_CONFLICT
         else:
             self.CompleteMoves()
-            self.Broadcast(TurnOver(*self.board.AgentStep()))
+            self.Broadcast(TurnOver(*self.board.AgentStep(), self.Winner()))
 
     def CompleteMoves(self):
         propmap = dict(zip(self.pending_moves.values(), self.pending_moves.keys()))
@@ -223,6 +229,13 @@ class Game():
         self.board[src] &= ~0xF
         self.board[dst] = (self.board[dst] & ~0xF) | Board.PC_AGENT
         self.Broadcast(DoMove(None, src, dst, True))
+
+    def Winner(self):
+        agent = self.board._FindAgent()
+        acell = self.board[agent]
+        if acell & Board.PC_F_GOAL:
+            return acell >> 8
+        return None
 
     def ClearState(self):
         self.locked.clear()

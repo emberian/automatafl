@@ -156,6 +156,7 @@ var INVALID_REASONS = {
 	"POS_CANT_MOVE_THERE": "Destination is invalid",
 	"POS_MOVE_LOCKED_IN": "You have already submitted your move",
 	"POS_ILLEGAL": "Move is illegal",
+	"GAME_OVER": "Game is over",
 };
 
 kind_handlers.MOVE_INVALID = function(pkt) {
@@ -232,6 +233,9 @@ kind_handlers.TURN_OVER = function(pkt) {
 		'M' + (pkt.agent_src[0] + 0.5) + ' ' + ((height - pkt.agent_src[1]) + 0.5) +
 		' L' + (pkt.agent_dst[0] + 0.5) + ' ' + ((height - pkt.agent_dst[1]) + 0.5)
 	);
+	if(pkt.winner != null) {
+		add_chat("Winner is Player " + pkt.winner);
+	}
 }
 
 msg_handlers.state = function(pkt) {
