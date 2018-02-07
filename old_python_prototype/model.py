@@ -144,6 +144,8 @@ class Game():
         # TODO: these should be in Board.CanMove
         if self.Winner() is not None:
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.GAME_OVER))
+        elif not (self.board.InBoard(iev.srcpair) and self.board.InBoard(iev.dstpair)):
+            iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_ILLEGAL))
         elif (tuple(iev.srcpair) == tuple(iev.dstpair)) or (not ((iev.srcpair[0] == iev.dstpair[0]) or (iev.srcpair[1] == iev.dstpair[1]))):
             iev.pleb.Enqueue(MoveInvalid(iev.pleb, MoveInvalid.POS_ILLEGAL))
         elif (self.board[iev.srcpair] & 0x0F) == Board.PC_AGENT:
@@ -273,6 +275,57 @@ class Game():
             columsn.append(col)
         return columns
 
+    def StateVector(self, forpleb):
+        if hasattr(forpleb, 'id'):
+            forpleb = forpleb.id
+        return self.board.StateVector(forpleb)
+
+    def RewardScalar(self, forpleb):
+        reward = self.board.RewardScalar(forpleb.id)
+
+        # But also check winner and give hefty reward/penalties when the game is over.
+        winner = self.Winner()
+        if winner is not None:
+            if winner == forpleb.id:
+                reward += 100
+            else:
+                reward -= 100
+
+        # And also if the last move we recorded to PoseAgentMove succeeded.
+        reward += 0.4 if forpleb.last_success else 0.0
+
+        return reward
+
+    DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+    def ActionToMove(self, forpleb, actnum):
+        row = int(actnum % self.board.height)
+        col = int(actnum / self.board.height % self.board.width)
+        dir = int(actnum / (self.board.height * self.board.width) % 4)
+        dst = 1 + int(actnum / (self.board.height * self.board.width * 4) % max(self.board.width, self.board.height))
+        doff = self.DIRS[dir]
+
+        return Move(forpleb, (row, col), (row + doff[0] * dst, col + doff[1] * dst))
+
+    def NumActions(self):
+        return self.board.height * self.board.width * 4 * max(self.board.width, self.board.height)
+
+    def PoseAgentMove(self, forpleb, actnum):
+        mev = self.ActionToMove(forpleb, actnum)
+        self.Handle(mev)
+        peek_events = forpleb.Events()
+        success = True
+        for ev in peek_events:
+            if isinstance(ev, MoveInvalid):
+                success = False
+            forpleb.Enqueue(ev)
+        if not success:
+            # Pose a "legal" move just to ensure that the game state advances anyway.
+            self.pending_moves[forpleb] = ((-1, -1), (-1, -1))
+            if len(self.pending_moves) == len(self.plebeians):
+                self.Resolve()
+        forpleb.last_success = success
+        return success
+
 class Plebeian():
     def __init__(self, id):
         self.id = id
@@ -328,35 +381,35 @@ class Board():
                     return self.agent
 
     def SetPlayerGoal(self, pair, pleb):
-        print('SETPLAYERGOAL:', pair, 'for', pleb.id)
+        #print('SETPLAYERGOAL:', pair, 'for', pleb.id)
         pleb = Plebeian.ToID(pleb)
         cell = self[pair]
         cell = (cell & 0xFF) | self.PC_F_GOAL | (pleb << 8)
         self[pair] = cell
-        print('SETPLAYERGOAL: New value is', hex(self[pair]))
+        #print('SETPLAYERGOAL: New value is', hex(self[pair]))
 
     def CanMove(self, srcpair, dstpair):
         if not (self.InBoard(srcpair) and self.InBoard(dstpair)):
-            print('CANMOVE: Not in board.')
+            #print('CANMOVE: Not in board.')
             return False
         if (self[srcpair] & self.PC_F_CONFLICT):
-            print('CANMOVE: Src is conflicted.')
+            #print('CANMOVE: Src is conflicted.')
             return False
         # NB: The following is also a sneaky conflict check
         if (self[dstpair] & self.PC_F_CONFLICT):
-            print('CANMOVE: Dst is conflicted.')
+            #print('CANMOVE: Dst is conflicted.')
             return False
         if not ((srcpair[0] == dstpair[0]) or (srcpair[1] == dstpair[1])):
-            print('CANMOVE: Not a rank or file.')
+            #print('CANMOVE: Not a rank or file.')
             return False
         mins = (min(srcpair[0], dstpair[0]), min(srcpair[1], dstpair[1]))
         maxs = (max(srcpair[0], dstpair[0]), max(srcpair[1], dstpair[1]))
         squares = [(c, r) for c in range(mins[0], maxs[0] + 1) for r in range(mins[1], maxs[1] + 1)]
         for sq in squares:
             if not ((self[sq] & 0xF == self.PC_EMPTY) or self[sq] & self.PC_F_PASSABLE):
-                print('CANMOVE: Nonempty/passable square at', sq)
+                #print('CANMOVE: Nonempty/passable square at', sq)
                 return False
-        print('CANMOVE: OK.')
+        #print('CANMOVE: OK.')
         return True
 
     def Move(self, srcpair, dstpair):
@@ -387,8 +440,8 @@ class Board():
         assert all((i is None) or (self[i] & 0x0F) != self.PC_AGENT for i in nearest.values())
         colpri, coldir = self._DoAgent(nearest[(1, 0)], nearest[(-1, 0)])
         rowpri, rowdir = self._DoAgent(nearest[(0, 1)], nearest[(0, -1)])
-        print('DOAGENT: On columns, the priority is', hex(colpri), 'for direction', coldir)
-        print('DOAGENT: On rows, the priority is', hex(rowpri), 'for direction', rowdir)
+        #print('DOAGENT: On columns, the priority is', hex(colpri), 'for direction', coldir)
+        #print('DOAGENT: On rows, the priority is', hex(rowpri), 'for direction', rowdir)
         colpair = self.agent[0] + coldir, self.agent[1]
         rowpair = self.agent[0], self.agent[1] + rowdir
         if colpri >= rowpri and self.InBoard(colpair):
@@ -410,15 +463,15 @@ class Board():
         pospc = (self[pospair] & 0x0F if pospair is not None else self.PC_EMPTY)
         negpc = (self[negpair] & 0x0F if negpair is not None else self.PC_EMPTY)
         maxdist = max(self.width, self.height)
-        print('DOAGENT: Pos/Neg pieces at', pospair, negpair, 'are', hex(pospc), hex(negpc))
+        #print('DOAGENT: Pos/Neg pieces at', pospair, negpair, 'are', hex(pospc), hex(negpc))
         # (1) Check unbalanced pairs
         if (pospc, negpc) in [(self.PC_WHITE, self.PC_BLACK), (self.PC_BLACK, self.PC_WHITE)]:
             whpair = (pospair if pospc == self.PC_WHITE else negpair)
             blpair = (pospair if pospc == self.PC_BLACK else negpair)
-            print('DOAGENT: Unbal, whpair', whpair, 'blpair', blpair)
+            #print('DOAGENT: Unbal, whpair', whpair, 'blpair', blpair)
             whdist = self.L1Norm(self.agent, whpair)
             bldist = self.L1Norm(self.agent, blpair)
-            print('DOAGENT: Unbal, whdist', whdist, 'bldist', bldist)
+            #print('DOAGENT: Unbal, whdist', whdist, 'bldist', bldist)
             if whdist <= 1:
                 return self.PRI_NONE, 0
             return self.PRI_UNBAL | ((maxdist - whdist) << 8) | bldist, (1 if whpair == pospair else -1)
@@ -427,7 +480,7 @@ class Board():
         if pospc == self.PC_WHITE and negpc == self.PC_WHITE:
             posdist = self.L1Norm(self.agent, pospair)
             negdist = self.L1Norm(self.agent, negpair)
-            print('DOAGENT: White pair, dists', posdist, negdist)
+            #print('DOAGENT: White pair, dists', posdist, negdist)
             if posdist == negdist:
                 return self.PRI_NONE, 0
             if 1 in (posdist, negdist):
@@ -454,6 +507,47 @@ class Board():
             dist = self.L1Norm(self.agent, pair)
             return self.PRI_AWAY | (maxdist - dist), (-1 if pair == pospair else 1)
         return self.PRI_NONE, 0
+
+    def StateVector(self, forpleb):
+        ret = []
+        for row in range(self.width):
+            for col in range(self.height):
+                cell = self[row, col]
+                ret.extend((
+                    1.0 if cell & self.PC_WHITE else 0.0,
+                    1.0 if cell & self.PC_BLACK else 0.0,
+                    1.0 if cell & self.PC_AGENT else 0.0,
+                    1.0 if cell & self.PC_F_CONFLICT else 0.0,
+                    (1.0 if (cell >> 8) == forpleb else -1.0) if cell & self.PC_F_GOAL else 0.0,
+                ))
+        return ret
+
+    def RewardScalar(self, forpleb):
+        reward = 0.0
+        asrc, adst = self.AgentStep()
+        my_goals = []
+        their_goals = []
+        for row in range(self.width):
+            for col in range(self.height):
+                cell = self[row, col]
+                if cell & self.PC_F_GOAL:
+                    if (cell >> 8) == forpleb:
+                        my_goals.append((row, col))
+                    else:
+                        their_goals.append((row, col))
+        my_min_src_dist = min(self.L1Norm(asrc, g) for g in my_goals)
+        my_min_dst_dist = min(self.L1Norm(adst, g) for g in my_goals)
+        their_min_src_dist = min(self.L1Norm(asrc, g) for g in their_goals)
+        their_min_dst_dist = min(self.L1Norm(adst, g) for g in their_goals)
+
+        # Reward for having the next move increase distance to a goal.
+        reward += my_min_src_dist - my_min_dst_dist
+        # Reward, slightly less, for increasing the distance to an opponent goal.
+        reward += 0.75 * (their_min_dst_dist - their_min_src_dist)
+        # Subtract a slight value to convince the agent to be more economical.
+        reward -= 0.02
+
+        return reward
 
     def __getitem__(self, pair):
         return self.columns[pair[0]][pair[1]]
