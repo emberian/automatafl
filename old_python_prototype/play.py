@@ -2,7 +2,7 @@ import argparse, json, asyncio, random
 
 import numpy as np
 from keras.models import Sequential
-from keras.layers.core import Dense
+from keras.layers.core import Dense, Dropout
 from keras.optimizers import RMSprop
 import websockets
 
@@ -16,17 +16,20 @@ parser.add_argument('--player', dest='player', type=int, default=1, help='Be thi
 parser.add_argument('--name', dest='name', default='AI', help='Assume this name')
 parser.add_argument('--uri', dest='uri', default='ws://localhost:8080/', help='Use this websocket URI')
 parser.add_argument('--wait-time', dest='wait_time', type=float, default=0.2, help='Time spent waiting before assuming the last queued state response was received')
+parser.add_argument('--dropout', dest='dropout', type=float, default=0.2, help='Network dropout (keep this ~the same or maybe less than what was used for learning)')
 args = parser.parse_args()
 
 # XXX Constants are from the game object which isn't created yet
 def make_net():
     mdl = Sequential()
     mdl.add(Dense(1024, input_shape=(605,), activation='relu'))
-    #mdl.add(Dropout(args.dropout))
-    mdl.add(Dense(8192, activation='relu'))
-    #mdl.add(Dropout(args.dropout))
-    mdl.add(Dense(8192, activation='relu'))
-    #mdl.add(Dropout(args.dropout))
+    mdl.add(Dropout(args.dropout))
+    mdl.add(Dense(1024, activation='relu'))
+    mdl.add(Dropout(args.dropout))
+    mdl.add(Dense(1024, activation='relu'))
+    mdl.add(Dropout(args.dropout))
+    mdl.add(Dense(1024, activation='relu'))
+    mdl.add(Dropout(args.dropout))
     mdl.add(Dense(5324))
     mdl.compile(loss='mse', optimizer=RMSprop())
     mdl.load_weights(args.load)
@@ -80,6 +83,7 @@ async def play_game(uri):
             show_board(game.board.columns)
             act = np.argmax(nn.predict(np.array([game.StateVector(args.player)]), batch_size=1))
             mev = game.ActionToMove(None, act)
+            print(f'Model is considering action {act}--from {mev.srcpair} to {mev.dstpair}')
             while True:
                 await ws.send(f'move {mev.srcpair[0]} {mev.srcpair[1]} {mev.dstpair[0]} {mev.dstpair[1]}\n')
                 while True:

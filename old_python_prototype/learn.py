@@ -2,8 +2,8 @@ import argparse, random
 
 import numpy as np
 from keras.models import Sequential
-from keras.layers.core import Dense, Dropout
-from keras.optimizers import RMSprop
+from keras.layers import Dense, AlphaDropout, Dropout
+from keras.optimizers import RMSprop, Adam
 
 from model import Game, Board, Plebeian
 import model
@@ -19,8 +19,8 @@ parser.add_argument('--rand-decay', dest='rand_decay', type=float, default=0.000
 parser.add_argument('--observations', dest='observations', type=int, default=1024, help='Number of history elements to build before beginning a batch training (must be > --batch-size)')
 parser.add_argument('--batch-size', dest='batch_size', type=int, default=64, help='Number of sampled history elements to input into training batch')
 parser.add_argument('--q-learn-rate', dest='q_learn_rate', type=float, default=0.9, help='Amount to weight learned new Q values (helps forget poor, coinciental choices')
-parser.add_argument('--rms-learn-rate', dest='rms_learn_rate', type=float, default=0.95, help='LR parameter to RMSprop optimizer')
-parser.add_argument('--rms-decay', dest='rms_decay', type=float, default=0.001, help='Decary parameter to RMSprop optimizer')
+#parser.add_argument('--rms-learn-rate', dest='rms_learn_rate', type=float, default=0.05, help='LR parameter to RMSprop optimizer')
+#parser.add_argument('--rms-decay', dest='rms_decay', type=float, default=0.0, help='Decary parameter to RMSprop optimizer')
 args = parser.parse_args()
 
 plebs = [Plebeian(i) for i in range(1, 3)]
@@ -33,12 +33,15 @@ def make_net(primary):
     mdl = Sequential()
     mdl.add(Dense(1024, input_shape=(NUM_STATES,), activation='relu'))
     mdl.add(Dropout(args.dropout))
-    mdl.add(Dense(8192, activation='relu'))
-    mdl.add(Dropout(args.dropout))
-    mdl.add(Dense(8192, activation='relu'))
-    mdl.add(Dropout(args.dropout))
+    if primary:
+        mdl.add(Dense(8192, activation='relu', kernel_initializer='lecun_uniform'))
+        mdl.add(Dropout(args.dropout))
+        mdl.add(Dense(8192, activation='relu', kernel_initializer='lecun_uniform'))
+        mdl.add(Dropout(args.dropout))
+        mdl.add(Dense(8192, activation='relu', kernel_initializer='lecun_uniform'))
+        mdl.add(Dropout(args.dropout))
     mdl.add(Dense(NUM_ACTIONS))
-    mdl.compile(loss='mse', optimizer=RMSprop(lr=args.rms_learn_rate, decay=args.rms_decay))
+    mdl.compile(loss='mse', optimizer=Adam(lr=0.1))
     if args.load and (primary or args.no_rand):
         mdl.load_weights(args.load)
     return mdl
@@ -136,5 +139,6 @@ try:
                 del pleb.history[:]
 
 finally:
+    print('Saving states (please wait)...')
     plebs[0].nn.save_weights(args.save)
     print('States saved.')
