@@ -11,6 +11,16 @@ logger.addHandler(logging.StreamHandler())
 def safe_filename(fn):
     return re.sub('[^a-zA-Z0-9]', '_', fn)
 
+def setup_game(*plebs):
+#    return model.Game(*plebs)
+    return model.Game(*plebs, setup=[
+        [2, 0, 1, 0, 2],
+        [0, 0, 0, 0, 0],
+        [2, 0, 3, 0, 2],
+        [0, 0, 0, 0, 0],
+        [2, 0, 1, 0, 2],
+    ], goals=[[(0, 0), (4, 0)], [(0, 4), (4, 4)]])
+
 class GameState(cmd.Cmd):
     class StdoutEmulator(object):
         def __init__(self, gs):
@@ -60,9 +70,9 @@ class GameState(cmd.Cmd):
         self.cli = old_cli
 
     async def init_state(self, players=2):
-        await self.print({'msg': 'init', 'players': players})
         plebs = [model.Plebeian(i+1) for i in range(players)]
-        self.game = model.Game(*plebs)
+        self.game = setup_game(*plebs)
+        await self.print({'msg': 'init', 'players': players, 'width': self.game.board.width, 'height': self.game.board.height})
         await self.show_state()
 
     async def preloop(self):
@@ -109,10 +119,10 @@ class GameState(cmd.Cmd):
     PC_CHARS = ['.', 'W', 'B', 'A']
 
     async def broadcast_state(self):
-        await self.broadcast({'msg': 'state', 'columns': self.game.board.columns})
+        await self.broadcast({'msg': 'state', 'columns': self.game.board.columns, 'width': self.game.board.width, 'height': self.game.board.height})
 
     async def show_state(self):
-        await self.print({'msg': 'state', 'columns': self.game.board.columns})
+        await self.print({'msg': 'state', 'columns': self.game.board.columns, 'width': self.game.board.width, 'height': self.game.board.height})
 
     async def dump_events(self):
         for ev in self.game.GlobalEvents():
@@ -143,6 +153,9 @@ class GameState(cmd.Cmd):
         pleb = int(line)
         self.pleb_to_cli[pleb] = self.cli
         await self.broadcast({'msg': 'be_p', 'name': self.cli.name, 'pleb': pleb})
+
+    async def do_state(self, line):
+        await self.show_state()
 
     async def do_say(self, line):
         '''Say something to the other players in this room.'''

@@ -20,6 +20,9 @@ class Move(IEvent):
         self.srcpair = srcpair
         self.dstpair = dstpair
 
+    def __repr__(self):
+        return 'from {} to {}'.format(self.srcpair, self.dstpair)
+
 class OEvent(Event):
     pass
 
@@ -116,22 +119,39 @@ class Game():
         [2, 2, 0, 0, 2, 2, 2, 0, 0, 2, 2],
     ]
     DEFAULT_GOALS = {
-        2: [[(0, 0), (0, 10)], [(10, 0), (10, 10)]],
+        2: [[(0, 0), (10, 0)], [(10, 0), (10, 10)]],
         4: [[(0, 0)], [(10, 0)], [(10, 10)], [(0, 10)]],
     }
 
-    def __init__(self, *plebs, setup=None):
+    def __init__(self, *plebs, setup=None, goals=None):
         if setup is None:
             setup = self.DEFAULT_SETUP
-        assert len(plebs) in self.DEFAULT_GOALS.keys()
+        if goals is None:
+            assert len(plebs) in self.DEFAULT_GOALS.keys()
+            goals = self.DEFAULT_GOALS[len(plebs)]
         self.pending_moves = {}
         self.locked = set()
         self.plebeians = list(plebs)
         self.board = Board(*setup)
-        if setup is self.DEFAULT_SETUP:
-            for plidx, goals in enumerate(self.DEFAULT_GOALS[len(plebs)]):
-                for goal in goals:
-                    self.board.SetPlayerGoal(goal, plebs[plidx])
+        for plidx, goalls in enumerate(goals):
+            for goal in goalls:
+                self.board.SetPlayerGoal(goal, plebs[plidx])
+        self.oq = Queue()
+
+    def __getstate__(self):
+        return {
+            'board': self.board,
+            'plebeians': self.plebeians,
+            'pending_moves': self.pending_moves,
+            'locked': self.locked,
+        }
+
+    def __setstate__(self, state):
+        if 'board' in state:
+            self.board = state['board']
+        self.plebeians = state.get('plebeians', [])
+        self.pending_moves = state.get('pending_moves', {})
+        self.locked = state.get('locked', set())
         self.oq = Queue()
 
     def Handle(self, iev):
@@ -292,22 +312,23 @@ class Game():
                 reward -= 100
 
         # And also if the last move we recorded to PoseAgentMove succeeded.
-        reward += 0.4 if forpleb.last_success else 0.0
+        #reward -= 4.0 if not forpleb.last_success else 0.0
 
         return reward
 
-    DIRS = [(1, 0), (0, 1), (-1, 0), (0, -1)]
     def ActionToMove(self, forpleb, actnum):
         row = int(actnum % self.board.height)
         col = int(actnum / self.board.height % self.board.width)
-        dir = int(actnum / (self.board.height * self.board.width) % 4)
-        dst = 1 + int(actnum / (self.board.height * self.board.width * 4) % max(self.board.width, self.board.height))
-        doff = self.DIRS[dir]
+        dir = int(actnum / (self.board.height * self.board.width) % 2)
+        cor = 1 + int(actnum / (self.board.height * self.board.width * 2) % max(self.board.width, self.board.height))
 
-        return Move(forpleb, (row, col), (row + doff[0] * dst, col + doff[1] * dst))
+        if dir == 0:
+            return Move(forpleb, (row, col), (cor, col))
+        else:
+            return Move(forpleb, (row, col), (row, cor))
 
     def NumActions(self):
-        return self.board.height * self.board.width * 4 * max(self.board.width, self.board.height)
+        return self.board.height * self.board.width * 2 * max(self.board.width, self.board.height)
 
     def PoseAgentMove(self, forpleb, actnum):
         mev = self.ActionToMove(forpleb, actnum)
@@ -329,6 +350,14 @@ class Game():
 class Plebeian():
     def __init__(self, id):
         self.id = id
+        self.oq = Queue()
+
+    def __getstate__(self):
+        return {'id': self.id}
+
+    def __setstate__(self, state):
+        if 'id' in state:
+            self.id = state['id']
         self.oq = Queue()
 
     @staticmethod
@@ -356,6 +385,7 @@ class Board():
     PC_F_CONFLICT = 0x10
     PC_F_GOAL = 0x20
     PC_F_PASSABLE = 0x40
+    PC_CHAR = [' ', 'W', 'B', 'A']
 
     OCCUPANT_NAMES = {
         0: "EMPTY",
@@ -372,6 +402,35 @@ class Board():
         assert all(len(i) == len(cols[0]) for i in cols[1:])
         self.agent = None
         self._FindAgent()
+
+    def __getstate__(self):
+        return {'columns': self.columns}
+
+    def __setstate__(self, state):
+        if 'columns' in state:
+            self.columns = state['columns']
+            self.width = len(self.columns)
+            self.height = len(self.columns[0])
+            self._FindAgent()
+
+    def Show(self):
+        width = len(self.columns[0])
+        height = len(self.columns)
+        for row in range(height - 1, -1, -1):
+            for col in range(width):
+                cell = self.columns[col][row]
+                char = self.PC_CHAR[cell & 0xF]
+                cfl = '!' if cell & Board.PC_F_CONFLICT else ' '
+                goal = f'G{cell>>8}' if cell & Board.PC_F_GOAL else '  '
+                print(f'{cfl}{char}{goal} ', end='')
+            print()
+
+    def Copy(self):
+        bd = Board([0])
+        bd.width = self.width
+        bd.height = self.height
+        bd.columns = [[r for r in col] for col in self.columns]
+        return bd
 
     def _FindAgent(self):
         for colidx, col in enumerate(self.columns):
@@ -514,10 +573,10 @@ class Board():
             for col in range(self.height):
                 cell = self[row, col]
                 ret.extend((
-                    1.0 if cell & self.PC_WHITE else 0.0,
-                    1.0 if cell & self.PC_BLACK else 0.0,
-                    1.0 if cell & self.PC_AGENT else 0.0,
-                    1.0 if cell & self.PC_F_CONFLICT else 0.0,
+                    1.0 if cell & self.PC_WHITE else -1.0,
+                    1.0 if cell & self.PC_BLACK else -1.0,
+                    1.0 if cell & self.PC_AGENT else -1.0,
+                    1.0 if cell & self.PC_F_CONFLICT else -1.0,
                     (1.0 if (cell >> 8) == forpleb else -1.0) if cell & self.PC_F_GOAL else 0.0,
                 ))
         return ret
@@ -529,23 +588,34 @@ class Board():
         their_goals = []
         for row in range(self.width):
             for col in range(self.height):
-                cell = self[row, col]
+                cell = self[col, row]
                 if cell & self.PC_F_GOAL:
                     if (cell >> 8) == forpleb:
-                        my_goals.append((row, col))
+                        my_goals.append((col, row))
                     else:
-                        their_goals.append((row, col))
+                        their_goals.append((col, row))
+        if False:
+            print(f'For pleb {forpleb} the goals are {my_goals} and theirs are {their_goals}')
+            print(f'The agent is at {asrc}')
+            print('Mine:')
+            for g in my_goals:
+                print(f'Cell at {g} is {self[g]} or goal for {self[g] >> 8} with agent dist {self.L1Norm(asrc, g)}')
+            print('Theirs:')
+            for g in their_goals:
+                print(f'Cell at {g} is {self[g]} or goal for {self[g] >> 8} with agent dist {self.L1Norm(asrc, g)}')
         my_min_src_dist = min(self.L1Norm(asrc, g) for g in my_goals)
         my_min_dst_dist = min(self.L1Norm(adst, g) for g in my_goals)
         their_min_src_dist = min(self.L1Norm(asrc, g) for g in their_goals)
         their_min_dst_dist = min(self.L1Norm(adst, g) for g in their_goals)
 
         # Reward for having the next move increase distance to a goal.
-        reward += my_min_src_dist - my_min_dst_dist
+        #reward += my_min_src_dist - my_min_dst_dist
+        # Additional reward for absolute distance
+        #reward += 15 / max((1, 15*my_min_src_dist))
         # Reward, slightly less, for increasing the distance to an opponent goal.
-        reward += 0.75 * (their_min_dst_dist - their_min_src_dist)
-        # Subtract a slight value to convince the agent to be more economical.
-        reward -= 0.02
+        #reward += 0.75 * (their_min_dst_dist - their_min_src_dist)
+        # Additional reward for absolute distance away
+        #reward -= 15 / max((1, 15*their_min_src_dist))
 
         return reward
 
@@ -554,3 +624,6 @@ class Board():
 
     def __setitem__(self, pair, value):
         self.columns[pair[0]][pair[1]] = value
+
+    def __contains__(self, pair):
+        return (0 <= pair[0] < self.width) and (0 <= pair[1] < self.height)

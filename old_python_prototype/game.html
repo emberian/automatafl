@@ -95,6 +95,22 @@ function setup_board() {
 			board.appendChild(marker);
 		}
 	}
+	for(var row = 0; row < height; row++) {
+		for(var col = 0; col < width; col++) {
+			var txt = document.createElementNS(SVG_NS, 'text');
+			txt.setAttribute('x', col + 0.5);
+			txt.setAttribute('y', (height - row) + 0.5);
+			txt.setAttribute('width', '1');
+			txt.setAttribute('height', '1');
+			txt.style.fontSize = "0.75px";
+			txt.style.opacity = 0.5;
+			txt.style.fill = "#fff";
+			txt.style.textAnchor = "middle";
+			txt.style.dominantBaseline = "central";
+			txt.id = "txt" + col + "_" + row;
+			board.appendChild(txt);
+		}
+	}
 }
 
 function board_cell(col, row) {
@@ -105,10 +121,17 @@ function board_mark(col, row) {
 	return board.querySelector("#mark" + col + "_" + row);
 }
 
+function board_txt(col, row) {
+	return board.querySelector("#txt" + col + "_" + row);
+}
+
 var VALUE_HREFS = ['#none', '#white', '#black', '#agent'];
 
 function set_board_value(col, row, val) {
 	board_mark(col, row).setAttribute('href', VALUE_HREFS[val & 0xF]);
+	if(val & 0x20) {
+		board_txt(col, row).textContent = "" + ((val >> 8) & 0xFF);
+	}
 }
 
 function get_board_value(col, row) {
@@ -276,6 +299,12 @@ msg_handlers.be_p = function(pkt) {
 	add_chat(pkt.name + " is now player " + pkt.pleb);
 }
 
+msg_handlers.init = function(pkt) {
+	width = pkt.width;
+	height = pkt.height;
+	setup_board();
+}
+
 var click_mark = null;
 var click_row, click_col;
 
@@ -351,8 +380,6 @@ function init() {
 
 	chat = document.querySelector("#chat");
 	chat.value = "";
-
-	setup_board()
 }
 
 document.addEventListener("DOMContentLoaded", init)
