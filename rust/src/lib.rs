@@ -16,10 +16,14 @@ extern crate smallvec;
 use displaydoc::Display;
 use smallvec::SmallVec;
 
+use std::collections::HashSet;
+
 /// Player ID within a single game
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
 struct Pid(u8);
 
 /// Coordinate on the board. TODO: microbenchmark different coord sizes
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
 struct Coord {
     x: u8,
     y: u8,
@@ -31,7 +35,7 @@ impl core::fmt::Display for Coord {
     }
 }
 
-#[derive(Display)]
+#[derive(Debug,Display)]
 enum CoordFeedback {
     /// is OK
     Ok,
@@ -57,7 +61,7 @@ impl core::fmt::Display for CoordsFeedback {
 }
 
 // "Your move {}."
-#[derive(Display)]
+#[derive(Debug,Display,Clone,Copy,PartialEq,Eq,Hash)]
 enum MoveFeedback {
     /// is now pending waiting for the other player
     Committed,
@@ -75,6 +79,7 @@ enum MoveFeedback {
     GameOver,
 }
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
 enum RoundState {
     Fresh,
     PartiallySubmitted,
@@ -82,24 +87,131 @@ enum RoundState {
     GameOver,
 }
 
+#[derive(Debug,Clone,Copy)]
 struct Move {
     who: Pid,
     from: Coord,
     to: Coord,
 }
 
-struct Board {}
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+enum Piece {
+    None,
+    Black,
+    White,
+    Agent,
+}
+
+#[derive(Debug,Clone)]
+struct Cell {
+    piece: Piece,
+    conflict: bool,
+}
+
+impl Default for Cell {
+    fn default() -> Cell {
+        Cell { piece: Piece::None, conflict: false }
+    }
+}
+
+struct Board {
+    cells: Vec<Vec<Cell>>,
+    size: Coord,
+    agent_cache: Option<Coord>,
+    conflict_cache: HashSet<Coord>,
+}
+
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+enum PlacementStatus {
+    Ok,
+    Oob,
+    ExistingPiece(Piece),
+    AgentAlreadyAt(Coord),
+}
 
 impl Board {
-    fn mark_conflict(&mut self, c: Coord) {}
+    fn with_size(size: Coord) -> Board {
+        Board {
+            cells: std::iter::repeat_with(|| {
+                std::iter::repeat_with(Default::default).take(size.y as usize).collect()
+            }).take(size.x as usize).collect(),
+            size: size,
+            agent_cache: None,
+            conflict_cache: HashSet::new(),
+        }
+    }
 
-    fn clear_conflicts(&mut self) {}
+    fn cell(&self, coord: Coord) -> Option<&Cell> {
+        if !self.inbounds(coord) {
+            None
+        } else {
+            Some(&self.cells[coord.x as usize][coord.y as usize])
+        }
+    }
 
-    fn is_conflict(&self, c: Coord) -> bool {}
+    fn cell_mut(&mut self, coord: Coord) -> Option<&mut Cell> {
+        if !self.inbounds(coord) {
+            None
+        } else {
+            Some(&mut self.cells[coord.x as usize][coord.y as usize])
+        }
+    }
 
-    fn is_agent(&self, c: Coord) -> bool {}
+    fn place_piece(&mut self, coord: Coord, piece: Piece) -> PlacementStatus {
+        if !self.inbounds(coord) {
+            return PlacementStatus::Oob;
+        }
 
-    fn inbounds(&self, c: Coord) -> bool {}
+        let cell = self.cell_mut(coord).unwrap();
+        if piece != Piece::None && cell.piece != Piece::None {
+            return PlacementStatus::ExistingPiece(cell.piece);
+        }
+
+        if piece == Piece::Agent {
+            if let Some(c) = self.agent_cache {
+                return PlacementStatus::AgentAlreadyAt(c);
+            }
+        }
+
+        // Actually commit to placing this piece
+
+        if piece == Piece::None && cell.piece == Piece::Agent {
+            self.agent_cache = None;
+        }
+
+        cell.piece = piece;
+
+        if piece == Piece::Agent {
+            self.agent_cache = Some(coord);
+        }
+
+        PlacementStatus::Ok
+    }
+
+    fn mark_conflict(&mut self, c: Coord) {
+        self.cell_mut(c).map(|cell| {
+            cell.conflict = true;
+            self.conflict_cache.insert(c);
+        });
+    }
+
+    fn clear_conflicts(&mut self) {
+        for coord in self.conflict_cache.drain() {
+            self.cell_mut(coord).unwrap().conflict = false;
+        }
+    }
+
+    fn is_conflict(&self, c: Coord) -> bool {
+        self.cell(c).map(|cell| cell.conflict).or_else(false)
+    }
+
+    fn is_agent(&self, c: Coord) -> bool {
+        self.agent_cache.map(|co| co == c).or_else(false)
+    }
+
+    fn inbounds(&self, c: Coord) -> bool {
+        c.x < size.x && c.y < size.y
+    }
 }
 
 struct Game {
