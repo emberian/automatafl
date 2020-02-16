@@ -202,11 +202,11 @@ impl Board {
     }
 
     fn is_conflict(&self, c: Coord) -> bool {
-        self.cell(c).map(|cell| cell.conflict).or_else(false)
+        self.cell(c).map_or(false, |cell| cell.conflict)
     }
 
     fn is_agent(&self, c: Coord) -> bool {
-        self.agent_cache.map(|co| co == c).or_else(false)
+        self.agent_cache.map_or(false, |co| co == c)
     }
 
     fn inbounds(&self, c: Coord) -> bool {
