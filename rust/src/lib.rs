@@ -22,11 +22,11 @@ use std::iter::FromIterator;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Pid(u8);
+pub struct Pid(u8);
 
 /// Coordinate on the board. TODO: microbenchmark different coord sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Coord {
+pub struct Coord {
     x: u8,
     y: u8,
 }
@@ -44,8 +44,8 @@ impl core::fmt::Display for Coord {
 }
 
 /// "x, y {}"
-#[derive(Debug, Display, PartialEq, Eq)]
-enum CoordFeedback {
+#[derive(Debug, Display, PartialEq, Eq, Clone)]
+pub enum CoordFeedback {
     /// is OK
     Ok,
     /// is conflicted
@@ -56,7 +56,8 @@ enum CoordFeedback {
     Automaton,
 }
 
-struct CoordsFeedback {
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct CoordsFeedback {
     data: SmallVec<[(Coord, CoordFeedback); 2]>,
 }
 
@@ -70,8 +71,8 @@ impl core::fmt::Display for CoordsFeedback {
 }
 
 /// "Your move {}."
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
-enum MoveFeedback {
+#[derive(Debug, Display, Clone, PartialEq, Eq)]
+pub enum MoveFeedback {
     /// is now pending waiting for the other player
     Committed,
     /// had some problems: {0}
@@ -87,22 +88,26 @@ enum MoveFeedback {
 }
 
 /// Game status:
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
-enum RoundState {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+pub enum RoundState {
+    /// not yet started
     Fresh,
+    /// has players waiting
     PartiallySubmitted,
+    /// is resolving conflicts
     ResolvingConflict,
+    /// is over
     GameOver,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Move {
+pub struct Move {
     who: Pid,
     from: Coord,
     to: Coord,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Particle {
     Repulsor,
     Attractor,
@@ -111,21 +116,21 @@ enum Particle {
 }
 
 impl Particle {
-    fn is_vacuum(self) {
-        self == Vacuum
+    fn is_vacuum(self) -> bool {
+        self == Particle::Vacuum
     }
 }
 
 // TODO: this is 2 bytes when it could be 1 :/
 #[derive(Copy, Clone)]
-struct Cell {
+pub struct Cell {
     what: Particle,
     conflict: bool,
 }
 
 impl Cell { fn is_vacuum(&self) -> bool { self.what.is_vacuum() } }
 
-struct Board {
+pub struct Board {
     particles: Grid<Cell>,
     size: Coord,
     automaton_location: Coord,
@@ -135,7 +140,7 @@ struct Board {
 // By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
 
 impl Board {
-    fn stock_two_player() -> Board {
+    pub fn stock_two_player() -> Board {
         let r = Cell {
             what: Particle::Repulsor,
             conflict: false,
@@ -148,18 +153,18 @@ impl Board {
             what: Particle::Vacuum,
             conflict: false,
         };
-        let a = Cell {
+        let d = Cell {
             what: Particle::Automaton,
             conflict: false,
         };
-        let mut board = Board {
+        Board {
             particles: arr2(&[
                 [r, r, o, o, r, r, r, o, o, r, r],
                 [o, o, o, a, r, r, r, a, o, o, o],
                 [o, o, o, o, o, o, o, o, o, o, o],
                 [o, o, o, o, o, o, o, o, o, o, o],
                 [a, a, o, o, o, o, o, o, o, a, a],
-                [r, r, o, o, o, a, o, o, o, r, r],
+                [r, r, o, o, o, d, o, o, o, r, r],
                 [a, a, o, o, o, o, o, o, o, a, a],
                 [o, o, o, o, o, o, o, o, o, o, o],
                 [o, o, o, o, o, o, o, o, o, o, o],
@@ -169,9 +174,7 @@ impl Board {
             size: Coord { x: 11, y: 11 },
             automaton_location: Coord { x: 5, y: 5 },
             conflict_list: SmallVec::new(),
-        };
-
-        board
+        }
     }
 
     /// Lift any particle off the board, putting vacuum in its place.
@@ -221,14 +224,13 @@ impl Board {
     }
 }
 
-struct Game {
+pub struct Game {
     winner: Option<Pid>,
     locked_players: SmallVec<[Pid; 2]>,
     board: Board,
     round: RoundState,
     pending_moves: SmallVec<[Move; 2]>,
     goals: SmallVec<[(Coord, Pid); 4]>,
-    waiting_players: u8,
     player_count: u8,
 }
 
@@ -241,7 +243,7 @@ impl Game {
         };
 
         // rules for a single coord, returns false if we shouldn't continue
-        fn consider_coord(cfs: &mut CoordsFeedback, b: &Board, c: Coord) -> bool {
+        fn consider(cfs: &mut CoordsFeedback, b: &Board, c: Coord) -> bool {
             use CoordFeedback::*;
             let feedback = if !b.inbounds(c) {
                 Oob
@@ -252,15 +254,16 @@ impl Game {
             } else {
                 Ok
             };
+            let res = feedback == Ok;
             cfs.data.push((c, feedback));
-            feedback == Ok
+            res
         }
 
         if self.round == RoundState::GameOver {
             return GameOver;
         } else if self.locked_players.contains(&m.who) {
             return WaitYourTurn; //   XXX XXX XXX  ~~(v)~~ XXX XXX XXX
-        } else if !consider(cfs, &self.board, m.from) | !consider(cfs, &self.board, m.to) {
+        } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to) {
             // load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
             return SeeCoords(cfs);
         } else if m.from == m.to {
@@ -270,7 +273,7 @@ impl Game {
         } else {
             self.pending_moves.push(m);
 
-            Confirmed
+            Committed
         }
     }
 
@@ -316,7 +319,7 @@ impl Game {
                 conflict_moves.push(m);
                 // We conflicted with some previous move, pull them out of the
                 // locked list and into the conflict list.
-                prev_moves = SmallVec::from_iter(prev_moves.into_iter().filter_map(|p| {
+                locked_moves = SmallVec::from_iter(locked_moves.into_iter().filter_map(|p| {
                     if p.from == m.from || p.to == m.to {
                         conflict_moves.push(p);
                         None
@@ -337,7 +340,7 @@ impl Game {
         }
     }
 
-    fn try_complete_round(&mut self) {
+    pub fn try_complete_round(&mut self) {
         match self.resolve_conflicts() {
             Ok(moves_to_apply) => {
                 // Lift the moved pieces off the board
@@ -364,16 +367,19 @@ impl Game {
 
                 self.update_automaton();
 
-                if !self.goals.iter().any(|&(c, who)| {
-                    if c == self.board.automaton_location {
-                        self.round = RoundState::GameOver;
-                        self.winner = Some(who);
+                let &mut Game { ref mut goals, ref mut board, ref mut round, ref mut winner, .. } = self;
+
+                if !goals.iter().any(|&(c, who)| {
+                    if c == board.automaton_location {
+                        *round = RoundState::GameOver;
+                        *winner = Some(who);
                         true
                     } else {
                         false
                     }
                 }) {
-                    self.round == RoundState::Fresh;
+                    self.board.clear_conflicts();
+                    *round = RoundState::Fresh;
                 }
             }
             Err(moves_conflicted) => {
