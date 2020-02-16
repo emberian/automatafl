@@ -1,3 +1,4 @@
+
 //! Reference implementation of the automatafl board game.
 //!
 //! General crate design notes:
@@ -17,6 +18,7 @@ extern crate smallvec;
 use displaydoc::Display;
 use ndarray::{arr2, Array2 as Grid};
 use smallvec::SmallVec;
+use std::iter::FromIterator;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,7 +44,7 @@ impl core::fmt::Display for Coord {
 }
 
 /// "x, y {}"
-#[derive(Debug, Display)]
+#[derive(Debug, Display, PartialEq, Eq)]
 enum CoordFeedback {
     /// is OK
     Ok,
@@ -68,7 +70,7 @@ impl core::fmt::Display for CoordsFeedback {
 }
 
 /// "Your move {}."
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
 enum MoveFeedback {
     /// is now pending waiting for the other player
     Committed,
@@ -93,7 +95,7 @@ enum RoundState {
     GameOver,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Move {
     who: Pid,
     from: Coord,
@@ -120,6 +122,8 @@ struct Cell {
     what: Particle,
     conflict: bool,
 }
+
+impl Cell { fn is_vacuum(&self) -> bool { self.what.is_vacuum() } }
 
 struct Board {
     particles: Grid<Cell>,
@@ -178,7 +182,7 @@ impl Board {
             what: Particle::Vacuum,
             conflict: false,
         };
-        core::mem::swap(&mut replacement, &mut self.board.particles[c.ix()]);
+        core::mem::swap(&mut replacement, &mut self.particles[c.ix()]);
         debug_assert!(replacement.conflict == false);
         replacement.what
     }
@@ -195,7 +199,7 @@ impl Board {
     }
 
     fn clear_conflicts(&mut self) {
-        for c in self.conflict_list.drain() {
+        for c in self.conflict_list.drain(..) {
             self.particles[c.ix()].conflict = false;
         }
     }
@@ -213,7 +217,7 @@ impl Board {
     }
 
     fn inbounds(&self, c: Coord) -> bool {
-        c.x < size.x && c.y < size.y
+        c.x < self.size.x && c.y < self.size.y
     }
 }
 
@@ -238,7 +242,7 @@ impl Game {
 
         // rules for a single coord, returns false if we shouldn't continue
         fn consider_coord(cfs: &mut CoordsFeedback, b: &Board, c: Coord) -> bool {
-            use CoordsFeedback::*;
+            use CoordFeedback::*;
             let feedback = if !b.inbounds(c) {
                 Oob
             } else if b.is_automaton(c) {
@@ -254,7 +258,7 @@ impl Game {
 
         if self.round == RoundState::GameOver {
             return GameOver;
-        } else if self.locked_players.contains(m.who) {
+        } else if self.locked_players.contains(&m.who) {
             return WaitYourTurn; //   XXX XXX XXX  ~~(v)~~ XXX XXX XXX
         } else if !consider(cfs, &self.board, m.from) | !consider(cfs, &self.board, m.to) {
             // load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
@@ -264,9 +268,7 @@ impl Game {
         } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
             return AxisAlignedOnly;
         } else {
-            if self.pending_moves.insert(m.who.0 as usize, m).is_none() {
-                self.waiting_players -= 1
-            }
+            self.pending_moves.push(m);
 
             Confirmed
         }
@@ -275,7 +277,7 @@ impl Game {
     /// Returns Ok with the list of applied move to apply, or else the list of
     /// conflicting moves.
     fn resolve_conflicts(&self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Move; 2]>> {
-        debug_assert!(self.pending_moves.len() == self.player_count);
+        debug_assert!(self.pending_moves.len() == self.player_count as usize);
 
         let mut seen_pairs = SmallVec::<[(Coord, Coord); 2]>::new();
 
@@ -342,7 +344,7 @@ impl Game {
 
                 let mut moved = moves_to_apply
                     .iter()
-                    .map(|m| (m, self.board.pluck(m.from)))
+                    .map(|&m| (m, self.board.pluck(m.from)))
                     .collect::<SmallVec<[_; 2]>>();
 
                 let mut results = vec![];
@@ -350,11 +352,11 @@ impl Game {
                 while moved.len() != 0 {
                     // FIXME: does this terminate? how does the python even work? it appears to
                     // depend critically on passable not mucking with the particle type
-                    moved.retain(|(m, particle)| {
+                    moved.retain(|&mut (m, particle)| {
                         if self.board.is_vacuum(m.from) || !self.board.is_vacuum(m.to) {
                             true
                         } else {
-                            results.push(m, self.board.do_move(m.from, m.to, particle));
+                            results.push((m, self.board.do_move(m.from, m.to, particle)));
                             false
                         }
                     });
@@ -362,7 +364,7 @@ impl Game {
 
                 self.update_automaton();
 
-                if !self.goals.iter().any(|(c, who)| {
+                if !self.goals.iter().any(|&(c, who)| {
                     if c == self.board.automaton_location {
                         self.round = RoundState::GameOver;
                         self.winner = Some(who);
@@ -376,14 +378,18 @@ impl Game {
             }
             Err(moves_conflicted) => {
                 self.round = RoundState::ResolvingConflict;
-                self.pending_moves.retain(|e| !moves_conflicted.contains(e));
+                self.pending_moves.retain(|e| !moves_conflicted.contains(&e));
                 for m in &moves_conflicted {
-                    if !self.locked_players.contains(m.who) {
+                    if !self.locked_players.contains(&m.who) {
                         self.locked_players.push(m.who);
                     }
                 }
             }
         }
+    }
+
+    fn update_automaton(&mut self) {
+
     }
 }
 
