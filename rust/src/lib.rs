@@ -19,11 +19,11 @@ use smallvec::SmallVec;
 use std::collections::HashSet;
 
 /// Player ID within a single game
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Pid(u8);
 
 /// Coordinate on the board. TODO: microbenchmark different coord sizes
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Coord {
     x: u8,
     y: u8,
@@ -35,7 +35,7 @@ impl core::fmt::Display for Coord {
     }
 }
 
-#[derive(Debug,Display)]
+#[derive(Debug, Display)]
 enum CoordFeedback {
     /// is OK
     Ok,
@@ -61,7 +61,7 @@ impl core::fmt::Display for CoordsFeedback {
 }
 
 // "Your move {}."
-#[derive(Debug,Display,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
 enum MoveFeedback {
     /// is now pending waiting for the other player
     Committed,
@@ -79,7 +79,7 @@ enum MoveFeedback {
     GameOver,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RoundState {
     Fresh,
     PartiallySubmitted,
@@ -87,14 +87,14 @@ enum RoundState {
     GameOver,
 }
 
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Move {
     who: Pid,
     from: Coord,
     to: Coord,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Piece {
     None,
     Black,
@@ -102,7 +102,7 @@ enum Piece {
     Agent,
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 struct Cell {
     piece: Piece,
     conflict: bool,
@@ -110,7 +110,10 @@ struct Cell {
 
 impl Default for Cell {
     fn default() -> Cell {
-        Cell { piece: Piece::None, conflict: false }
+        Cell {
+            piece: Piece::None,
+            conflict: false,
+        }
     }
 }
 
@@ -121,7 +124,7 @@ struct Board {
     conflict_cache: HashSet<Coord>,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PlacementStatus {
     Ok,
     Oob,
@@ -133,8 +136,12 @@ impl Board {
     fn with_size(size: Coord) -> Board {
         Board {
             cells: std::iter::repeat_with(|| {
-                std::iter::repeat_with(Default::default).take(size.y as usize).collect()
-            }).take(size.x as usize).collect(),
+                std::iter::repeat_with(Default::default)
+                    .take(size.y as usize)
+                    .collect()
+            })
+            .take(size.x as usize)
+            .collect(),
             size: size,
             agent_cache: None,
             conflict_cache: HashSet::new(),
