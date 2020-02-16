@@ -11,12 +11,12 @@
 //!
 
 extern crate displaydoc;
+extern crate ndarray;
 extern crate smallvec;
 
 use displaydoc::Display;
+use ndarray::{arr2, Array2 as Grid};
 use smallvec::SmallVec;
-
-use std::collections::HashSet;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,12 +29,19 @@ struct Coord {
     y: u8,
 }
 
+impl Coord {
+    fn ix(self) -> (usize, usize) {
+        (self.x as usize, self.y as usize)
+    }
+}
+
 impl core::fmt::Display for Coord {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{}, {}", self.x, self.y)
     }
 }
 
+/// "x, y {}"
 #[derive(Debug, Display)]
 enum CoordFeedback {
     /// is OK
@@ -43,8 +50,8 @@ enum CoordFeedback {
     Conflict,
     /// is not on the board
     Oob,
-    /// is the agent, which is off-limits
-    Agent,
+    /// is the automaton, which is off-limits
+    Automaton,
 }
 
 struct CoordsFeedback {
@@ -60,7 +67,7 @@ impl core::fmt::Display for CoordsFeedback {
     }
 }
 
-// "Your move {}."
+/// "Your move {}."
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
 enum MoveFeedback {
     /// is now pending waiting for the other player
@@ -69,8 +76,6 @@ enum MoveFeedback {
     SeeCoords(CoordsFeedback),
     /// must have different source and destination squares
     MustMove,
-    /// must specify a piece to move
-    EmptySource,
     /// must move the piece only along a row or column (like a chess Rook)
     AxisAlignedOnly,
     /// cannot be performed while other players are resolving conflicts
@@ -79,7 +84,8 @@ enum MoveFeedback {
     GameOver,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Game status:
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 enum RoundState {
     Fresh,
     PartiallySubmitted,
@@ -95,125 +101,115 @@ struct Move {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Piece {
-    None,
-    Black,
-    White,
-    Agent,
+enum Particle {
+    Repulsor,
+    Attractor,
+    Automaton,
+    Vacuum,
 }
 
-#[derive(Debug, Clone)]
+impl Particle {
+    fn is_vacuum(self) {
+        self == Vacuum
+    }
+}
+
+// TODO: this is 2 bytes when it could be 1 :/
+#[derive(Copy, Clone)]
 struct Cell {
-    piece: Piece,
+    what: Particle,
     conflict: bool,
 }
 
-impl Default for Cell {
-    fn default() -> Cell {
-        Cell {
-            piece: Piece::None,
-            conflict: false,
-        }
-    }
-}
-
 struct Board {
-    cells: Vec<Vec<Cell>>,
+    particles: Grid<Cell>,
     size: Coord,
-    agent_cache: Option<Coord>,
-    conflict_cache: HashSet<Coord>,
+    automaton_location: Coord,
+    conflict_list: SmallVec<[Coord; 16]>, // TODO: compare performance scanning this list to scanning the whole grid
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum PlacementStatus {
-    Ok,
-    Oob,
-    ExistingPiece(Piece),
-    AgentAlreadyAt(Coord),
-}
+// By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
 
 impl Board {
-    fn with_size(size: Coord) -> Board {
-        Board {
-            cells: std::iter::repeat_with(|| {
-                std::iter::repeat_with(Default::default)
-                    .take(size.y as usize)
-                    .collect()
-            })
-            .take(size.x as usize)
-            .collect(),
-            size: size,
-            agent_cache: None,
-            conflict_cache: HashSet::new(),
-        }
+    fn stock_two_player() -> Board {
+        let r = Cell {
+            what: Particle::Repulsor,
+            conflict: false,
+        };
+        let a = Cell {
+            what: Particle::Attractor,
+            conflict: false,
+        };
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+        };
+        let a = Cell {
+            what: Particle::Automaton,
+            conflict: false,
+        };
+        let mut board = Board {
+            particles: arr2(&[
+                [r, r, o, o, r, r, r, o, o, r, r],
+                [o, o, o, a, r, r, r, a, o, o, o],
+                [o, o, o, o, o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o, o, o, o, o],
+                [a, a, o, o, o, o, o, o, o, a, a],
+                [r, r, o, o, o, a, o, o, o, r, r],
+                [a, a, o, o, o, o, o, o, o, a, a],
+                [o, o, o, o, o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o, o, o, o, o],
+                [o, o, o, a, r, r, r, a, o, o, o],
+                [r, r, o, o, r, r, r, o, o, r, r],
+            ]),
+            size: Coord { x: 11, y: 11 },
+            automaton_location: Coord { x: 5, y: 5 },
+            conflict_list: SmallVec::new(),
+        };
+
+        board
     }
 
-    fn cell(&self, coord: Coord) -> Option<&Cell> {
-        if !self.inbounds(coord) {
-            None
-        } else {
-            Some(&self.cells[coord.x as usize][coord.y as usize])
-        }
+    /// Lift any particle off the board, putting vacuum in its place.
+    ///
+    /// Panics if coord is conflicted.
+    fn pluck(&mut self, c: Coord) -> Particle {
+        let mut replacement = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+        };
+        core::mem::swap(&mut replacement, &mut self.board.particles[c.ix()]);
+        debug_assert!(replacement.conflict == false);
+        replacement.what
     }
 
-    fn cell_mut(&mut self, coord: Coord) -> Option<&mut Cell> {
-        if !self.inbounds(coord) {
-            None
-        } else {
-            Some(&mut self.cells[coord.x as usize][coord.y as usize])
-        }
-    }
-
-    fn place_piece(&mut self, coord: Coord, piece: Piece) -> PlacementStatus {
-        if !self.inbounds(coord) {
-            return PlacementStatus::Oob;
-        }
-
-        let cell = self.cell_mut(coord).unwrap();
-        if piece != Piece::None && cell.piece != Piece::None {
-            return PlacementStatus::ExistingPiece(cell.piece);
-        }
-
-        if piece == Piece::Agent {
-            if let Some(c) = self.agent_cache {
-                return PlacementStatus::AgentAlreadyAt(c);
-            }
-        }
-
-        // Actually commit to placing this piece
-
-        if piece == Piece::None && cell.piece == Piece::Agent {
-            self.agent_cache = None;
-        }
-
-        cell.piece = piece;
-
-        if piece == Piece::Agent {
-            self.agent_cache = Some(coord);
-        }
-
-        PlacementStatus::Ok
+    fn do_move(&mut self, from: Coord, to: Coord, what: Particle) {
+        // scan the axis to make sure it's passable...
+        //
+        // if it is, plop it down in to. otherwise, put what back down.
     }
 
     fn mark_conflict(&mut self, c: Coord) {
-        self.cell_mut(c).map(|cell| {
-            cell.conflict = true;
-            self.conflict_cache.insert(c);
-        });
+        self.particles[c.ix()].conflict = true;
+        self.conflict_list.push(c);
     }
 
     fn clear_conflicts(&mut self) {
-        for coord in self.conflict_cache.drain() {
-            self.cell_mut(coord).unwrap().conflict = false;
+        for c in self.conflict_list.drain() {
+            self.particles[c.ix()].conflict = false;
         }
     }
 
     fn is_conflict(&self, c: Coord) -> bool {
-        self.cell(c).map_or(false, |cell| cell.conflict)
+        self.particles[c.ix()].conflict
     }
 
-    fn is_agent(&self, c: Coord) -> bool {
-        self.agent_cache.map_or(false, |co| co == c)
+    fn is_vacuum(&self, c: Coord) -> bool {
+        self.particles[c.ix()].is_vacuum()
+    }
+
+    fn is_automaton(&self, c: Coord) -> bool {
+        self.automaton_location == c
     }
 
     fn inbounds(&self, c: Coord) -> bool {
@@ -241,12 +237,12 @@ impl Game {
         };
 
         // rules for a single coord, returns false if we shouldn't continue
-        fn consider(cfs: &mut CoordsFeedback, b: &Board, c: Coord) -> bool {
+        fn consider_coord(cfs: &mut CoordsFeedback, b: &Board, c: Coord) -> bool {
             use CoordsFeedback::*;
             let feedback = if !b.inbounds(c) {
                 Oob
-            } else if b.is_agent(c) {
-                Agent
+            } else if b.is_automaton(c) {
+                Automaton
             } else if b.is_conflict(c) {
                 Conflict
             } else {
@@ -259,22 +255,16 @@ impl Game {
         if self.round == RoundState::GameOver {
             return GameOver;
         } else if self.locked_players.contains(m.who) {
-            return WaitYourTurn;
+            return WaitYourTurn; //   XXX XXX XXX  ~~(v)~~ XXX XXX XXX
         } else if !consider(cfs, &self.board, m.from) | !consider(cfs, &self.board, m.to) {
-            // note load bearing non-short-circuiting | to accumulate both coord results!
+            // load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
             return SeeCoords(cfs);
-        } else if self.board.is_empty(m.from) {
-            return EmptySource;
         } else if m.from == m.to {
             return MustMove;
         } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
             return AxisAlignedOnly;
         } else {
-            if self
-                .latest_confirmed_moves
-                .insert(m.who.0 as usize, m)
-                .is_none()
-            {
+            if self.pending_moves.insert(m.who.0 as usize, m).is_none() {
                 self.waiting_players -= 1
             }
 
@@ -282,12 +272,118 @@ impl Game {
         }
     }
 
-    /// Tries to complete a round,
-    ///
-    /// Returns Ok with the list of applied moves, or else the list of newly
-    /// conflicted coordinates.
-    fn try_complete_round(&mut self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Coord; 2]>> {
+    /// Returns Ok with the list of applied move to apply, or else the list of
+    /// conflicting moves.
+    fn resolve_conflicts(&self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Move; 2]>> {
         debug_assert!(self.pending_moves.len() == self.player_count);
+
+        let mut seen_pairs = SmallVec::<[(Coord, Coord); 2]>::new();
+
+        let mut seen_from = SmallVec::<[Coord; 2]>::new();
+        let mut seen_to = SmallVec::<[Coord; 2]>::new();
+
+        let mut conflict_moves = SmallVec::<[Move; 2]>::new();
+        let mut locked_moves = SmallVec::<[Move; 2]>::new();
+
+        for &m in &self.pending_moves {
+            let mut conflict = false;
+            let this_pair = (m.from, m.to);
+            if seen_pairs.contains(&this_pair) {
+                // multiple players specifying the same move is OK!
+                continue;
+            }
+            seen_pairs.push(this_pair);
+
+            // See if there's a source conflict...
+            if seen_from.contains(&m.from) {
+                conflict_moves.push(m);
+                conflict = true;
+            } else {
+                seen_from.push(m.from);
+            }
+
+            // Or a dest conflict...
+            if seen_to.contains(&m.to) {
+                conflict_moves.push(m);
+                conflict = true;
+            } else {
+                seen_to.push(m.to);
+            }
+
+            if conflict {
+                conflict_moves.push(m);
+                // We conflicted with some previous move, pull them out of the
+                // locked list and into the conflict list.
+                prev_moves = SmallVec::from_iter(prev_moves.into_iter().filter_map(|p| {
+                    if p.from == m.from || p.to == m.to {
+                        conflict_moves.push(p);
+                        None
+                    } else {
+                        Some(p)
+                    }
+                }));
+            } else {
+                // We'll consider this move locked unless someone else conflicts with it.
+                locked_moves.push(m);
+            }
+        }
+
+        if conflict_moves.len() == 0 {
+            Ok(locked_moves)
+        } else {
+            Err(conflict_moves)
+        }
+    }
+
+    fn try_complete_round(&mut self) {
+        match self.resolve_conflicts() {
+            Ok(moves_to_apply) => {
+                // Lift the moved pieces off the board
+
+                let mut moved = moves_to_apply
+                    .iter()
+                    .map(|m| (m, self.board.pluck(m.from)))
+                    .collect::<SmallVec<[_; 2]>>();
+
+                let mut results = vec![];
+
+                while moved.len() != 0 {
+                    // FIXME: does this terminate? how does the python even work? it appears to
+                    // depend critically on passable not mucking with the particle type
+                    moved.retain(|(m, particle)| {
+                        if self.board.is_vacuum(m.from) || !self.board.is_vacuum(m.to) {
+                            true
+                        } else {
+                            results.push(m, self.board.do_move(m.from, m.to, particle));
+                            false
+                        }
+                    });
+                }
+
+                self.update_automaton();
+
+                if !self.goals.iter().any(|(c, who)| {
+                    if c == self.board.automaton_location {
+                        self.round = RoundState::GameOver;
+                        self.winner = Some(who);
+                        true
+                    } else {
+                        false
+                    }
+                }) {
+                    self.round == RoundState::Fresh;
+                }
+            }
+            Err(moves_conflicted) => {
+                self.round = RoundState::ResolvingConflict;
+                self.pending_moves.retain(|e| !moves_conflicted.contains(e));
+                for m in &moves_conflicted {
+                    if !self.locked_players.contains(m.who) {
+                        self.locked_players.push(m.who);
+                    }
+                }
+            }
+        }
     }
 }
 
