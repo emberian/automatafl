@@ -1,14 +1,14 @@
 //! Reference implementation of the automatafl board game.
-//! 
+//!
 //! General crate design notes:
-//! 
+//!
 //! - Max board size is "small" (256x256) but easy to bump (Coord).
 //! - Max player count is "small" (256) but easy to bump (Pid).
 //! - `SmallVec` is used to size everything to require zero allocations
-//!   during a standard four-goal, two-player game. 
+//!   during a standard four-goal, two-player game.
 //! - Every error condition is uniquely identified and with
 //!   nice Display implementations.
-//! 
+//!
 
 extern crate displaydoc;
 extern crate smallvec;
@@ -16,7 +16,7 @@ extern crate smallvec;
 use displaydoc::Display;
 use smallvec::SmallVec;
 
-//! Player ID within a single game
+/// Player ID within a single game
 struct Pid(u8);
 
 /// Coordinate on the board. TODO: microbenchmark different coord sizes
@@ -117,14 +117,6 @@ impl Game {
     pub fn propose_move(&mut self, m: Move) -> MoveFeedback {
         use MoveFeedback::*;
 
-        if self.round == RoundState::GameOver {
-            return GameOver;
-        }
-
-        if self.locked_players.contains(m.who) {
-            return WaitYourTurn;
-        }
-
         let mut cfs = CoordsFeedback {
             data: SmallVec::new(),
         };
@@ -145,37 +137,38 @@ impl Game {
             feedback == Ok
         }
 
-        // note load bearing non-short-circuiting | to accumulate both coord results!
-
-        if !consider(cfs, &self.board, m.from) | !consider(cfs, &self.board, m.to) {
+        if self.round == RoundState::GameOver {
+            return GameOver;
+        } else if self.locked_players.contains(m.who) {
+            return WaitYourTurn;
+        } else if !consider(cfs, &self.board, m.from) | !consider(cfs, &self.board, m.to) {
+            // note load bearing non-short-circuiting | to accumulate both coord results!
             return SeeCoords(cfs);
-        }
-
-        if self.board.is_empty(m.from) {
+        } else if self.board.is_empty(m.from) {
             return EmptySource;
-        }
-
-        if m.from == m.to {
+        } else if m.from == m.to {
             return MustMove;
-        }
-
-        if !(m.from.x == m.to.x || m.from.y == m.to.y) {
+        } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
             return AxisAlignedOnly;
-        }
+        } else {
+            if self
+                .latest_confirmed_moves
+                .insert(m.who.0 as usize, m)
+                .is_none()
+            {
+                self.waiting_players -= 1
+            }
 
-        if self.latest_confirmed_moves.insert(m.who.0 as usize, m).is_none() {
-            self.waiting_players -= 1
+            Confirmed
         }
-
-        Confirmed
     }
 
-    /// Tries to complete a round, 
-    /// 
+    /// Tries to complete a round,
+    ///
     /// Returns Ok with the list of applied moves, or else the list of newly
     /// conflicted coordinates.
     fn try_complete_round(&mut self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Coord; 2]>> {
-        debug_assert!(self.pending_moves.len() == self.player_count)
+        debug_assert!(self.pending_moves.len() == self.player_count);
     }
 }
 
