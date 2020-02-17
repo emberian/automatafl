@@ -357,10 +357,7 @@ impl Board {
     /// function also does absolutely no bounds checking, and thus can panic if the coordinate is
     /// out of bounds. Only use this if you know what you're doing.
     fn force_move(&mut self, from: Coord, to: Coord) {
-        core::mem::swap(
-            &mut self.particles[from.ix()],
-            &mut self.particles[to.ix()],
-        );
+        self.particles.swap(from.ix(), to.ix());
 
         if self.automaton_location == from {
             self.automaton_location = to;
@@ -702,6 +699,7 @@ impl Game {
         }
     }
 
+    /// Calculate the coordinate to which the automaton would move right now.
     fn automaton_move(&self) -> Coord {
         fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
             use Particle::*;
@@ -772,6 +770,7 @@ impl Game {
         }
     }
 
+    /// Cause the automaton to move.
     fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
