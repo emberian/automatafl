@@ -31,9 +31,82 @@ pub struct Coord {
     y: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Delta {
+    dx: i8,
+    dy: i8,
+}
+
+impl std::ops::Sub for Coord {
+    type Output= Delta;
+
+    fn sub(self, other: Coord) -> Delta {
+        Delta {
+            dx: (self.x as i8 - other.x as i8),
+            dy: (self.y as i8 - other.y as i8),
+        }
+    }
+}
+
+impl std::ops::Add<Delta> for Coord {
+    type Output = Coord;
+
+    fn add(self, other: Delta) -> Coord {
+        Coord {
+            x: self.x + other.dx,
+            y: self.y + other.dy,
+        }
+    }
+}
+
+impl std::ops::Mul<isize> for Delta {
+    type Output = Delta;
+
+    fn mul(self, other: isize) -> Delta {
+        Delta {
+            dx: self.dx * other,
+            dy: self.dy * other,
+        }
+    }
+}
+
 impl Coord {
     fn ix(self) -> (usize, usize) {
         (self.x as usize, self.y as usize)
+    }
+
+    fn displacement(self) -> usize {
+        self.x as usize + self.y as usize
+    }
+}
+
+impl Delta {
+    const ZERO = Delta { x: 0, y: 0 };
+
+    fn is_zero(self) -> bool {
+        self.dx == 0 && self.dy == 0
+    }
+
+    fn is_axial(self) -> bool {
+        self.dx == 0 || self.dy == 0 && !self.is_zero()
+    }
+
+    fn axis_unit(self) -> Delta {
+        if self.is_zero() {
+            Delta::ZERO
+        } else {
+            // Fencepost: prefer Y ("column rule"). This shouldn't be relied upon; in general, call
+            // this only on axial deltas.
+            if self.dx.abs() > self.dy.abs() {
+                Delta { dx: self.dx.sign(), dy: 0 }
+            } else {
+                Delta { dx: 0, dy: self.dy.sign() }
+            }
+        }
+    }
+
+    fn displacement(self) -> usize {
+        self.x.abs() as usize + self.y.abs() as usize
     }
 }
 
@@ -130,6 +203,22 @@ pub struct Cell {
 
 impl Cell { fn is_vacuum(&self) -> bool { self.what.is_vacuum() } }
 
+/// Your move couldn't be completed because:
+enum MoveError {
+    /// It specified the same source and destination.
+    NullMove,
+    /// It is not an axial ("rook") move.
+    OffAxis,
+    /// One or more coordinates are out of bounds.
+    Oob,
+    /// There is no piece to move at the source.
+    NoSource,
+    /// The move is occluded between source and destination by a piece at {0}.
+    OccupiedAt(Coord),
+    /// Either the source or destination is a conflicted square.
+    Conflicted,
+}
+
 pub struct Board {
     particles: Grid<Cell>,
     size: Coord,
@@ -190,10 +279,48 @@ impl Board {
         replacement.what
     }
 
-    fn do_move(&mut self, from: Coord, to: Coord, what: Particle) {
+    fn do_move(&mut self, from: Coord, to: Coord) -> Result<(), MoveError> {
         // scan the axis to make sure it's passable...
         //
         // if it is, plop it down in to. otherwise, put what back down.
+        use MoveError::*;
+
+        if !(self.inbounds(from) && self.inbounds(to)) {
+            return Err(Oob);
+        }
+
+        let delta = to - from;
+        if delta.is_zero() {
+            return Err(NullMove);
+        }
+        if !delta.is_axial() {
+            return Err(OffAxis);
+        }
+
+        let src = self.particles[from.ix()];
+        let dst = self.particles[to.ix()];
+
+        if src.is_vacuum() {
+            return Err(NoSource);
+        }
+        if src.conflict || dst.conflict {
+            return Err(Conflicted);
+        }
+
+        let axis = delta.axial_unit();
+        for offset in 1..=delta.displacement() {
+            let c = from + axis * offset;
+            if !self.particles[c.ix()].is_vacuum() {
+                return Err(OccupiedAt(c));
+            }
+        }
+
+        core::mem::swap(
+            &mut self.particles[from.ix()],
+            &mut self.particles[to.ix()],
+        );
+
+        Ok(())
     }
 
     fn mark_conflict(&mut self, c: Coord) {
