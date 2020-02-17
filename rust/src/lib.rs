@@ -38,7 +38,7 @@ pub struct Delta {
 }
 
 impl std::ops::Sub for Coord {
-    type Output= Delta;
+    type Output = Delta;
 
     fn sub(self, other: Coord) -> Delta {
         Delta {
@@ -53,8 +53,9 @@ impl std::ops::Add<Delta> for Coord {
 
     fn add(self, other: Delta) -> Coord {
         Coord {
-            x: self.x + other.dx,
-            y: self.y + other.dy,
+            // TODO: Make this saturate rather than wrap
+            x: (self.x as i8 + other.dx) as u8,
+            y: (self.y as i8 + other.dy) as u8,
         }
     }
 }
@@ -81,7 +82,11 @@ impl Coord {
 }
 
 impl Delta {
-    const ZERO = Delta { x: 0, y: 0 };
+    const ZERO = Delta { dx: 0, dy: 0 };
+    const XP = Delta { dx: 1, dy: 0};
+    const XN = Delta { dx: -1, dy: 0};
+    const YP = Delta { dx: 0, dy: 1 };
+    const YN = Delta { dx: 0, dy: -1 };
 
     fn is_zero(self) -> bool {
         self.dx == 0 && self.dy == 0
@@ -98,9 +103,9 @@ impl Delta {
             // Fencepost: prefer Y ("column rule"). This shouldn't be relied upon; in general, call
             // this only on axial deltas.
             if self.dx.abs() > self.dy.abs() {
-                Delta { dx: self.dx.sign(), dy: 0 }
+                Delta { dx: self.dx.signum(), dy: 0 }
             } else {
-                Delta { dx: 0, dy: self.dy.sign() }
+                Delta { dx: 0, dy: self.dy.signum() }
             }
         }
     }
@@ -112,7 +117,7 @@ impl Delta {
 
 impl core::fmt::Display for Coord {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{}, {}", self.x, self.y)
+        write!(f, "({}, {})", self.x, self.y)
     }
 }
 
@@ -219,6 +224,19 @@ enum MoveError {
     Conflicted,
 }
 
+#[derive(Debug, Clone)]
+struct Raycast {
+    what: Particle,
+    hit: Option<Coord>,
+    dist: usize,
+}
+
+impl Raycast {
+    fn is_hit(&self) -> bool {
+        self.hit.is_some()
+    }
+}
+
 pub struct Board {
     particles: Grid<Cell>,
     size: Coord,
@@ -229,6 +247,7 @@ pub struct Board {
 // By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
 
 impl Board {
+    /// Prepare a standard board layout for a two player game.
     pub fn stock_two_player() -> Board {
         let r = Cell {
             what: Particle::Repulsor,
@@ -275,10 +294,23 @@ impl Board {
             conflict: false,
         };
         core::mem::swap(&mut replacement, &mut self.particles[c.ix()]);
-        debug_assert!(replacement.conflict == false);
+        debug_assert!(!replacement.conflict);
         replacement.what
     }
 
+    /// Place a particle on the board.
+    fn place(&mut self, c: Coord, p: Particle) {
+        self.particles[c.ix()] = Cell {
+            what: p,
+            conflict: false,
+        }
+    }
+
+    /// Attempt to move a piece. This can fail for a number of reasons, many of them indicative of
+    /// erroneous input. If it fails, no move is attempted.
+    ///
+    /// This function considers it allowable to move the automaton, and is part of the call graph
+    /// of Game::update_automaton.
     fn do_move(&mut self, from: Coord, to: Coord) -> Result<(), MoveError> {
         // scan the axis to make sure it's passable...
         //
@@ -315,39 +347,187 @@ impl Board {
             }
         }
 
+        self.force_move(from, to);
+
+        Ok(())
+    }
+
+    /// Forcibly swap two positions on the board (assuring the number of particles is constant).
+    /// This can also do weird, probably illogical things, like swapping conflict flags. This
+    /// function also does absolutely no bounds checking, and thus can panic if the coordinate is
+    /// out of bounds. Only use this if you know what you're doing.
+    fn force_move(&mut self, from: Coord, to: Coord) {
         core::mem::swap(
             &mut self.particles[from.ix()],
             &mut self.particles[to.ix()],
         );
 
-        Ok(())
+        if self.automaton_location == from {
+            self.automaton_location = to;
+        }
     }
 
+    /// Raycast on the board down an axis from a coordinate.
+    ///
+    /// The ray starts from, but does not include, the "from" coordinate.
+    ///
+    /// The axis SHOULD be a unit vector, but any nonzero Delta is acceptable. This function only
+    /// tests the integer multiples of that offset, and relies on the ray eventually containing
+    /// out-of-bounds points to terminate.
+    ///
+    /// The raycast's dist field is set to the integer at which iteration terminated. If iteration
+    /// terminated in-bounds, this is guaranteed to be on a non-Vacuum particle. If it terminated
+    /// out-of-bounds, i is the first integer multiple of axis that is out of bounds (and the
+    /// particle is Vacuum). (These facts are depended upon in the automaton's reasoning; see
+    /// evaluate_axis.)
+    fn raycast(&self, from: Coord, axis: Delta) -> Raycast {
+        debug_assert!(axis != Delta::ZERO);
+
+        for i in 1isize.. {
+            let co = from + axis * i;
+            if !self.inbounds(c) {
+                return Raycast {
+                    what: Particle::Vacuum,
+                    hit: None,
+                    dist: i as usize,
+                };
+            }
+            let c = self.particles[co];
+            if !c.is_vacuum() {
+                return Raycast {
+                    what: c.what,
+                    hit: Some(co),
+                    dist: i as usize,
+                };
+            }
+        }
+
+        unreachable!()
+    }
+
+    /// Mark a cell as conflicted.
+    ///
+    /// Moves specified by plebeians may not specify conflicted squares as a rule (see
+    /// MoveError::Conflicted, CoordFeedback::Conflict).
+    ///
+    /// Conflicted cells come about during conflict resolution (RoundState::ResolvingConflict) to
+    /// indicate that two plebeians attempted to move the same particle differently, or move
+    /// different particles to the same cell. When conflict resolution ends, the marks are cleared.
     fn mark_conflict(&mut self, c: Coord) {
         self.particles[c.ix()].conflict = true;
         self.conflict_list.push(c);
     }
 
+    /// Clear all conflicted cells.
+    ///
+    /// This is done at the end of conflict resolution (RoundState::ResolvingConflict).
     fn clear_conflicts(&mut self) {
         for c in self.conflict_list.drain(..) {
             self.particles[c.ix()].conflict = false;
         }
     }
 
+    /// Test if there is a conflict in the given cell.
+    ///
+    /// If this is true, the cell may not be specified as a source or destination of any move
+    /// (MoveError::Conflicted).
     fn is_conflict(&self, c: Coord) -> bool {
         self.particles[c.ix()].conflict
     }
 
+    /// Test whether the cell is empty.
+    ///
+    /// A source cell must be nonempty (MoveError::NoSource), and all other cells included on the
+    /// movement to the destination cell must be empty (MoveError::OccupiedAt).
     fn is_vacuum(&self, c: Coord) -> bool {
         self.particles[c.ix()].is_vacuum()
     }
 
+    /// Test whether the cell contains the automaton.
     fn is_automaton(&self, c: Coord) -> bool {
         self.automaton_location == c
     }
 
+    /// Test whether the coordinate is within the boundaries of the board.
+    ///
+    /// It is illegal to specify an out-of-bounds coordinate as the source or destination of a move
+    /// (MoveError::Oob).
     fn inbounds(&self, c: Coord) -> bool {
         c.x < self.size.x && c.y < self.size.y
+    }
+}
+
+/// Decisions of the Automaton on one axis.
+#[derive(Debug, Clone)]
+enum AutomatonDecision {
+    UnbalancedPair { pos: bool, att_dist: usize, rep_dist: usize },
+    FromRepulsor { pos: bool, rep_dist: usize },
+    TowardAttractor { pos: bool, att_dist: usize },
+    None,
+}
+
+impl AutomatonDecision {
+    fn priority(&self) -> usize {
+        match self {
+            AutomatonDecision::None => 0,
+            AutomatonDecision::TowardAttractor => 10,
+            AutomatonDecision::FromRepulsor => 20,
+            AutomatonDecision::UnbalancedPair => 30,
+        }
+    }
+
+    fn delta(&self, axis: Delta) -> Delta {
+        fn bool_to_sign(b: bool) -> isize {
+            if b { 1isize } else { -1isize }
+        }
+
+        match self {
+            AutomatonDecision::UnbalancedPair { pos, .. } =>
+                axis * bool_to_sign(pos),
+            AutomatonDecision::FromRepulsor { pos, .. } =>
+                axis * bool_to_sign(pos),
+            AutomatonDecision::TowardAttractor { pos, .. } =>
+                axis * bool_to_sign(pos),
+            AutomatonDecision::None => Delta::ZERO,
+        }
+    }
+}
+
+impl PartialOrd for AutomatonDecision {
+    fn partial_cmp(&self, other: &AutomatonDecision) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for AutomatonDecision {
+    fn eq(&self, other: &AutomatonDecision) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for AutomatonDecision {}
+
+impl Ord for AutomatonDecision {
+    fn cmp(&self, other: &AutomatonDecision) -> Ordering {
+        self.priority().cmp(other.priority())
+            .then_with(|| match self {
+                AutomatonDecision::UnbalancedPair { att_dist, rep_dist, .. } => {
+                    if let AutomatonDecision::UnbalancedPair { att_dist: o_att_dist, rep_dist: o_rep_dist, .. } = other {
+                        att_dist.cmp(o_att_dist).reverse().then(rep_dist.cmp(o_rep_dist).reverse())
+                    } else { unreachable!() }
+                },
+                AutomatonDecision::FromRepulsor { rep_dist, .. } => {
+                    if let AutomatonDecision::FromRepulsor { rep_dist: o_rep_dist, .. } = other {
+                        rep_dist.cmp(o_rep_dist).reverse()
+                    } else { unreachable!() }
+                },
+                AutomatonDecision::TowardAttractor { att_dist, .. } => {
+                    if let AutomatonDecision::TowardAttractor { att_dist: o_att_dist, .. } = other {
+                        att_dist.cmp(o_att_dist).reverse(),
+                    } else { unreachable!() }
+                },
+                _ => Ordering::Equal,
+            })
     }
 }
 
@@ -359,6 +539,7 @@ pub struct Game {
     pending_moves: SmallVec<[Move; 2]>,
     goals: SmallVec<[(Coord, Pid); 4]>,
     player_count: u8,
+    use_column_rule: bool,
 }
 
 impl Game {
@@ -521,8 +702,81 @@ impl Game {
         }
     }
 
-    fn update_automaton(&mut self) {
+    fn automaton_move(&self) -> Coord {
+        fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
+            use Particle::*;
 
+            match (pos.what, neg.what) {
+                (Attractor, Repulsor) if pos.dist > 1 =>
+                    AutomatonDecision::UnbalancedPair {
+                        pos: true,
+                        att_dist: pos.dist,
+                        rep_dist: neg.dist,
+                    },
+                (Repulsor, Attractor) if neg.dist > 1 =>
+                    AutomatonDecision::UnbalancedPair {
+                        pos: false,
+                        att_dist: neg.dist,
+                        rep_dist: pos.dist,
+                    },
+                (Repulsor, Repulsor) if pos.dist != neg.dist =>
+                    AutomatonDecision::FromRepulsor {
+                        pos: pos.dist > neg.dist,
+                        rep_dist: std::cmp::min(pos.dist, neg.dist),
+                    },
+                (Repulsor, Vacuum) if neg.dist > 1 => 
+                    AutomatonDecision::FromRepulsor {
+                        pos: false,
+                        rep_dist: pos.dist,
+                    },
+                (Vacuum, Repulsor) if pos.dist > 1 =>
+                    AutomatonDecision::FromRepulsor {
+                        pos: true,
+                        rep_dist: neg.dist,
+                    },
+                (Attractor, Attractor) if pos.dist != neg.dist =>
+                    AutomatonDecision::TowardAttractor {
+                        pos: pos.dist < neg.dist,
+                        att_dist: std::cmp::min(pos.dist, neg.dist),
+                    },
+                (Attractor, Vacuum) if pos.dist > 1 =>
+                    AutomatonDecision::TowardAttractor {
+                        pos: true,
+                        att_dist: pos.dist,
+                    },
+                (Vacuum, Attractor) if neg.dist > 1 =>
+                    AutomatonDecision::TowardAttractor {
+                        pos: false,
+                        att_dist: neg.dist,
+                    },
+                _ => AutomatonDecision::None,
+            }
+        }
+
+        let xp = self.board.raycast(self.board.automaton_location, Delta::XP);
+        let xn = self.board.raycast(self.board.automaton_location, Delta::XN);
+        let yp = self.board.raycast(self.board.automaton_location, Delta::YP);
+        let yn = self.board.raycast(self.board.automaton_location, Delta::YN);
+
+        let x_decision = evaluate_axis(&xp, &xn);
+        let y_decision = evaluate_axis(&yp, &yn);
+
+        self.board.automaton_location + if x_decision > y_decision {
+            x_decision.delta(Delta::XP)
+        } else {
+            if !self.use_column_rule && x_decision == y_decision {
+                Delta::ZERO
+            } else {
+                y_decision.delta(Delta::YP)
+            }
+        }
+    }
+
+    fn update_automaton(&mut self) {
+        let new_location = self.automaton_move();
+        if new_location != self.board.automaton_location {
+            debug_assert!(self.board.do_move(self.board.automaton_location, new_location).is_ok());
+        }
     }
 }
 
