@@ -19,6 +19,7 @@ use displaydoc::Display;
 use ndarray::{arr2, Array2 as Grid};
 use smallvec::SmallVec;
 use std::iter::FromIterator;
+use std::cmp::Ordering;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,8 +66,8 @@ impl std::ops::Mul<isize> for Delta {
 
     fn mul(self, other: isize) -> Delta {
         Delta {
-            dx: self.dx * other,
-            dy: self.dy * other,
+            dx: self.dx * other as i8,
+            dy: self.dy * other as i8,
         }
     }
 }
@@ -82,11 +83,11 @@ impl Coord {
 }
 
 impl Delta {
-    const ZERO = Delta { dx: 0, dy: 0 };
-    const XP = Delta { dx: 1, dy: 0};
-    const XN = Delta { dx: -1, dy: 0};
-    const YP = Delta { dx: 0, dy: 1 };
-    const YN = Delta { dx: 0, dy: -1 };
+    const ZERO: Delta = Delta { dx: 0, dy: 0 };
+    const XP: Delta = Delta { dx: 1, dy: 0};
+    const XN: Delta = Delta { dx: -1, dy: 0};
+    const YP: Delta = Delta { dx: 0, dy: 1 };
+    const YN: Delta = Delta { dx: 0, dy: -1 };
 
     fn is_zero(self) -> bool {
         self.dx == 0 && self.dy == 0
@@ -96,7 +97,7 @@ impl Delta {
         self.dx == 0 || self.dy == 0 && !self.is_zero()
     }
 
-    fn axis_unit(self) -> Delta {
+    fn axial_unit(self) -> Delta {
         if self.is_zero() {
             Delta::ZERO
         } else {
@@ -111,7 +112,7 @@ impl Delta {
     }
 
     fn displacement(self) -> usize {
-        self.x.abs() as usize + self.y.abs() as usize
+        self.dx.abs() as usize + self.dy.abs() as usize
     }
 }
 
@@ -341,7 +342,7 @@ impl Board {
 
         let axis = delta.axial_unit();
         for offset in 1..=delta.displacement() {
-            let c = from + axis * offset;
+            let c = from + axis * offset as isize;
             if !self.particles[c.ix()].is_vacuum() {
                 return Err(OccupiedAt(c));
             }
@@ -382,14 +383,14 @@ impl Board {
 
         for i in 1isize.. {
             let co = from + axis * i;
-            if !self.inbounds(c) {
+            if !self.inbounds(co) {
                 return Raycast {
                     what: Particle::Vacuum,
                     hit: None,
                     dist: i as usize,
                 };
             }
-            let c = self.particles[co];
+            let c = self.particles[co.ix()];
             if !c.is_vacuum() {
                 return Raycast {
                     what: c.what,
@@ -467,15 +468,15 @@ impl AutomatonDecision {
     fn priority(&self) -> usize {
         match self {
             AutomatonDecision::None => 0,
-            AutomatonDecision::TowardAttractor => 10,
-            AutomatonDecision::FromRepulsor => 20,
-            AutomatonDecision::UnbalancedPair => 30,
+            AutomatonDecision::TowardAttractor { .. } => 10,
+            AutomatonDecision::FromRepulsor { .. } => 20,
+            AutomatonDecision::UnbalancedPair { .. } => 30,
         }
     }
 
     fn delta(&self, axis: Delta) -> Delta {
-        fn bool_to_sign(b: bool) -> isize {
-            if b { 1isize } else { -1isize }
+        fn bool_to_sign(b: &bool) -> isize {
+            if *b { 1isize } else { -1isize }
         }
 
         match self {
@@ -506,7 +507,7 @@ impl Eq for AutomatonDecision {}
 
 impl Ord for AutomatonDecision {
     fn cmp(&self, other: &AutomatonDecision) -> Ordering {
-        self.priority().cmp(other.priority())
+        self.priority().cmp(&other.priority())
             .then_with(|| match self {
                 AutomatonDecision::UnbalancedPair { att_dist, rep_dist, .. } => {
                     if let AutomatonDecision::UnbalancedPair { att_dist: o_att_dist, rep_dist: o_rep_dist, .. } = other {
@@ -520,7 +521,7 @@ impl Ord for AutomatonDecision {
                 },
                 AutomatonDecision::TowardAttractor { att_dist, .. } => {
                     if let AutomatonDecision::TowardAttractor { att_dist: o_att_dist, .. } = other {
-                        att_dist.cmp(o_att_dist).reverse(),
+                        att_dist.cmp(o_att_dist).reverse()
                     } else { unreachable!() }
                 },
                 _ => Ordering::Equal,
@@ -664,7 +665,7 @@ impl Game {
                         if self.board.is_vacuum(m.from) || !self.board.is_vacuum(m.to) {
                             true
                         } else {
-                            results.push((m, self.board.do_move(m.from, m.to, particle)));
+                            results.push((m, self.board.do_move(m.from, m.to)));
                             false
                         }
                     });
