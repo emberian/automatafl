@@ -489,6 +489,7 @@ impl AutomatonDecision {
         match self {
             None => 0,
             TowardAttractor { .. } => 10,
+            // "Frank correction": this is higher priority
             FromRepulsor { .. } => 20,
             UnbalancedPair { .. } => 30,
         }
@@ -498,9 +499,9 @@ impl AutomatonDecision {
         use AutomatonDecision::*;
         fn sgn(&b: &bool) -> isize {
             if b {
-                1isize
+                1
             } else {
-                -1isize
+                -1
             }
         }
 
@@ -530,6 +531,15 @@ impl Eq for AutomatonDecision {}
 impl Ord for AutomatonDecision {
     fn cmp(&self, other: &AutomatonDecision) -> Ordering {
         use AutomatonDecision::*;
+
+        // Yo, what's up with all these .reverse() calls?
+        //
+        // Well, the README.md describes the rules in a particular way, and to
+        // make the code easy to verify, the code is written that way too.
+        //
+        // It's easier to make sure .reverse() is written everywhere and review
+        // the code/prose linearly than mentally swap when reading.
+
         self.priority()
             .cmp(&other.priority())
             .then_with(|| match (self, other) {
@@ -561,7 +571,7 @@ impl Ord for AutomatonDecision {
                     },
                 ) => att_dist.cmp(o_att_dist).reverse(),
                 (None, _) => Ordering::Equal,
-                _ => unreachable!()
+                _ => unreachable!(),
             })
     }
 }
