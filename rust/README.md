@@ -67,4 +67,5 @@ If none of the higher priorities above apply, no movement is considered for that
 - Hyperautomatafl: 3 or more dimensions
 - Multiautomatafl: more than one automaton
 - Flingautomatafl: make the grid continuous and model momentum
-- More interesting particle behavior. Maybe they exert different forces on different dimensions? Maybe you can rotate groups of particles?
+- More interesting particle influence. Maybe they exert different forces on different dimensions? Maybe you can rotate groups of particles?
+- More interesting particle movement. Maybe you can move any particle anywhere, barring conflict. Maybe have different particles have chess rules for them.

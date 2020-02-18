@@ -75,10 +75,6 @@ impl Coord {
     fn ix(self) -> (usize, usize) {
         (self.x as usize, self.y as usize)
     }
-
-    fn displacement(self) -> usize {
-        self.x as usize + self.y as usize
-    }
 }
 
 impl Delta {
@@ -205,11 +201,12 @@ impl Particle {
     }
 }
 
-// TODO: this is 2 bytes when it could be 1 :/
+// TODO: this is 3 bytes when it could be 1 :/
 #[derive(Copy, Clone)]
 pub struct Cell {
     what: Particle,
     conflict: bool,
+    passable: bool,
 }
 
 impl Cell {
@@ -219,19 +216,11 @@ impl Cell {
 }
 
 /// Your move couldn't be completed because:
-enum MoveError {
-    /// It specified the same source and destination.
-    NullMove,
-    /// It is not an axial ("rook") move.
-    OffAxis,
-    /// One or more coordinates are out of bounds.
-    Oob,
+pub enum MoveError {
     /// There is no piece to move at the source.
     NoSource,
     /// The move is occluded between source and destination by a piece at {0}.
     OccupiedAt(Coord),
-    /// Either the source or destination is a conflicted square.
-    Conflicted,
 }
 
 #[derive(Debug, Clone)]
@@ -241,17 +230,12 @@ struct Raycast {
     dist: usize,
 }
 
-impl Raycast {
-    fn is_hit(&self) -> bool {
-        self.hit.is_some()
-    }
-}
-
 pub struct Board {
     particles: Grid<Cell>,
     size: Coord,
     automaton_location: Coord,
     conflict_list: SmallVec<[Coord; 16]>, // TODO: compare performance scanning this list to scanning the whole grid
+    passable_list: SmallVec<[Coord; 16]>,
 }
 
 // By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
@@ -262,18 +246,22 @@ impl Board {
         let r = Cell {
             what: Particle::Repulsor,
             conflict: false,
+            passable: false,
         };
         let a = Cell {
             what: Particle::Attractor,
             conflict: false,
+            passable: false,
         };
         let o = Cell {
             what: Particle::Vacuum,
             conflict: false,
+            passable: false,
         };
         let d = Cell {
             what: Particle::Automaton,
             conflict: false,
+            passable: false,
         };
         Board {
             particles: arr2(&[
@@ -292,28 +280,14 @@ impl Board {
             size: Coord { x: 11, y: 11 },
             automaton_location: Coord { x: 5, y: 5 },
             conflict_list: SmallVec::new(),
+            passable_list: SmallVec::new(),
         }
     }
 
-    /// Lift any particle off the board, putting vacuum in its place.
-    ///
-    /// Panics if coord is conflicted.
-    fn pluck(&mut self, c: Coord) -> Particle {
-        let mut replacement = Cell {
-            what: Particle::Vacuum,
-            conflict: false,
-        };
-        core::mem::swap(&mut replacement, &mut self.particles[c.ix()]);
-        debug_assert!(!replacement.conflict);
-        replacement.what
-    }
-
-    /// Place a particle on the board.
-    fn place(&mut self, c: Coord, p: Particle) {
-        self.particles[c.ix()] = Cell {
-            what: p,
-            conflict: false,
-        }
+    /// Mark a coordinate as passable, because some move specifies it as a source.
+    fn mark_passable(&mut self, c: Coord) {
+        self.particles[c.ix()].passable = true;
+        self.passable_list.push(c);
     }
 
     /// Attempt to move a piece. This can fail for a number of reasons, many of them indicative of
@@ -322,22 +296,13 @@ impl Board {
     /// This function considers it allowable to move the automaton, and is part of the call graph
     /// of Game::update_automaton.
     fn do_move(&mut self, from: Coord, to: Coord) -> Result<(), MoveError> {
-        // scan the axis to make sure it's passable...
-        //
-        // if it is, plop it down in to. otherwise, put what back down.
         use MoveError::*;
 
-        if !(self.inbounds(from) && self.inbounds(to)) {
-            return Err(Oob);
-        }
+        debug_assert!(self.inbounds(from) && self.inbounds(to));
 
         let delta = to - from;
-        if delta.is_zero() {
-            return Err(NullMove);
-        }
-        if !delta.is_axial() {
-            return Err(OffAxis);
-        }
+        debug_assert!(!delta.is_zero()); // established by propose_move
+        debug_assert!(delta.is_axial());
 
         let src = self.particles[from.ix()];
         let dst = self.particles[to.ix()];
@@ -345,9 +310,8 @@ impl Board {
         if src.is_vacuum() {
             return Err(NoSource);
         }
-        if src.conflict || dst.conflict {
-            return Err(Conflicted);
-        }
+
+        debug_assert!(!src.conflict && !dst.conflict);
 
         let axis = delta.axial_unit();
         for offset in 1..=delta.displacement() {
@@ -425,12 +389,15 @@ impl Board {
         self.conflict_list.push(c);
     }
 
-    /// Clear all conflicted cells.
+    /// Clear all marked cells.
     ///
     /// This is done at the end of conflict resolution (RoundState::ResolvingConflict).
-    fn clear_conflicts(&mut self) {
+    fn clear_marks(&mut self) {
         for c in self.conflict_list.drain(..) {
             self.particles[c.ix()].conflict = false;
+        }
+        for c in self.passable_list.drain(..) {
+            self.particles[c.ix()].passable = false;
         }
     }
 
@@ -445,7 +412,7 @@ impl Board {
     /// Test whether the cell is empty.
     ///
     /// A source cell must be nonempty (MoveError::NoSource), and all other cells included on the
-    /// movement to the destination cell must be empty (MoveError::OccupiedAt).
+    /// movement to the destination cell must be empty or passable (MoveError::OccupiedAt).
     fn is_vacuum(&self, c: Coord) -> bool {
         self.particles[c.ix()].is_vacuum()
     }
@@ -536,9 +503,6 @@ impl Ord for AutomatonDecision {
         //
         // Well, the README.md describes the rules in a particular way, and to
         // make the code easy to verify, the code is written that way too.
-        //
-        // It's easier to make sure .reverse() is written everywhere and review
-        // the code/prose linearly than mentally swap when reading.
 
         self.priority()
             .cmp(&other.priority())
@@ -577,14 +541,14 @@ impl Ord for AutomatonDecision {
 }
 
 pub struct Game {
-    winner: Option<Pid>,
-    locked_players: SmallVec<[Pid; 2]>,
-    board: Board,
-    round: RoundState,
-    pending_moves: SmallVec<[Move; 2]>,
-    goals: SmallVec<[(Coord, Pid); 4]>,
-    player_count: u8,
-    use_column_rule: bool,
+    pub winner: Option<Pid>,
+    pub locked_players: SmallVec<[Pid; 2]>,
+    pub board: Board,
+    pub round: RoundState,
+    pub pending_moves: SmallVec<[Move; 2]>,
+    pub goals: SmallVec<[(Coord, Pid); 4]>,
+    pub player_count: u8,
+    pub use_column_rule: bool,
 }
 
 impl Game {
@@ -633,7 +597,7 @@ impl Game {
 
     /// Returns Ok with the list of applied move to apply, or else the list of
     /// conflicting moves.
-    fn resolve_conflicts(&self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Move; 2]>> {
+    fn resolve_conflicts(&mut self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Move; 2]>> {
         debug_assert!(self.pending_moves.len() == self.player_count as usize);
 
         let mut seen_pairs = SmallVec::<[(Coord, Coord); 2]>::new();
@@ -656,6 +620,7 @@ impl Game {
             // See if there's a source conflict...
             if seen_from.contains(&m.from) {
                 conflict_moves.push(m);
+                self.board.mark_conflict(m.from);
                 conflict = true;
             } else {
                 seen_from.push(m.from);
@@ -664,6 +629,7 @@ impl Game {
             // Or a dest conflict...
             if seen_to.contains(&m.to) {
                 conflict_moves.push(m);
+                self.board.mark_conflict(m.to);
                 conflict = true;
             } else {
                 seen_to.push(m.to);
@@ -694,29 +660,39 @@ impl Game {
         }
     }
 
-    pub fn try_complete_round(&mut self) {
+    /// Return the list of move results if everything was gucci, else enter conflict resolution.
+    pub fn try_complete_round(
+        &mut self,
+    ) -> Result<SmallVec<[(Move, Result<(), MoveError>); 2]>, ()> {
         match self.resolve_conflicts() {
-            Ok(moves_to_apply) => {
+            Ok(mut moves_to_apply) => {
                 // Lift the moved pieces off the board
 
-                let mut moved = moves_to_apply
-                    .iter()
-                    .map(|&m| (m, self.board.pluck(m.from)))
-                    .collect::<SmallVec<[_; 2]>>();
+                for m in &moves_to_apply {
+                    self.board.mark_passable(m.from);
+                }
 
-                let mut results = vec![];
+                let mut results = SmallVec::with_capacity(moves_to_apply.len());
 
-                while moved.len() != 0 {
+                while moves_to_apply.len() != 0 {
+                    let mut made_progress = false;
                     // FIXME: does this terminate? how does the python even work? it appears to
                     // depend critically on passable not mucking with the particle type
-                    moved.retain(|&mut (m, particle)| {
-                        if self.board.is_vacuum(m.from) || !self.board.is_vacuum(m.to) {
+                    moves_to_apply.retain(|m| {
+                        if self.board.is_vacuum(m.from) {
                             true
                         } else {
-                            results.push((m, self.board.do_move(m.from, m.to)));
+                            results.push((*m, self.board.do_move(m.from, m.to)));
+                            made_progress = true;
                             false
                         }
                     });
+
+                    if !made_progress {
+                        for m in moves_to_apply.drain(..) {
+                            results.push((m, Err(MoveError::NoSource)))
+                        }
+                    }
                 }
 
                 self.update_automaton();
@@ -738,9 +714,11 @@ impl Game {
                         false
                     }
                 }) {
-                    self.board.clear_conflicts();
+                    self.board.clear_marks();
                     *round = RoundState::Fresh;
                 }
+
+                Ok(results)
             }
             Err(moves_conflicted) => {
                 self.round = RoundState::ResolvingConflict;
@@ -751,6 +729,7 @@ impl Game {
                         self.locked_players.push(m.who);
                     }
                 }
+                Err(())
             }
         }
     }
