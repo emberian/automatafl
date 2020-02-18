@@ -1,4 +1,3 @@
-
 //! Reference implementation of the automatafl board game.
 //!
 //! General crate design notes:
@@ -18,8 +17,8 @@ extern crate smallvec;
 use displaydoc::Display;
 use ndarray::{arr2, Array2 as Grid};
 use smallvec::SmallVec;
-use std::iter::FromIterator;
 use std::cmp::Ordering;
+use std::iter::FromIterator;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -84,8 +83,8 @@ impl Coord {
 
 impl Delta {
     const ZERO: Delta = Delta { dx: 0, dy: 0 };
-    const XP: Delta = Delta { dx: 1, dy: 0};
-    const XN: Delta = Delta { dx: -1, dy: 0};
+    const XP: Delta = Delta { dx: 1, dy: 0 };
+    const XN: Delta = Delta { dx: -1, dy: 0 };
     const YP: Delta = Delta { dx: 0, dy: 1 };
     const YN: Delta = Delta { dx: 0, dy: -1 };
 
@@ -104,9 +103,15 @@ impl Delta {
             // Fencepost: prefer Y ("column rule"). This shouldn't be relied upon; in general, call
             // this only on axial deltas.
             if self.dx.abs() > self.dy.abs() {
-                Delta { dx: self.dx.signum(), dy: 0 }
+                Delta {
+                    dx: self.dx.signum(),
+                    dy: 0,
+                }
             } else {
-                Delta { dx: 0, dy: self.dy.signum() }
+                Delta {
+                    dx: 0,
+                    dy: self.dy.signum(),
+                }
             }
         }
     }
@@ -207,7 +212,11 @@ pub struct Cell {
     conflict: bool,
 }
 
-impl Cell { fn is_vacuum(&self) -> bool { self.what.is_vacuum() } }
+impl Cell {
+    fn is_vacuum(&self) -> bool {
+        self.what.is_vacuum()
+    }
+}
 
 /// Your move couldn't be completed because:
 enum MoveError {
@@ -458,9 +467,19 @@ impl Board {
 /// Decisions of the Automaton on one axis.
 #[derive(Debug, Clone)]
 enum AutomatonDecision {
-    UnbalancedPair { pos: bool, att_dist: usize, rep_dist: usize },
-    FromRepulsor { pos: bool, rep_dist: usize },
-    TowardAttractor { pos: bool, att_dist: usize },
+    UnbalancedPair {
+        pos: bool,
+        att_dist: usize,
+        rep_dist: usize,
+    },
+    FromRepulsor {
+        pos: bool,
+        rep_dist: usize,
+    },
+    TowardAttractor {
+        pos: bool,
+        att_dist: usize,
+    },
     None,
 }
 
@@ -476,16 +495,17 @@ impl AutomatonDecision {
 
     fn delta(&self, axis: Delta) -> Delta {
         fn bool_to_sign(b: &bool) -> isize {
-            if *b { 1isize } else { -1isize }
+            if *b {
+                1isize
+            } else {
+                -1isize
+            }
         }
 
         match self {
-            AutomatonDecision::UnbalancedPair { pos, .. } =>
-                axis * bool_to_sign(pos),
-            AutomatonDecision::FromRepulsor { pos, .. } =>
-                axis * bool_to_sign(pos),
-            AutomatonDecision::TowardAttractor { pos, .. } =>
-                axis * bool_to_sign(pos),
+            AutomatonDecision::UnbalancedPair { pos, .. } => axis * bool_to_sign(pos),
+            AutomatonDecision::FromRepulsor { pos, .. } => axis * bool_to_sign(pos),
+            AutomatonDecision::TowardAttractor { pos, .. } => axis * bool_to_sign(pos),
             AutomatonDecision::None => Delta::ZERO,
         }
     }
@@ -507,23 +527,48 @@ impl Eq for AutomatonDecision {}
 
 impl Ord for AutomatonDecision {
     fn cmp(&self, other: &AutomatonDecision) -> Ordering {
-        self.priority().cmp(&other.priority())
+        self.priority()
+            .cmp(&other.priority())
             .then_with(|| match self {
-                AutomatonDecision::UnbalancedPair { att_dist, rep_dist, .. } => {
-                    if let AutomatonDecision::UnbalancedPair { att_dist: o_att_dist, rep_dist: o_rep_dist, .. } = other {
-                        att_dist.cmp(o_att_dist).reverse().then(rep_dist.cmp(o_rep_dist).reverse())
-                    } else { unreachable!() }
-                },
+                AutomatonDecision::UnbalancedPair {
+                    att_dist, rep_dist, ..
+                } => {
+                    if let AutomatonDecision::UnbalancedPair {
+                        att_dist: o_att_dist,
+                        rep_dist: o_rep_dist,
+                        ..
+                    } = other
+                    {
+                        att_dist
+                            .cmp(o_att_dist)
+                            .reverse()
+                            .then(rep_dist.cmp(o_rep_dist).reverse())
+                    } else {
+                        unreachable!()
+                    }
+                }
                 AutomatonDecision::FromRepulsor { rep_dist, .. } => {
-                    if let AutomatonDecision::FromRepulsor { rep_dist: o_rep_dist, .. } = other {
+                    if let AutomatonDecision::FromRepulsor {
+                        rep_dist: o_rep_dist,
+                        ..
+                    } = other
+                    {
                         rep_dist.cmp(o_rep_dist).reverse()
-                    } else { unreachable!() }
-                },
+                    } else {
+                        unreachable!()
+                    }
+                }
                 AutomatonDecision::TowardAttractor { att_dist, .. } => {
-                    if let AutomatonDecision::TowardAttractor { att_dist: o_att_dist, .. } = other {
+                    if let AutomatonDecision::TowardAttractor {
+                        att_dist: o_att_dist,
+                        ..
+                    } = other
+                    {
                         att_dist.cmp(o_att_dist).reverse()
-                    } else { unreachable!() }
-                },
+                    } else {
+                        unreachable!()
+                    }
+                }
                 _ => Ordering::Equal,
             })
     }
@@ -569,7 +614,8 @@ impl Game {
             return GameOver;
         } else if self.locked_players.contains(&m.who) {
             return WaitYourTurn; //   XXX XXX XXX  ~~(v)~~ XXX XXX XXX
-        } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to) {
+        } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to)
+        {
             // load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
             return SeeCoords(cfs);
         } else if m.from == m.to {
@@ -673,7 +719,13 @@ impl Game {
 
                 self.update_automaton();
 
-                let &mut Game { ref mut goals, ref mut board, ref mut round, ref mut winner, .. } = self;
+                let &mut Game {
+                    ref mut goals,
+                    ref mut board,
+                    ref mut round,
+                    ref mut winner,
+                    ..
+                } = self;
 
                 if !goals.iter().any(|&(c, who)| {
                     if c == board.automaton_location {
@@ -690,7 +742,8 @@ impl Game {
             }
             Err(moves_conflicted) => {
                 self.round = RoundState::ResolvingConflict;
-                self.pending_moves.retain(|e| !moves_conflicted.contains(&e));
+                self.pending_moves
+                    .retain(|e| !moves_conflicted.contains(&e));
                 for m in &moves_conflicted {
                     if !self.locked_players.contains(&m.who) {
                         self.locked_players.push(m.who);
@@ -706,48 +759,42 @@ impl Game {
             use Particle::*;
 
             match (pos.what, neg.what) {
-                (Attractor, Repulsor) if pos.dist > 1 =>
-                    AutomatonDecision::UnbalancedPair {
-                        pos: true,
-                        att_dist: pos.dist,
-                        rep_dist: neg.dist,
-                    },
-                (Repulsor, Attractor) if neg.dist > 1 =>
-                    AutomatonDecision::UnbalancedPair {
-                        pos: false,
-                        att_dist: neg.dist,
-                        rep_dist: pos.dist,
-                    },
-                (Repulsor, Repulsor) if pos.dist != neg.dist =>
-                    AutomatonDecision::FromRepulsor {
-                        pos: pos.dist > neg.dist,
-                        rep_dist: std::cmp::min(pos.dist, neg.dist),
-                    },
-                (Repulsor, Vacuum) if neg.dist > 1 => 
-                    AutomatonDecision::FromRepulsor {
-                        pos: false,
-                        rep_dist: pos.dist,
-                    },
-                (Vacuum, Repulsor) if pos.dist > 1 =>
-                    AutomatonDecision::FromRepulsor {
-                        pos: true,
-                        rep_dist: neg.dist,
-                    },
-                (Attractor, Attractor) if pos.dist != neg.dist =>
+                (Attractor, Repulsor) if pos.dist > 1 => AutomatonDecision::UnbalancedPair {
+                    pos: true,
+                    att_dist: pos.dist,
+                    rep_dist: neg.dist,
+                },
+                (Repulsor, Attractor) if neg.dist > 1 => AutomatonDecision::UnbalancedPair {
+                    pos: false,
+                    att_dist: neg.dist,
+                    rep_dist: pos.dist,
+                },
+                (Repulsor, Repulsor) if pos.dist != neg.dist => AutomatonDecision::FromRepulsor {
+                    pos: pos.dist > neg.dist,
+                    rep_dist: std::cmp::min(pos.dist, neg.dist),
+                },
+                (Repulsor, Vacuum) if neg.dist > 1 => AutomatonDecision::FromRepulsor {
+                    pos: false,
+                    rep_dist: pos.dist,
+                },
+                (Vacuum, Repulsor) if pos.dist > 1 => AutomatonDecision::FromRepulsor {
+                    pos: true,
+                    rep_dist: neg.dist,
+                },
+                (Attractor, Attractor) if pos.dist != neg.dist => {
                     AutomatonDecision::TowardAttractor {
                         pos: pos.dist < neg.dist,
                         att_dist: std::cmp::min(pos.dist, neg.dist),
-                    },
-                (Attractor, Vacuum) if pos.dist > 1 =>
-                    AutomatonDecision::TowardAttractor {
-                        pos: true,
-                        att_dist: pos.dist,
-                    },
-                (Vacuum, Attractor) if neg.dist > 1 =>
-                    AutomatonDecision::TowardAttractor {
-                        pos: false,
-                        att_dist: neg.dist,
-                    },
+                    }
+                }
+                (Attractor, Vacuum) if pos.dist > 1 => AutomatonDecision::TowardAttractor {
+                    pos: true,
+                    att_dist: pos.dist,
+                },
+                (Vacuum, Attractor) if neg.dist > 1 => AutomatonDecision::TowardAttractor {
+                    pos: false,
+                    att_dist: neg.dist,
+                },
                 _ => AutomatonDecision::None,
             }
         }
@@ -760,22 +807,26 @@ impl Game {
         let x_decision = evaluate_axis(&xp, &xn);
         let y_decision = evaluate_axis(&yp, &yn);
 
-        self.board.automaton_location + if x_decision > y_decision {
-            x_decision.delta(Delta::XP)
-        } else {
-            if !self.use_column_rule && x_decision == y_decision {
-                Delta::ZERO
+        self.board.automaton_location
+            + if x_decision > y_decision {
+                x_decision.delta(Delta::XP)
             } else {
-                y_decision.delta(Delta::YP)
+                if !self.use_column_rule && x_decision == y_decision {
+                    Delta::ZERO
+                } else {
+                    y_decision.delta(Delta::YP)
+                }
             }
-        }
     }
 
     /// Cause the automaton to move.
     fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
-            debug_assert!(self.board.do_move(self.board.automaton_location, new_location).is_ok());
+            debug_assert!(self
+                .board
+                .do_move(self.board.automaton_location, new_location)
+                .is_ok());
         }
     }
 }
