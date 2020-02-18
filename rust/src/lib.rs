@@ -485,17 +485,19 @@ enum AutomatonDecision {
 
 impl AutomatonDecision {
     fn priority(&self) -> usize {
+        use AutomatonDecision::*;
         match self {
-            AutomatonDecision::None => 0,
-            AutomatonDecision::TowardAttractor { .. } => 10,
-            AutomatonDecision::FromRepulsor { .. } => 20,
-            AutomatonDecision::UnbalancedPair { .. } => 30,
+            None => 0,
+            TowardAttractor { .. } => 10,
+            FromRepulsor { .. } => 20,
+            UnbalancedPair { .. } => 30,
         }
     }
 
     fn delta(&self, axis: Delta) -> Delta {
-        fn bool_to_sign(b: &bool) -> isize {
-            if *b {
+        use AutomatonDecision::*;
+        fn sgn(&b: &bool) -> isize {
+            if b {
                 1isize
             } else {
                 -1isize
@@ -503,10 +505,10 @@ impl AutomatonDecision {
         }
 
         match self {
-            AutomatonDecision::UnbalancedPair { pos, .. } => axis * bool_to_sign(pos),
-            AutomatonDecision::FromRepulsor { pos, .. } => axis * bool_to_sign(pos),
-            AutomatonDecision::TowardAttractor { pos, .. } => axis * bool_to_sign(pos),
-            AutomatonDecision::None => Delta::ZERO,
+            UnbalancedPair { pos, .. } | FromRepulsor { pos, .. } | TowardAttractor { pos, .. } => {
+                axis * sgn(pos)
+            }
+            None => Delta::ZERO,
         }
     }
 }
@@ -527,49 +529,39 @@ impl Eq for AutomatonDecision {}
 
 impl Ord for AutomatonDecision {
     fn cmp(&self, other: &AutomatonDecision) -> Ordering {
+        use AutomatonDecision::*;
         self.priority()
             .cmp(&other.priority())
-            .then_with(|| match self {
-                AutomatonDecision::UnbalancedPair {
-                    att_dist, rep_dist, ..
-                } => {
-                    if let AutomatonDecision::UnbalancedPair {
+            .then_with(|| match (self, other) {
+                (
+                    UnbalancedPair {
+                        att_dist, rep_dist, ..
+                    },
+                    UnbalancedPair {
                         att_dist: o_att_dist,
                         rep_dist: o_rep_dist,
                         ..
-                    } = other
-                    {
-                        att_dist
-                            .cmp(o_att_dist)
-                            .reverse()
-                            .then(rep_dist.cmp(o_rep_dist).reverse())
-                    } else {
-                        unreachable!()
-                    }
-                }
-                AutomatonDecision::FromRepulsor { rep_dist, .. } => {
-                    if let AutomatonDecision::FromRepulsor {
+                    },
+                ) => att_dist
+                    .cmp(o_att_dist)
+                    .reverse()
+                    .then(rep_dist.cmp(o_rep_dist).reverse()),
+                (
+                    FromRepulsor { rep_dist, .. },
+                    FromRepulsor {
                         rep_dist: o_rep_dist,
                         ..
-                    } = other
-                    {
-                        rep_dist.cmp(o_rep_dist).reverse()
-                    } else {
-                        unreachable!()
-                    }
-                }
-                AutomatonDecision::TowardAttractor { att_dist, .. } => {
-                    if let AutomatonDecision::TowardAttractor {
+                    },
+                ) => rep_dist.cmp(o_rep_dist).reverse(),
+                (
+                    TowardAttractor { att_dist, .. },
+                    TowardAttractor {
                         att_dist: o_att_dist,
                         ..
-                    } = other
-                    {
-                        att_dist.cmp(o_att_dist).reverse()
-                    } else {
-                        unreachable!()
-                    }
-                }
-                _ => Ordering::Equal,
+                    },
+                ) => att_dist.cmp(o_att_dist).reverse(),
+                (None, _) => Ordering::Equal,
+                _ => unreachable!()
             })
     }
 }
@@ -613,10 +605,10 @@ impl Game {
         if self.round == RoundState::GameOver {
             return GameOver;
         } else if self.locked_players.contains(&m.who) {
-            return WaitYourTurn; //   XXX XXX XXX  ~~(v)~~ XXX XXX XXX
+            return WaitYourTurn; //        XXX XXX XXX  ~~(v)~~ XXX XXX XXX
         } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to)
         {
-            // load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
+            //      load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
             return SeeCoords(cfs);
         } else if m.from == m.to {
             return MustMove;
@@ -756,46 +748,45 @@ impl Game {
     /// Calculate the coordinate to which the automaton would move right now.
     fn automaton_move(&self) -> Coord {
         fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
+            use AutomatonDecision::*;
             use Particle::*;
 
             match (pos.what, neg.what) {
-                (Attractor, Repulsor) if pos.dist > 1 => AutomatonDecision::UnbalancedPair {
+                (Attractor, Repulsor) if pos.dist > 1 => UnbalancedPair {
                     pos: true,
                     att_dist: pos.dist,
                     rep_dist: neg.dist,
                 },
-                (Repulsor, Attractor) if neg.dist > 1 => AutomatonDecision::UnbalancedPair {
+                (Repulsor, Attractor) if neg.dist > 1 => UnbalancedPair {
                     pos: false,
                     att_dist: neg.dist,
                     rep_dist: pos.dist,
                 },
-                (Repulsor, Repulsor) if pos.dist != neg.dist => AutomatonDecision::FromRepulsor {
+                (Repulsor, Repulsor) if pos.dist != neg.dist => FromRepulsor {
                     pos: pos.dist > neg.dist,
                     rep_dist: std::cmp::min(pos.dist, neg.dist),
                 },
-                (Repulsor, Vacuum) if neg.dist > 1 => AutomatonDecision::FromRepulsor {
+                (Repulsor, Vacuum) if neg.dist > 1 => FromRepulsor {
                     pos: false,
                     rep_dist: pos.dist,
                 },
-                (Vacuum, Repulsor) if pos.dist > 1 => AutomatonDecision::FromRepulsor {
+                (Vacuum, Repulsor) if pos.dist > 1 => FromRepulsor {
                     pos: true,
                     rep_dist: neg.dist,
                 },
-                (Attractor, Attractor) if pos.dist != neg.dist => {
-                    AutomatonDecision::TowardAttractor {
-                        pos: pos.dist < neg.dist,
-                        att_dist: std::cmp::min(pos.dist, neg.dist),
-                    }
-                }
-                (Attractor, Vacuum) if pos.dist > 1 => AutomatonDecision::TowardAttractor {
+                (Attractor, Attractor) if pos.dist != neg.dist => TowardAttractor {
+                    pos: pos.dist < neg.dist,
+                    att_dist: std::cmp::min(pos.dist, neg.dist),
+                },
+                (Attractor, Vacuum) if pos.dist > 1 => TowardAttractor {
                     pos: true,
                     att_dist: pos.dist,
                 },
-                (Vacuum, Attractor) if neg.dist > 1 => AutomatonDecision::TowardAttractor {
+                (Vacuum, Attractor) if neg.dist > 1 => TowardAttractor {
                     pos: false,
                     att_dist: neg.dist,
                 },
-                _ => AutomatonDecision::None,
+                _ => None,
             }
         }
 
