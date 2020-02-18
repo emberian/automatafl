@@ -1,4 +1,5 @@
 //! Reference implementation of the automatafl board game.
+
 //!
 //! General crate design notes:
 //!
@@ -290,11 +291,11 @@ impl Board {
         self.passable_list.push(c);
     }
 
-    /// Attempt to move a piece. This can fail for a number of reasons, many of them indicative of
-    /// erroneous input. If it fails, no move is attempted.
+    /// Attempt to move a piece. This can fail, and no move is attempted in that
+    /// case.
     ///
-    /// This function considers it allowable to move the automaton, and is part of the call graph
-    /// of Game::update_automaton.
+    /// This function considers it allowable to move the automaton, and is part
+    /// of the call graph of Game::update_automaton.
     fn do_move(&mut self, from: Coord, to: Coord) -> Result<(), MoveError> {
         use MoveError::*;
 
@@ -507,6 +508,7 @@ impl Ord for AutomatonDecision {
         self.priority()
             .cmp(&other.priority())
             .then_with(|| match (self, other) {
+                // same priority means same enum variant!
                 (
                     UnbalancedPair {
                         att_dist, rep_dist, ..
@@ -552,7 +554,24 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn propose_move(&mut self, m: Move) -> MoveFeedback {
+    pub fn new(board: Board, player_count: u8, use_column_rule: bool) -> Game {
+        Game {
+            winner: None,
+            locked_players: SmallVec::new(),
+            board,
+            round: RoundState::Fresh,
+            pending_moves: SmallVec::new(),
+            goals: SmallVec::new(),
+            player_count,
+            use_column_rule
+        }
+    }
+
+    /// Propose a move, returning some feedback about it, and true if the state
+    /// machine is ready to advance (try_complete_round preconditions are met).
+    ///
+    /// Returns false if try_complete_round would panic.
+    pub fn propose_move(&mut self, m: Move) -> (MoveFeedback, bool) {
         use MoveFeedback::*;
 
         let mut cfs = CoordsFeedback {
@@ -576,23 +595,27 @@ impl Game {
             res
         }
 
-        if self.round == RoundState::GameOver {
-            return GameOver;
+        let res = if self.round == RoundState::GameOver {
+            GameOver
         } else if self.locked_players.contains(&m.who) {
-            return WaitYourTurn; //        XXX XXX XXX  ~~(v)~~ XXX XXX XXX
+            WaitYourTurn //                XXX XXX XXX  ~~(v)~~ XXX XXX XXX
         } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to)
         {
             //      load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
-            return SeeCoords(cfs);
+            SeeCoords(cfs)
         } else if m.from == m.to {
-            return MustMove;
+            MustMove
         } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
-            return AxisAlignedOnly;
+            AxisAlignedOnly
         } else {
-            self.pending_moves.push(m);
-
             Committed
+        };
+
+        if res == Committed {
+            self.pending_moves.push(m);
         }
+
+        (res, self.pending_moves.len() == self.player_count as usize)
     }
 
     /// Returns Ok with the list of applied move to apply, or else the list of
@@ -813,8 +836,14 @@ impl Game {
 
 #[cfg(test)]
 mod tests {
+    use crate::*;
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn automaton_stays_put() {
+        let board = Board::stock_two_player();
+        let mut game = Game::new(board, 2, true);
+        let before_move = game.board.automaton_location;
+        game.update_automaton();
+        let after_move = game.board.automaton_location;
+        assert_eq!(before_move, after_move)
     }
 }
