@@ -20,7 +20,11 @@ fn main() {
         let dstx = spl.next().expect("need dstx").parse::<u8>().unwrap();
         let dsty = spl.next().expect("need dsty").parse::<u8>().unwrap();
 
-        let (fdb, go) = game.propose_move(Move { who: Pid(pid), from: Coord {x: srcx, y: srcy }, to: Coord {x: dstx, y: dsty }});
+        let (fdb, go) = game.propose_move(Move {
+            who: Pid(pid),
+            from: Coord { x: srcx, y: srcy },
+            to: Coord { x: dstx, y: dsty },
+        });
         println!("Move feedback: {}", fdb);
         if go {
             match game.try_complete_round() {
@@ -28,9 +32,16 @@ fn main() {
                     for (m, res) in completed_moves {
                         println!("Player {}: {}", m.who.0, res)
                     }
-                },
+                }
                 Err(()) => {
-                    print!("Players locked: {}", game.locked_players.iter().map(|p| p.0.to_string()).collect::<Vec<String>>().join(", "));
+                    print!(
+                        "Players locked: {}",
+                        game.locked_players
+                            .iter()
+                            .map(|p| p.0.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    );
                 }
             }
         }

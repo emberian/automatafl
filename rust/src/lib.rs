@@ -688,9 +688,7 @@ impl Game {
     }
 
     /// Return the list of move results if everything was gucci, else enter conflict resolution.
-    pub fn try_complete_round(
-        &mut self,
-    ) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
+    pub fn try_complete_round(&mut self) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
                 // Lift the moved pieces off the board
@@ -830,10 +828,11 @@ impl Game {
     fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
-            debug_assert!(self
-                .board
-                .do_move(self.board.automaton_location, new_location)
-                == MoveResult::Applied);
+            debug_assert!(
+                self.board
+                    .do_move(self.board.automaton_location, new_location)
+                    == MoveResult::Applied
+            );
         }
     }
 }
