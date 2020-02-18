@@ -1,5 +1,4 @@
 //! Reference implementation of the automatafl board game.
-
 //!
 //! General crate design notes:
 //!
@@ -9,7 +8,9 @@
 //!   during a standard four-goal, two-player game.
 //! - Every error condition is uniquely identified and with
 //!   nice Display implementations.
-//!
+//! - Lots of state is public. If you EVER MUTATE ANYTHING, the game rules
+//!   might break or the code might panic! Only calling methods will avoid this.
+//!   Inspect state away :)
 
 extern crate displaydoc;
 extern crate ndarray;
@@ -23,13 +24,13 @@ use std::iter::FromIterator;
 
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Pid(u8);
+pub struct Pid(pub u8);
 
 /// Coordinate on the board. TODO: microbenchmark different coord sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Coord {
-    x: u8,
-    y: u8,
+    pub x: u8,
+    pub y: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -183,13 +184,13 @@ pub enum RoundState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Move {
-    who: Pid,
-    from: Coord,
-    to: Coord,
+    pub who: Pid,
+    pub from: Coord,
+    pub to: Coord,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Particle {
+pub enum Particle {
     Repulsor,
     Attractor,
     Automaton,
@@ -203,11 +204,11 @@ impl Particle {
 }
 
 // TODO: this is 3 bytes when it could be 1 :/
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Cell {
-    what: Particle,
-    conflict: bool,
-    passable: bool,
+    pub what: Particle,
+    pub conflict: bool,
+    pub passable: bool,
 }
 
 impl Cell {
@@ -216,12 +217,15 @@ impl Cell {
     }
 }
 
-/// Your move couldn't be completed because:
-pub enum MoveError {
-    /// There is no piece to move at the source.
+/// Player 0 move: {}
+#[derive(Display, PartialEq, Eq)]
+pub enum MoveResult {
+    /// failed because there was never a piece to move at the source.
     NoSource,
-    /// The move is occluded between source and destination by a piece at {0}.
+    /// failed the move is occluded between source and destination by a piece at {0}.
     OccupiedAt(Coord),
+    /// applied!
+    Applied,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +235,7 @@ struct Raycast {
     dist: usize,
 }
 
+#[derive(Debug)]
 pub struct Board {
     particles: Grid<Cell>,
     size: Coord,
@@ -296,8 +301,8 @@ impl Board {
     ///
     /// This function considers it allowable to move the automaton, and is part
     /// of the call graph of Game::update_automaton.
-    fn do_move(&mut self, from: Coord, to: Coord) -> Result<(), MoveError> {
-        use MoveError::*;
+    fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
+        use MoveResult::*;
 
         debug_assert!(self.inbounds(from) && self.inbounds(to));
 
@@ -308,9 +313,7 @@ impl Board {
         let src = self.particles[from.ix()];
         let dst = self.particles[to.ix()];
 
-        if src.is_vacuum() {
-            return Err(NoSource);
-        }
+        debug_assert!(!src.is_vacuum());
 
         debug_assert!(!src.conflict && !dst.conflict);
 
@@ -318,13 +321,13 @@ impl Board {
         for offset in 1..=delta.displacement() {
             let c = from + axis * offset as isize;
             if !self.particles[c.ix()].is_vacuum() {
-                return Err(OccupiedAt(c));
+                return OccupiedAt(c);
             }
         }
 
         self.force_move(from, to);
 
-        Ok(())
+        Applied
     }
 
     /// Forcibly swap two positions on the board (assuring the number of particles is constant).
@@ -542,6 +545,7 @@ impl Ord for AutomatonDecision {
     }
 }
 
+#[derive(Debug)]
 pub struct Game {
     pub winner: Option<Pid>,
     pub locked_players: SmallVec<[Pid; 2]>,
@@ -563,7 +567,7 @@ impl Game {
             pending_moves: SmallVec::new(),
             goals: SmallVec::new(),
             player_count,
-            use_column_rule
+            use_column_rule,
         }
     }
 
@@ -686,7 +690,7 @@ impl Game {
     /// Return the list of move results if everything was gucci, else enter conflict resolution.
     pub fn try_complete_round(
         &mut self,
-    ) -> Result<SmallVec<[(Move, Result<(), MoveError>); 2]>, ()> {
+    ) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
                 // Lift the moved pieces off the board
@@ -713,7 +717,7 @@ impl Game {
 
                     if !made_progress {
                         for m in moves_to_apply.drain(..) {
-                            results.push((m, Err(MoveError::NoSource)))
+                            results.push((m, MoveResult::NoSource))
                         }
                     }
                 }
@@ -829,7 +833,7 @@ impl Game {
             debug_assert!(self
                 .board
                 .do_move(self.board.automaton_location, new_location)
-                .is_ok());
+                == MoveResult::Applied);
         }
     }
 }

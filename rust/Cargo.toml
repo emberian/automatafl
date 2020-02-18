@@ -1,5 +1,5 @@
 [package]
-name = "rust"
+name = "automatafl"
 version = "0.1.0"
 authors = ["Ember Arlynx <ember@lunar.town>"]
 edition = "2018"
