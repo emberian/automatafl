@@ -217,6 +217,16 @@ impl Cell {
     }
 }
 
+impl Default for Cell {
+    fn default() -> Cell {
+        Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        }
+    }
+}
+
 /// Player 0 move: {}
 #[derive(Display, PartialEq, Eq)]
 pub enum MoveResult {
@@ -251,23 +261,19 @@ impl Board {
     pub fn stock_two_player() -> Board {
         let r = Cell {
             what: Particle::Repulsor,
-            conflict: false,
-            passable: false,
+            ..Default::default()
         };
         let a = Cell {
             what: Particle::Attractor,
-            conflict: false,
-            passable: false,
+            ..Default::default()
         };
         let o = Cell {
             what: Particle::Vacuum,
-            conflict: false,
-            passable: false,
+            ..Default::default()
         };
         let d = Cell {
             what: Particle::Automaton,
-            conflict: false,
-            passable: false,
+            ..Default::default()
         };
         Board {
             particles: arr2(&[
