@@ -294,18 +294,18 @@ impl Board {
         self.passable_list.push(c);
     }
 
-    /// Attempt to move a piece. This can fail, and no move is attempted in that
-    /// case.
+    /// Attempt to move a non-vacuum piece. This can fail, and no move is attempted in that case.
     ///
-    /// This function considers it allowable to move the automaton, and is part
-    /// of the call graph of Game::update_automaton.
+    /// This method considers it allowable to move the automaton, and is part of the call graph
+    /// of Game::update_automaton.
     fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
         use MoveResult::*;
 
+        // debug_assert checks invariants that should be established by propose_move
         debug_assert!(self.inbounds(from) && self.inbounds(to));
 
         let delta = to - from;
-        debug_assert!(!delta.is_zero()); // established by propose_move
+        debug_assert!(!delta.is_zero());
         debug_assert!(delta.is_axial());
 
         let src = self.particles[from.ix()];
@@ -330,7 +330,7 @@ impl Board {
 
     /// Forcibly swap two positions on the board (assuring the number of particles is constant).
     /// This can also do weird, probably illogical things, like swapping conflict flags. This
-    /// function also does absolutely no bounds checking, and thus can panic if the coordinate is
+    /// method also does absolutely no bounds checking, and thus can panic if the coordinate is
     /// out of bounds. Only use this if you know what you're doing.
     fn force_move(&mut self, from: Coord, to: Coord) {
         self.particles.swap(from.ix(), to.ix());
@@ -344,7 +344,7 @@ impl Board {
     ///
     /// The ray starts from, but does not include, the "from" coordinate.
     ///
-    /// The axis SHOULD be a unit vector, but any nonzero Delta is acceptable. This function only
+    /// The axis SHOULD be a unit vector, but any nonzero Delta is acceptable. This method only
     /// tests the integer multiples of that offset, and relies on the ray eventually containing
     /// out-of-bounds points to terminate.
     ///
@@ -403,7 +403,7 @@ impl Board {
         }
     }
 
-    /// Test if there is a conflict in the given cell.
+    /// Test if there is a conflict in the addressed cell.
     ///
     /// If this is true, the cell may not be specified as a source or destination of any move
     /// (MoveError::Conflicted).
@@ -411,15 +411,12 @@ impl Board {
         self.particles[c.ix()].conflict
     }
 
-    /// Test whether the cell is empty.
-    ///
-    /// A source cell must be nonempty (MoveError::NoSource), and all other cells included on the
-    /// movement to the destination cell must be empty or passable (MoveError::OccupiedAt).
+    /// Test whether the addressed cell is vacuum.
     fn is_vacuum(&self, c: Coord) -> bool {
         self.particles[c.ix()].what.is_vacuum()
     }
 
-    /// Test whether the cell contains the automaton.
+    /// Test whether the address cell is the automaton.
     fn is_automaton(&self, c: Coord) -> bool {
         self.automaton_location == c
     }
@@ -537,7 +534,7 @@ impl Ord for AutomatonDecision {
                         ..
                     },
                 ) => att_dist.cmp(o_att_dist).reverse(),
-                (None, _) => Ordering::Equal,
+                (None, None) => Ordering::Equal,
                 _ => unreachable!(),
             })
     }
