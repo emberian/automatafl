@@ -212,8 +212,9 @@ pub struct Cell {
 }
 
 impl Cell {
-    fn is_vacuum(&self) -> bool {
-        self.what.is_vacuum()
+    fn occludes(&self) -> bool {
+        // Vacuum can always be passed through, non-vacuum if passable is set.
+        !self.what.is_vacuum() && !self.passable
     }
 }
 
@@ -310,14 +311,14 @@ impl Board {
         let src = self.particles[from.ix()];
         let dst = self.particles[to.ix()];
 
-        debug_assert!(!src.is_vacuum());
+        debug_assert!(!src.what.is_vacuum());
 
         debug_assert!(!src.conflict && !dst.conflict);
 
         let axis = delta.axial_unit();
         for offset in 1..=delta.displacement() {
             let c = from + axis * offset as isize;
-            if !self.particles[c.ix()].is_vacuum() {
+            if !self.particles[c.ix()].occludes() {
                 return OccupiedAt(c);
             }
         }
@@ -365,7 +366,7 @@ impl Board {
                 };
             }
             let c = self.particles[co.ix()];
-            if !c.is_vacuum() {
+            if !c.occludes() {
                 return Raycast {
                     what: c.what,
                     hit: Some(co),
@@ -415,7 +416,7 @@ impl Board {
     /// A source cell must be nonempty (MoveError::NoSource), and all other cells included on the
     /// movement to the destination cell must be empty or passable (MoveError::OccupiedAt).
     fn is_vacuum(&self, c: Coord) -> bool {
-        self.particles[c.ix()].is_vacuum()
+        self.particles[c.ix()].what.is_vacuum()
     }
 
     /// Test whether the cell contains the automaton.
