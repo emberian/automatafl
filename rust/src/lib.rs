@@ -217,16 +217,6 @@ impl Cell {
     }
 }
 
-impl Default for Cell {
-    fn default() -> Cell {
-        Cell {
-            what: Particle::Vacuum,
-            conflict: false,
-            passable: false,
-        }
-    }
-}
-
 /// Player 0 move: {}
 #[derive(Display, PartialEq, Eq)]
 pub enum MoveResult {
@@ -259,21 +249,22 @@ pub struct Board {
 impl Board {
     /// Prepare a standard board layout for a two player game.
     pub fn stock_two_player() -> Board {
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        };
         let r = Cell {
             what: Particle::Repulsor,
-            ..Default::default()
+            ..o
         };
         let a = Cell {
             what: Particle::Attractor,
-            ..Default::default()
-        };
-        let o = Cell {
-            what: Particle::Vacuum,
-            ..Default::default()
+            ..o
         };
         let d = Cell {
             what: Particle::Automaton,
-            ..Default::default()
+            ..o
         };
         Board {
             particles: arr2(&[
