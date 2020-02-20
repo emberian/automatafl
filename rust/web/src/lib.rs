@@ -1,9 +1,12 @@
 #![feature(track_caller)]
-#![recursion_limit="1024"]
+#![recursion_limit = "1024"]
 
 use automatafl::*;
 
-use moxie_dom::{elements::{div,img, button}, prelude::*};
+use moxie_dom::{
+    elements::{button, div, img},
+    prelude::*,
+};
 use wasm_bindgen::prelude::*;
 
 #[topo::nested]
@@ -25,8 +28,8 @@ fn cell(c: Coord) {
         let mut g = Game::clone(&*game); // holy shit
         g.board.particles[c.ix()].what = next_particle(cell.what);
         game.set(g); // how can we avoid this
-        };
-    mox!{<div on={on_click } 
+    };
+    mox! {<div on={on_click }
     class={format!("cell passable-{} conflict-{}", cell.passable, cell.conflict)}><div style="display:inline-block"><img src={format!("img/{:?}.png", cell.what)}/></div></div>}
 }
 
@@ -34,16 +37,16 @@ fn cell(c: Coord) {
 #[illicit::from_env(game: &Key<Game>)]
 fn game_board() {
     let button_game = game.clone();
-    
+
     mox! {
-        <div class="board"> 
-        
+        <div class="board">
+
         <button on={move |_: event::Click| {
             let mut g = Game::clone(&button_game);
             g.update_automaton();
             button_game.set(g);
         }}>"button time!"</button>
-        
+
         {
             let Coord {x, y} = game.board.size;
             for rx in 0..x {
