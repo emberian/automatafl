@@ -1,0 +1,8 @@
+.board { display: table; height: 800px; }
+
+.row { display: table-row; }
+
+.cell { display: table-cell; height: inherit; }
+
+.passable-false { border-top: 5px bold green; };
+.conflict-true { border-bottom: 5px bold red;}

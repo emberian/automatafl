@@ -74,7 +74,7 @@ impl std::ops::Mul<isize> for Delta {
 }
 
 impl Coord {
-    fn ix(self) -> (usize, usize) {
+    pub fn ix(self) -> (usize, usize) {
         (self.x as usize, self.y as usize)
     }
 }
@@ -204,7 +204,7 @@ impl Particle {
 }
 
 // TODO: this is 3 bytes when it could be 1 :/
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Cell {
     pub what: Particle,
     pub conflict: bool,
@@ -236,13 +236,13 @@ struct Raycast {
     dist: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Board {
-    particles: Grid<Cell>,
-    size: Coord,
-    automaton_location: Coord,
-    conflict_list: SmallVec<[Coord; 16]>, // TODO: compare performance scanning this list to scanning the whole grid
-    passable_list: SmallVec<[Coord; 16]>,
+    pub particles: Grid<Cell>,
+    pub size: Coord,
+    pub automaton_location: Coord,
+    pub conflict_list: SmallVec<[Coord; 16]>, // TODO: compare performance scanning this list to scanning the whole grid
+    pub passable_list: SmallVec<[Coord; 16]>,
 }
 
 // By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
@@ -540,7 +540,7 @@ impl Ord for AutomatonDecision {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Game {
     pub winner: Option<Pid>,
     pub locked_players: SmallVec<[Pid; 2]>,
@@ -820,7 +820,7 @@ impl Game {
     }
 
     /// Cause the automaton to move.
-    fn update_automaton(&mut self) {
+    pub fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
             debug_assert!(

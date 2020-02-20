@@ -2,6 +2,14 @@
 
 This is a not-yet-production-quality implementation of automatafl.
 
+## Running Web
+
+1. `wasm-pack build --target web web`
+
+2. `python3 -m http.server --directory web`
+
+3. Navigate to `localhost:8000`
+
 ## Game Rules
 
 This section is the canonical, Creator-Approved ruleset because said Creator lost their creds that got them into the hidden wiki that contains the No-Longer-Canonical ruleset. 
