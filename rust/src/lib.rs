@@ -85,6 +85,7 @@ impl Delta {
     const XN: Delta = Delta { dx: -1, dy: 0 };
     const YP: Delta = Delta { dx: 0, dy: 1 };
     const YN: Delta = Delta { dx: 0, dy: -1 };
+    #[cfg(test)]
     const AXIAL_UNITS: [Delta; 4] = [
         Delta::XP,
         Delta::XN,
@@ -124,6 +125,7 @@ impl Delta {
         self.dx.abs() as usize + self.dy.abs() as usize
     }
 
+    #[cfg(test)]
     fn perpendicular(self) -> Delta {
         Delta { dx: -self.dy, dy: self.dx }
     }
@@ -1000,7 +1002,7 @@ mod tests {
             game.board.place(loc + d * 2, Particle::Attractor);
             game.board.place(loc + d * (-1), Particle::Repulsor);
             println!("* still moves when UnP repulsor is adjacent, delta {:?}", d);
-            expect_automaton_move(&mut game, d);
+            expect_automaton_move(&mut game, d)?;
         }
         Ok(())
     }
