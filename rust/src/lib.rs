@@ -85,6 +85,12 @@ impl Delta {
     const XN: Delta = Delta { dx: -1, dy: 0 };
     const YP: Delta = Delta { dx: 0, dy: 1 };
     const YN: Delta = Delta { dx: 0, dy: -1 };
+    const AXIAL_UNITS: [Delta; 4] = [
+        Delta::XP,
+        Delta::XN,
+        Delta::YP,
+        Delta::YN
+    ];
 
     fn is_zero(self) -> bool {
         self.dx == 0 && self.dy == 0
@@ -116,6 +122,10 @@ impl Delta {
 
     fn displacement(self) -> usize {
         self.dx.abs() as usize + self.dy.abs() as usize
+    }
+
+    fn perpendicular(self) -> Delta {
+        Delta { dx: -self.dy, dy: self.dx }
     }
 }
 
@@ -214,12 +224,12 @@ pub struct Cell {
 impl Cell {
     fn occludes(&self) -> bool {
         // Vacuum can always be passed through, non-vacuum if passable is set.
-        !self.what.is_vacuum() && !self.passable
+        !(self.what.is_vacuum() || self.passable)
     }
 }
 
 /// Player 0 move: {}
-#[derive(Display, PartialEq, Eq)]
+#[derive(Debug, Display, PartialEq, Eq)]
 pub enum MoveResult {
     /// failed because there was never a piece to move at the source.
     NoSource,
@@ -288,6 +298,66 @@ impl Board {
         }
     }
 
+    pub fn stock_testing() -> Board {
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        };
+        let r = Cell { what: Particle::Repulsor, ..o };
+        let a = Cell { what: Particle::Attractor, ..o };
+        let d = Cell { what: Particle::Automaton, ..o };
+        Board {
+            particles: arr2(&[
+                [r, o, a, o, r],
+                [o, o, o, o, o],
+                [r, o, d, o, r],
+                [o, o, o, o, o],
+                [r, o, a, o, r],
+            ]),
+            size: Coord { x: 5, y: 5},
+            automaton_location: Coord { x: 2, y: 2 },
+            conflict_list: SmallVec::new(),
+            passable_list: SmallVec::new(),
+        }
+    }
+
+    pub fn stock_testing_empty() -> Board {
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        };
+        let d = Cell { what: Particle::Automaton, ..o };
+        Board {
+            particles: arr2(&[
+                [o, o, o, o, o],
+                [o, o, o, o, o],
+                [o, o, d, o, o],
+                [o, o, o, o, o],
+                [o, o, o, o, o],
+            ]),
+            size: Coord { x: 5, y: 5},
+            automaton_location: Coord { x: 2, y: 2 },
+            conflict_list: SmallVec::new(),
+            passable_list: SmallVec::new(),
+        }
+    }
+
+    /// Place a particle on the board.
+    ///
+    /// If the particle isn't the automaton, this increases the matter on the board. If it is the
+    /// automaton, it is forcibly moved from wherever else it is on the board, leaving a vacuum in
+    /// its place. (This restriction might later be lifted to allow more than one automaton on the
+    /// board, but this method is unlikely to abide such a change.)
+    pub fn place(&mut self, c: Coord, w: Particle) {
+        if w == Particle::Automaton {
+            self.particles[self.automaton_location.ix()].what = Particle::Vacuum;
+            self.automaton_location = c;
+        }
+        self.particles[c.ix()].what = w;
+    }
+
     /// Mark a coordinate as passable, because some move specifies it as a source.
     fn mark_passable(&mut self, c: Coord) {
         self.particles[c.ix()].passable = true;
@@ -318,7 +388,7 @@ impl Board {
         let axis = delta.axial_unit();
         for offset in 1..=delta.displacement() {
             let c = from + axis * offset as isize;
-            if !self.particles[c.ix()].occludes() {
+            if self.particles[c.ix()].occludes() {
                 return OccupiedAt(c);
             }
         }
@@ -354,7 +424,7 @@ impl Board {
     /// particle is Vacuum). (These facts are depended upon in the automaton's reasoning; see
     /// evaluate_axis.)
     fn raycast(&self, from: Coord, axis: Delta) -> Raycast {
-        debug_assert!(axis != Delta::ZERO);
+        debug_assert_ne!(axis, Delta::ZERO);
 
         for i in 1isize.. {
             let co = from + axis * i;
@@ -366,7 +436,11 @@ impl Board {
                 };
             }
             let c = self.particles[co.ix()];
-            if !c.occludes() {
+            /* NB: The following condition could also be `c.occludes()`, but this is almost
+             * certainly being called within Board::automaton_move, and by this time the marks
+             * should be clear anyway.
+             */
+            if !c.what.is_vacuum() {
                 return Raycast {
                     what: c.what,
                     hit: Some(co),
@@ -806,6 +880,10 @@ impl Game {
 
         let x_decision = evaluate_axis(&xp, &xn);
         let y_decision = evaluate_axis(&yp, &yn);
+        #[cfg(test)] {
+            println!("XP: {:?}, XN: {:?}, YP: {:?}, YN: {:?}", xp, xn, yp, yn);
+            println!("X: {:?}, Y: {:?}", x_decision, y_decision);
+        }
 
         self.board.automaton_location
             + if x_decision > y_decision {
@@ -823,10 +901,10 @@ impl Game {
     pub fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
-            debug_assert!(
+            debug_assert_eq!(
                 self.board
-                    .do_move(self.board.automaton_location, new_location)
-                    == MoveResult::Applied
+                    .do_move(self.board.automaton_location, new_location),
+                MoveResult::Applied
             );
         }
     }
@@ -835,13 +913,141 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use crate::*;
+
+    #[derive(Debug)]
+    struct AutMoveError {
+        board: Board,
+        expected_move: Delta,
+        actual_move: Delta,
+    }
+
+    type AutMoveTest = Result<(), AutMoveError>;
+    
+    fn expect_automaton_move(game: &mut Game, by: Delta) -> AutMoveTest {
+        let t0 = game.board.automaton_location;
+        let d = game.automaton_move() - t0;
+        if d == by {
+            Ok(())
+        } else {
+            Err(AutMoveError {
+                board: game.board.clone(),
+                expected_move: by,
+                actual_move: d,
+            })
+        }
+    }
+
+    fn testing_game() -> Game {
+        Game::new(
+            Board::stock_testing_empty(), 2, true
+        )
+    }
+
     #[test]
-    fn automaton_stays_put() {
+    fn automaton_stays_put() -> AutMoveTest {
         let board = Board::stock_two_player();
         let mut game = Game::new(board, 2, true);
-        let before_move = game.board.automaton_location;
-        game.update_automaton();
-        let after_move = game.board.automaton_location;
-        assert_eq!(before_move, after_move)
+        expect_automaton_move(&mut game, Delta::ZERO)
+    }
+
+    #[test]
+    fn unbalanced_pair() -> AutMoveTest {
+        for &d in Delta::AXIAL_UNITS.iter() {
+            let mut game = testing_game();
+            let loc = game.board.automaton_location;
+            game.board.place(loc + d * 2, Particle::Attractor);
+            game.board.place(loc + d * (-2), Particle::Repulsor);
+            println!("* empty UnP delta {:?}", d);
+            expect_automaton_move(&mut game, d)?;
+
+            let clean_board = game.board.clone();
+            let perp = d.perpendicular();
+
+            game.board.place(loc + perp * 2, Particle::Attractor);
+            println!("* UnP delta {:?} unaffected by unipolar attractor", d);
+            expect_automaton_move(&mut game, d)?;
+            game.board.place(loc + perp * (-2), Particle::Attractor);
+            println!("* UnP delta {:?} unaffected by bipolar attractor", d);
+            expect_automaton_move(&mut game, d)?;
+
+            game.board = clean_board;
+
+            game.board.place(loc + perp * 2, Particle::Repulsor);
+            println!("* UnP delta {:?} unaffected by unipolar repulsor", d);
+            expect_automaton_move(&mut game, d)?;
+            game.board.place(loc + perp * (-2), Particle::Repulsor);
+            println!("* UnP delta {:?} unaffected by bipolar repulsor", d);
+            expect_automaton_move(&mut game, d)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unbalanced_pair_limits() -> AutMoveTest {
+        for &d in Delta::AXIAL_UNITS.iter() {
+            let mut game = testing_game();
+            let loc = game.board.automaton_location;
+
+            let clean_board = game.board.clone();
+
+            game.board.place(loc + d * 1, Particle::Attractor);
+            game.board.place(loc + d * (-2), Particle::Repulsor);
+            expect_automaton_move(&mut game, Delta::ZERO)?;
+            println!("* no move when adjacent to UnP attractor, delta {:?}", d);
+
+            game.board = clean_board;
+
+            game.board.place(loc + d * 2, Particle::Attractor);
+            game.board.place(loc + d * (-1), Particle::Repulsor);
+            println!("* still moves when UnP repulsor is adjacent, delta {:?}", d);
+            expect_automaton_move(&mut game, d);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repulsor() -> AutMoveTest {
+        for &d in Delta::AXIAL_UNITS.iter() {
+            let mut game = testing_game();
+            let loc = game.board.automaton_location;
+            let perp = d.perpendicular();
+
+            let try_with_attractors = |g: &mut Game, e: Delta| -> AutMoveTest {
+                g.board.place(loc + perp * 2, Particle::Attractor);
+                println!("* ...with unipolar attractor");
+                expect_automaton_move(g, e)?;
+                g.board.place(loc + perp * (-2), Particle::Attractor);
+                println!("* ...with bipolar attractor");
+                expect_automaton_move(g, e)?;
+                Ok(())
+            };
+
+            let clean_board = game.board.clone();
+
+            game.board.place(loc + d * (-1), Particle::Repulsor);
+            println!("* away from adjacent repulsor, unipolar, delta {:?}", d);
+            expect_automaton_move(&mut game, d)?;
+            try_with_attractors(&mut game, d)?;
+
+            game.board = clean_board.clone();
+            game.board.place(loc + d * (-2), Particle::Repulsor);
+            println!("* away from far repulsor, unipolar, delta {:?}", d);
+            expect_automaton_move(&mut game, d)?;
+            try_with_attractors(&mut game, d)?;
+
+            game.board = clean_board.clone();
+            game.board.place(loc + d * (-1), Particle::Repulsor);
+            game.board.place(loc + d * 2, Particle::Repulsor);
+            println!("* away from nearer repulsor, bipolar, delta {:?}", d);
+            expect_automaton_move(&mut game, d)?;
+            try_with_attractors(&mut game, d)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn trapped_all_sides() -> AutMoveTest {
+        // TODO
+        Ok(())
     }
 }
