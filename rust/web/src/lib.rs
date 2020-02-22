@@ -91,5 +91,6 @@ pub fn main() {
     std::panic::set_hook(Box::new(|info| {
         tracing::error!("{:#?}", info);
     }));
+    tracing::info!("booting up!");
     moxie_dom::boot(document().body().unwrap(), automatafl_game);
 }

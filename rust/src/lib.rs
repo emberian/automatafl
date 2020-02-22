@@ -1,3 +1,5 @@
+#![allow(unused_doc_comments)]
+
 //! Reference implementation of the automatafl board game.
 //!
 //! General crate design notes:
@@ -16,126 +18,18 @@ extern crate displaydoc;
 extern crate ndarray;
 extern crate smallvec;
 
+mod support;
+
+pub use support::*;
+
+use spandoc::spandoc;
+use tracing::{error, info, instrument, trace};
+
 use displaydoc::Display;
 use ndarray::{arr2, Array2 as Grid};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::iter::FromIterator;
-
-/// Player ID within a single game
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Pid(pub u8);
-
-/// Coordinate on the board. TODO: microbenchmark different coord sizes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Coord {
-    pub x: u8,
-    pub y: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Delta {
-    dx: i8,
-    dy: i8,
-}
-
-impl std::ops::Sub for Coord {
-    type Output = Delta;
-
-    fn sub(self, other: Coord) -> Delta {
-        Delta {
-            dx: (self.x as i8 - other.x as i8),
-            dy: (self.y as i8 - other.y as i8),
-        }
-    }
-}
-
-impl std::ops::Add<Delta> for Coord {
-    type Output = Coord;
-
-    fn add(self, other: Delta) -> Coord {
-        Coord {
-            // TODO: Make this saturate rather than wrap
-            x: (self.x as i8 + other.dx) as u8,
-            y: (self.y as i8 + other.dy) as u8,
-        }
-    }
-}
-
-impl std::ops::Mul<isize> for Delta {
-    type Output = Delta;
-
-    fn mul(self, other: isize) -> Delta {
-        Delta {
-            dx: self.dx * other as i8,
-            dy: self.dy * other as i8,
-        }
-    }
-}
-
-impl Coord {
-    pub fn ix(self) -> (usize, usize) {
-        (self.x as usize, self.y as usize)
-    }
-}
-
-impl Delta {
-    const ZERO: Delta = Delta { dx: 0, dy: 0 };
-    const XP: Delta = Delta { dx: 1, dy: 0 };
-    const XN: Delta = Delta { dx: -1, dy: 0 };
-    const YP: Delta = Delta { dx: 0, dy: 1 };
-    const YN: Delta = Delta { dx: 0, dy: -1 };
-    #[cfg(test)]
-    const AXIAL_UNITS: [Delta; 4] = [
-        Delta::XP,
-        Delta::XN,
-        Delta::YP,
-        Delta::YN
-    ];
-
-    fn is_zero(self) -> bool {
-        self.dx == 0 && self.dy == 0
-    }
-
-    fn is_axial(self) -> bool {
-        self.dx == 0 || self.dy == 0 && !self.is_zero()
-    }
-
-    fn axial_unit(self) -> Delta {
-        if self.is_zero() {
-            Delta::ZERO
-        } else {
-            // Fencepost: prefer Y ("column rule"). This shouldn't be relied upon; in general, call
-            // this only on axial deltas.
-            if self.dx.abs() > self.dy.abs() {
-                Delta {
-                    dx: self.dx.signum(),
-                    dy: 0,
-                }
-            } else {
-                Delta {
-                    dx: 0,
-                    dy: self.dy.signum(),
-                }
-            }
-        }
-    }
-
-    fn displacement(self) -> usize {
-        self.dx.abs() as usize + self.dy.abs() as usize
-    }
-
-    #[cfg(test)]
-    fn perpendicular(self) -> Delta {
-        Delta { dx: -self.dy, dy: self.dx }
-    }
-}
-
-impl core::fmt::Display for Coord {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "({}, {})", self.x, self.y)
-    }
-}
 
 /// "x, y {}"
 #[derive(Debug, Display, PartialEq, Eq, Clone)]
@@ -148,20 +42,6 @@ pub enum CoordFeedback {
     Oob,
     /// is the automaton, which is off-limits
     Automaton,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct CoordsFeedback {
-    data: SmallVec<[(Coord, CoordFeedback); 2]>,
-}
-
-impl core::fmt::Display for CoordsFeedback {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        for (coord, feedback) in &self.data {
-            write!(f, "{} {}", coord, feedback)?
-        }
-        Ok(())
-    }
 }
 
 /// "Your move {}."
@@ -195,24 +75,11 @@ pub enum RoundState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Move {
-    pub who: Pid,
-    pub from: Coord,
-    pub to: Coord,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Particle {
     Repulsor,
     Attractor,
     Automaton,
     Vacuum,
-}
-
-impl Particle {
-    fn is_vacuum(self) -> bool {
-        self == Particle::Vacuum
-    }
 }
 
 // TODO: this is 3 bytes when it could be 1 :/
@@ -221,13 +88,6 @@ pub struct Cell {
     pub what: Particle,
     pub conflict: bool,
     pub passable: bool,
-}
-
-impl Cell {
-    fn occludes(&self) -> bool {
-        // Vacuum can always be passed through, non-vacuum if passable is set.
-        !(self.what.is_vacuum() || self.passable)
-    }
 }
 
 /// Player 0 move: {}
@@ -241,14 +101,7 @@ pub enum MoveResult {
     Applied,
 }
 
-#[derive(Debug, Clone)]
-struct Raycast {
-    what: Particle,
-    hit: Option<Coord>,
-    dist: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Board {
     pub particles: Grid<Cell>,
     pub size: Coord,
@@ -257,120 +110,12 @@ pub struct Board {
     pub passable_list: SmallVec<[Coord; 16]>,
 }
 
-// By the time a coord ever hits a Board method (besides inbounds), it's inbounds.
-
 impl Board {
-    /// Prepare a standard board layout for a two player game.
-    pub fn stock_two_player() -> Board {
-        let o = Cell {
-            what: Particle::Vacuum,
-            conflict: false,
-            passable: false,
-        };
-        let r = Cell {
-            what: Particle::Repulsor,
-            ..o
-        };
-        let a = Cell {
-            what: Particle::Attractor,
-            ..o
-        };
-        let d = Cell {
-            what: Particle::Automaton,
-            ..o
-        };
-        Board {
-            particles: arr2(&[
-                [r, r, o, o, r, r, r, o, o, r, r],
-                [o, o, o, a, r, r, r, a, o, o, o],
-                [o, o, o, o, o, o, o, o, o, o, o],
-                [o, o, o, o, o, o, o, o, o, o, o],
-                [a, a, o, o, o, o, o, o, o, a, a],
-                [r, r, o, o, o, d, o, o, o, r, r],
-                [a, a, o, o, o, o, o, o, o, a, a],
-                [o, o, o, o, o, o, o, o, o, o, o],
-                [o, o, o, o, o, o, o, o, o, o, o],
-                [o, o, o, a, r, r, r, a, o, o, o],
-                [r, r, o, o, r, r, r, o, o, r, r],
-            ]),
-            size: Coord { x: 11, y: 11 },
-            automaton_location: Coord { x: 5, y: 5 },
-            conflict_list: SmallVec::new(),
-            passable_list: SmallVec::new(),
-        }
-    }
-
-    pub fn stock_testing() -> Board {
-        let o = Cell {
-            what: Particle::Vacuum,
-            conflict: false,
-            passable: false,
-        };
-        let r = Cell { what: Particle::Repulsor, ..o };
-        let a = Cell { what: Particle::Attractor, ..o };
-        let d = Cell { what: Particle::Automaton, ..o };
-        Board {
-            particles: arr2(&[
-                [r, o, a, o, r],
-                [o, o, o, o, o],
-                [r, o, d, o, r],
-                [o, o, o, o, o],
-                [r, o, a, o, r],
-            ]),
-            size: Coord { x: 5, y: 5},
-            automaton_location: Coord { x: 2, y: 2 },
-            conflict_list: SmallVec::new(),
-            passable_list: SmallVec::new(),
-        }
-    }
-
-    pub fn stock_testing_empty() -> Board {
-        let o = Cell {
-            what: Particle::Vacuum,
-            conflict: false,
-            passable: false,
-        };
-        let d = Cell { what: Particle::Automaton, ..o };
-        Board {
-            particles: arr2(&[
-                [o, o, o, o, o],
-                [o, o, o, o, o],
-                [o, o, d, o, o],
-                [o, o, o, o, o],
-                [o, o, o, o, o],
-            ]),
-            size: Coord { x: 5, y: 5},
-            automaton_location: Coord { x: 2, y: 2 },
-            conflict_list: SmallVec::new(),
-            passable_list: SmallVec::new(),
-        }
-    }
-
-    /// Place a particle on the board.
-    ///
-    /// If the particle isn't the automaton, this increases the matter on the board. If it is the
-    /// automaton, it is forcibly moved from wherever else it is on the board, leaving a vacuum in
-    /// its place. (This restriction might later be lifted to allow more than one automaton on the
-    /// board, but this method is unlikely to abide such a change.)
-    pub fn place(&mut self, c: Coord, w: Particle) {
-        if w == Particle::Automaton {
-            self.particles[self.automaton_location.ix()].what = Particle::Vacuum;
-            self.automaton_location = c;
-        }
-        self.particles[c.ix()].what = w;
-    }
-
-    /// Mark a coordinate as passable, because some move specifies it as a source.
-    fn mark_passable(&mut self, c: Coord) {
-        self.particles[c.ix()].passable = true;
-        self.passable_list.push(c);
-    }
-
     /// Attempt to move a non-vacuum piece. This can fail, and no move is attempted in that case.
     ///
     /// This method considers it allowable to move the automaton, and is part of the call graph
     /// of Game::update_automaton.
-    fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
+    pub(crate) fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
         use MoveResult::*;
 
         // debug_assert checks invariants that should be established by propose_move
@@ -399,111 +144,6 @@ impl Board {
 
         Applied
     }
-
-    /// Forcibly swap two positions on the board (assuring the number of particles is constant).
-    /// This can also do weird, probably illogical things, like swapping conflict flags. This
-    /// method also does absolutely no bounds checking, and thus can panic if the coordinate is
-    /// out of bounds. Only use this if you know what you're doing.
-    fn force_move(&mut self, from: Coord, to: Coord) {
-        self.particles.swap(from.ix(), to.ix());
-
-        if self.automaton_location == from {
-            self.automaton_location = to;
-        }
-    }
-
-    /// Raycast on the board down an axis from a coordinate.
-    ///
-    /// The ray starts from, but does not include, the "from" coordinate.
-    ///
-    /// The axis SHOULD be a unit vector, but any nonzero Delta is acceptable. This method only
-    /// tests the integer multiples of that offset, and relies on the ray eventually containing
-    /// out-of-bounds points to terminate.
-    ///
-    /// The raycast's dist field is set to the integer at which iteration terminated. If iteration
-    /// terminated in-bounds, this is guaranteed to be on a non-Vacuum particle. If it terminated
-    /// out-of-bounds, i is the first integer multiple of axis that is out of bounds (and the
-    /// particle is Vacuum). (These facts are depended upon in the automaton's reasoning; see
-    /// evaluate_axis.)
-    fn raycast(&self, from: Coord, axis: Delta) -> Raycast {
-        debug_assert_ne!(axis, Delta::ZERO);
-
-        for i in 1isize.. {
-            let co = from + axis * i;
-            if !self.inbounds(co) {
-                return Raycast {
-                    what: Particle::Vacuum,
-                    hit: None,
-                    dist: i as usize,
-                };
-            }
-            let c = self.particles[co.ix()];
-            /* NB: The following condition could also be `c.occludes()`, but this is almost
-             * certainly being called within Board::automaton_move, and by this time the marks
-             * should be clear anyway.
-             */
-            if !c.what.is_vacuum() {
-                return Raycast {
-                    what: c.what,
-                    hit: Some(co),
-                    dist: i as usize,
-                };
-            }
-        }
-
-        unreachable!()
-    }
-
-    /// Mark a cell as conflicted.
-    ///
-    /// Moves specified by plebeians may not specify conflicted squares as a rule (see
-    /// MoveError::Conflicted, CoordFeedback::Conflict).
-    ///
-    /// Conflicted cells come about during conflict resolution (RoundState::ResolvingConflict) to
-    /// indicate that two plebeians attempted to move the same particle differently, or move
-    /// different particles to the same cell. When conflict resolution ends, the marks are cleared.
-    fn mark_conflict(&mut self, c: Coord) {
-        self.particles[c.ix()].conflict = true;
-        self.conflict_list.push(c);
-    }
-
-    /// Clear all marked cells.
-    ///
-    /// This is done at the end of conflict resolution (RoundState::ResolvingConflict).
-    fn clear_marks(&mut self) {
-        for c in self.conflict_list.drain(..) {
-            self.particles[c.ix()].conflict = false;
-        }
-        for c in self.passable_list.drain(..) {
-            self.particles[c.ix()].passable = false;
-        }
-    }
-
-    /// Test if there is a conflict in the addressed cell.
-    ///
-    /// If this is true, the cell may not be specified as a source or destination of any move
-    /// (MoveError::Conflicted).
-    fn is_conflict(&self, c: Coord) -> bool {
-        self.particles[c.ix()].conflict
-    }
-
-    /// Test whether the addressed cell is vacuum.
-    fn is_vacuum(&self, c: Coord) -> bool {
-        self.particles[c.ix()].what.is_vacuum()
-    }
-
-    /// Test whether the address cell is the automaton.
-    fn is_automaton(&self, c: Coord) -> bool {
-        self.automaton_location == c
-    }
-
-    /// Test whether the coordinate is within the boundaries of the board.
-    ///
-    /// It is illegal to specify an out-of-bounds coordinate as the source or destination of a move
-    /// (MoveError::Oob).
-    fn inbounds(&self, c: Coord) -> bool {
-        c.x < self.size.x && c.y < self.size.y
-    }
 }
 
 /// Decisions of the Automaton on one axis.
@@ -525,52 +165,8 @@ enum AutomatonDecision {
     None,
 }
 
-impl AutomatonDecision {
-    fn priority(&self) -> usize {
-        use AutomatonDecision::*;
-        match self {
-            None => 0,
-            TowardAttractor { .. } => 10,
-            // "Frank correction": this is higher priority
-            FromRepulsor { .. } => 20,
-            UnbalancedPair { .. } => 30,
-        }
-    }
-
-    fn delta(&self, axis: Delta) -> Delta {
-        use AutomatonDecision::*;
-        fn sgn(&b: &bool) -> isize {
-            if b {
-                1
-            } else {
-                -1
-            }
-        }
-
-        match self {
-            UnbalancedPair { pos, .. } | FromRepulsor { pos, .. } | TowardAttractor { pos, .. } => {
-                axis * sgn(pos)
-            }
-            None => Delta::ZERO,
-        }
-    }
-}
-
-impl PartialOrd for AutomatonDecision {
-    fn partial_cmp(&self, other: &AutomatonDecision) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for AutomatonDecision {
-    fn eq(&self, other: &AutomatonDecision) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for AutomatonDecision {}
-
 impl Ord for AutomatonDecision {
+    /// Which of these two automaton decisions is more urgent?
     fn cmp(&self, other: &AutomatonDecision) -> Ordering {
         use AutomatonDecision::*;
 
@@ -619,16 +215,20 @@ impl Ord for AutomatonDecision {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Game {
     pub winner: Option<Pid>,
+    /// Players who cannot submit moves during RoundState::ResolvingConflict
     pub locked_players: SmallVec<[Pid; 2]>,
     pub board: Board,
     pub round: RoundState,
+    /// Submitted moves so far
     pub pending_moves: SmallVec<[Move; 2]>,
+    /// Goal locations, when the automaton enters one of these that player wins.
     pub goals: SmallVec<[(Coord, Pid); 4]>,
     pub player_count: u8,
     pub use_column_rule: bool,
 }
 
 impl Game {
+    /// Create a new game using the given board.
     pub fn new(board: Board, player_count: u8, use_column_rule: bool) -> Game {
         Game {
             winner: None,
@@ -646,6 +246,7 @@ impl Game {
     /// machine is ready to advance (try_complete_round preconditions are met).
     ///
     /// Returns false if try_complete_round would panic.
+    #[instrument]
     pub fn propose_move(&mut self, m: Move) -> (MoveFeedback, bool) {
         use MoveFeedback::*;
 
@@ -695,6 +296,8 @@ impl Game {
 
     /// Returns Ok with the list of applied move to apply, or else the list of
     /// conflicting moves.
+    #[spandoc]
+    #[instrument]
     fn resolve_conflicts(&mut self) -> Result<SmallVec<[Move; 2]>, SmallVec<[Move; 2]>> {
         debug_assert!(self.pending_moves.len() == self.player_count as usize);
 
@@ -717,6 +320,7 @@ impl Game {
 
             // See if there's a source conflict...
             if seen_from.contains(&m.from) {
+                trace!("marking source conflict on {}", coord = m.from);
                 conflict_moves.push(m);
                 self.board.mark_conflict(m.from);
                 conflict = true;
@@ -726,6 +330,7 @@ impl Game {
 
             // Or a dest conflict...
             if seen_to.contains(&m.to) {
+                trace!("marking dest conflict on {}", coord = m.to);
                 conflict_moves.push(m);
                 self.board.mark_conflict(m.to);
                 conflict = true;
@@ -739,6 +344,7 @@ impl Game {
                 // locked list and into the conflict list.
                 locked_moves = SmallVec::from_iter(locked_moves.into_iter().filter_map(|p| {
                     if p.from == m.from || p.to == m.to {
+                        trace!("caused conflict with player {:?}", pid = p.who);
                         conflict_moves.push(p);
                         None
                     } else {
@@ -759,6 +365,8 @@ impl Game {
     }
 
     /// Return the list of move results if everything was gucci, else enter conflict resolution.
+    #[instrument]
+    #[spandoc]
     pub fn try_complete_round(&mut self) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
@@ -793,25 +401,20 @@ impl Game {
 
                 self.update_automaton();
 
-                let &mut Game {
-                    ref mut goals,
-                    ref mut board,
-                    ref mut round,
-                    ref mut winner,
-                    ..
-                } = self;
-
-                if !goals.iter().any(|&(c, who)| {
-                    if c == board.automaton_location {
-                        *round = RoundState::GameOver;
-                        *winner = Some(who);
-                        true
-                    } else {
-                        false
+                match self
+                    .goals
+                    .iter()
+                    .copied()
+                    .find(|(c, _)| c == &self.board.automaton_location)
+                {
+                    Some((_, who)) => {
+                        self.round = RoundState::GameOver;
+                        self.winner = Some(who);
                     }
-                }) {
-                    self.board.clear_marks();
-                    *round = RoundState::Fresh;
+                    None => {
+                        self.board.clear_marks();
+                        self.round = RoundState::Fresh;
+                    }
                 }
 
                 Ok(results)
@@ -830,76 +433,7 @@ impl Game {
         }
     }
 
-    /// Calculate the coordinate to which the automaton would move right now.
-    fn automaton_move(&self) -> Coord {
-        fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
-            use AutomatonDecision::*;
-            use Particle::*;
-
-            match (pos.what, neg.what) {
-                (Attractor, Repulsor) if pos.dist > 1 => UnbalancedPair {
-                    pos: true,
-                    att_dist: pos.dist,
-                    rep_dist: neg.dist,
-                },
-                (Repulsor, Attractor) if neg.dist > 1 => UnbalancedPair {
-                    pos: false,
-                    att_dist: neg.dist,
-                    rep_dist: pos.dist,
-                },
-                (Repulsor, Repulsor) if pos.dist != neg.dist => FromRepulsor {
-                    pos: pos.dist > neg.dist,
-                    rep_dist: std::cmp::min(pos.dist, neg.dist),
-                },
-                (Repulsor, Vacuum) if neg.dist > 1 => FromRepulsor {
-                    pos: false,
-                    rep_dist: pos.dist,
-                },
-                (Vacuum, Repulsor) if pos.dist > 1 => FromRepulsor {
-                    pos: true,
-                    rep_dist: neg.dist,
-                },
-                (Attractor, Attractor) if pos.dist != neg.dist => TowardAttractor {
-                    pos: pos.dist < neg.dist,
-                    att_dist: std::cmp::min(pos.dist, neg.dist),
-                },
-                (Attractor, Vacuum) if pos.dist > 1 => TowardAttractor {
-                    pos: true,
-                    att_dist: pos.dist,
-                },
-                (Vacuum, Attractor) if neg.dist > 1 => TowardAttractor {
-                    pos: false,
-                    att_dist: neg.dist,
-                },
-                _ => None,
-            }
-        }
-
-        let xp = self.board.raycast(self.board.automaton_location, Delta::XP);
-        let xn = self.board.raycast(self.board.automaton_location, Delta::XN);
-        let yp = self.board.raycast(self.board.automaton_location, Delta::YP);
-        let yn = self.board.raycast(self.board.automaton_location, Delta::YN);
-
-        let x_decision = evaluate_axis(&xp, &xn);
-        let y_decision = evaluate_axis(&yp, &yn);
-        #[cfg(test)] {
-            println!("XP: {:?}, XN: {:?}, YP: {:?}, YN: {:?}", xp, xn, yp, yn);
-            println!("X: {:?}, Y: {:?}", x_decision, y_decision);
-        }
-
-        self.board.automaton_location
-            + if x_decision > y_decision {
-                x_decision.delta(Delta::XP)
-            } else {
-                if !self.use_column_rule && x_decision == y_decision {
-                    Delta::ZERO
-                } else {
-                    y_decision.delta(Delta::YP)
-                }
-            }
-    }
-
-    /// Cause the automaton to move.
+    /// Update the automaton, returning true if it moved
     pub fn update_automaton(&mut self) {
         let new_location = self.automaton_move();
         if new_location != self.board.automaton_location {
@@ -910,146 +444,76 @@ impl Game {
             );
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::*;
+    /// Calculate the coordinate to which the automaton would move right now.
+    #[spandoc]
+    #[instrument]
+    fn automaton_move(&self) -> Coord {
+        #[instrument]
+        fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
+            use AutomatonDecision::*;
+            use Particle::{Attractor as A, Repulsor as R, Vacuum as V};
 
-    #[derive(Debug)]
-    struct AutMoveError {
-        board: Board,
-        expected_move: Delta,
-        actual_move: Delta,
-    }
+            match (pos.what, neg.what) {
+                (A, R) if pos.dist > 1 => UnbalancedPair {
+                    pos: true,
+                    att_dist: pos.dist,
+                    rep_dist: neg.dist,
+                },
+                (R, A) if neg.dist > 1 => UnbalancedPair {
+                    pos: false,
+                    att_dist: neg.dist,
+                    rep_dist: pos.dist,
+                },
+                (R, R) if pos.dist != neg.dist => FromRepulsor {
+                    pos: pos.dist > neg.dist,
+                    rep_dist: std::cmp::min(pos.dist, neg.dist),
+                },
+                (R, V) if neg.dist > 1 => FromRepulsor {
+                    pos: false,
+                    rep_dist: pos.dist,
+                },
+                (V, R) if pos.dist > 1 => FromRepulsor {
+                    pos: true,
+                    rep_dist: neg.dist,
+                },
+                (A, A) if pos.dist != neg.dist => TowardAttractor {
+                    pos: pos.dist < neg.dist,
+                    att_dist: std::cmp::min(pos.dist, neg.dist),
+                },
+                (A, V) if pos.dist > 1 => TowardAttractor {
+                    pos: true,
+                    att_dist: pos.dist,
+                },
+                (V, A) if neg.dist > 1 => TowardAttractor {
+                    pos: false,
+                    att_dist: neg.dist,
+                },
+                _ => None,
+            }
+        }
 
-    type AutMoveTest = Result<(), AutMoveError>;
-    
-    fn expect_automaton_move(game: &mut Game, by: Delta) -> AutMoveTest {
-        let t0 = game.board.automaton_location;
-        let d = game.automaton_move() - t0;
-        if d == by {
-            Ok(())
+        /// Find the nearest particles in the four directions.
+        let xp = self.board.raycast(self.board.automaton_location, Delta::XP);
+        let xn = self.board.raycast(self.board.automaton_location, Delta::XN);
+        let yp = self.board.raycast(self.board.automaton_location, Delta::YP);
+        let yn = self.board.raycast(self.board.automaton_location, Delta::YN);
+
+        let x_decision = evaluate_axis(&xp, &xn);
+        let y_decision = evaluate_axis(&yp, &yn);
+
+        let offset = if x_decision > y_decision {
+            x_decision.delta(Delta::XP)
         } else {
-            Err(AutMoveError {
-                board: game.board.clone(),
-                expected_move: by,
-                actual_move: d,
-            })
-        }
-    }
+            // If the options are equally preferable, don't move unless we're using the column rule.
+            if !self.use_column_rule && x_decision == y_decision {
+                info!("avoided applying the column rule");
+                Delta::ZERO
+            } else {
+                y_decision.delta(Delta::YP)
+            }
+        };
 
-    fn testing_game() -> Game {
-        Game::new(
-            Board::stock_testing_empty(), 2, true
-        )
-    }
-
-    #[test]
-    fn automaton_stays_put() -> AutMoveTest {
-        let board = Board::stock_two_player();
-        let mut game = Game::new(board, 2, true);
-        expect_automaton_move(&mut game, Delta::ZERO)
-    }
-
-    #[test]
-    fn unbalanced_pair() -> AutMoveTest {
-        for &d in Delta::AXIAL_UNITS.iter() {
-            let mut game = testing_game();
-            let loc = game.board.automaton_location;
-            game.board.place(loc + d * 2, Particle::Attractor);
-            game.board.place(loc + d * (-2), Particle::Repulsor);
-            println!("* empty UnP delta {:?}", d);
-            expect_automaton_move(&mut game, d)?;
-
-            let clean_board = game.board.clone();
-            let perp = d.perpendicular();
-
-            game.board.place(loc + perp * 2, Particle::Attractor);
-            println!("* UnP delta {:?} unaffected by unipolar attractor", d);
-            expect_automaton_move(&mut game, d)?;
-            game.board.place(loc + perp * (-2), Particle::Attractor);
-            println!("* UnP delta {:?} unaffected by bipolar attractor", d);
-            expect_automaton_move(&mut game, d)?;
-
-            game.board = clean_board;
-
-            game.board.place(loc + perp * 2, Particle::Repulsor);
-            println!("* UnP delta {:?} unaffected by unipolar repulsor", d);
-            expect_automaton_move(&mut game, d)?;
-            game.board.place(loc + perp * (-2), Particle::Repulsor);
-            println!("* UnP delta {:?} unaffected by bipolar repulsor", d);
-            expect_automaton_move(&mut game, d)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn unbalanced_pair_limits() -> AutMoveTest {
-        for &d in Delta::AXIAL_UNITS.iter() {
-            let mut game = testing_game();
-            let loc = game.board.automaton_location;
-
-            let clean_board = game.board.clone();
-
-            game.board.place(loc + d * 1, Particle::Attractor);
-            game.board.place(loc + d * (-2), Particle::Repulsor);
-            expect_automaton_move(&mut game, Delta::ZERO)?;
-            println!("* no move when adjacent to UnP attractor, delta {:?}", d);
-
-            game.board = clean_board;
-
-            game.board.place(loc + d * 2, Particle::Attractor);
-            game.board.place(loc + d * (-1), Particle::Repulsor);
-            println!("* still moves when UnP repulsor is adjacent, delta {:?}", d);
-            expect_automaton_move(&mut game, d)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn repulsor() -> AutMoveTest {
-        for &d in Delta::AXIAL_UNITS.iter() {
-            let mut game = testing_game();
-            let loc = game.board.automaton_location;
-            let perp = d.perpendicular();
-
-            let try_with_attractors = |g: &mut Game, e: Delta| -> AutMoveTest {
-                g.board.place(loc + perp * 2, Particle::Attractor);
-                println!("* ...with unipolar attractor");
-                expect_automaton_move(g, e)?;
-                g.board.place(loc + perp * (-2), Particle::Attractor);
-                println!("* ...with bipolar attractor");
-                expect_automaton_move(g, e)?;
-                Ok(())
-            };
-
-            let clean_board = game.board.clone();
-
-            game.board.place(loc + d * (-1), Particle::Repulsor);
-            println!("* away from adjacent repulsor, unipolar, delta {:?}", d);
-            expect_automaton_move(&mut game, d)?;
-            try_with_attractors(&mut game, d)?;
-
-            game.board = clean_board.clone();
-            game.board.place(loc + d * (-2), Particle::Repulsor);
-            println!("* away from far repulsor, unipolar, delta {:?}", d);
-            expect_automaton_move(&mut game, d)?;
-            try_with_attractors(&mut game, d)?;
-
-            game.board = clean_board.clone();
-            game.board.place(loc + d * (-1), Particle::Repulsor);
-            game.board.place(loc + d * 2, Particle::Repulsor);
-            println!("* away from nearer repulsor, bipolar, delta {:?}", d);
-            expect_automaton_move(&mut game, d)?;
-            try_with_attractors(&mut game, d)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn trapped_all_sides() -> AutMoveTest {
-        // TODO
-        Ok(())
+        self.board.automaton_location + offset
     }
 }

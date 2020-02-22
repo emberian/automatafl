@@ -31,6 +31,8 @@ dependencies = [
  "displaydoc",
  "ndarray",
  "smallvec",
+ "spandoc",
+ "tracing",
  "vec_map",
 ]
 
@@ -41,6 +43,7 @@ dependencies = [
  "automatafl",
  "console_log",
  "illicit",
+ "log",
  "moxie",
  "moxie-dom",
  "tracing",
@@ -268,6 +271,12 @@ checksum = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "matches"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "matrixmultiply"
@@ -552,6 +561,18 @@ name = "sourcefile"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bf77cb82ba8453b42b6ae1d692e4cdc92f9a47beaf89a847c8be83f4e328ad3"
+
+[[package]]
+name = "spandoc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08555e0fdca4964503d1e46747371d41a910b83bbb79c369c56ff1d74c1f35b"
+dependencies = [
+ "matches",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "stable_deref_trait"
