@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT id as \"id!: Uuid\", \n               white_player_id as \"white_player_id?: Uuid\", \n               black_player_id as \"black_player_id?: Uuid\", \n               time_control_seconds as \"time_control_seconds?: i32\", \n               last_move_at as \"last_move_at?: chrono::DateTime<chrono::Utc>\"\n        FROM games \n        WHERE status = 'active' \n          AND last_move_at IS NOT NULL \n          AND last_move_at < ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "white_player_id?: Uuid",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "black_player_id?: Uuid",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "time_control_seconds?: i32",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_move_at?: chrono::DateTime<chrono::Utc>",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "07b84c62226d726a449ff23ff6a11dc7995a3045865f561c87454e7e473d6fe0"
+}

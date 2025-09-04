@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT \n            MAX(rating_after) as \"highest_rating?: i32\",\n            MIN(rating_after) as \"lowest_rating?: i32\"\n        FROM rating_history\n        WHERE user_id = ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "highest_rating?: i32",
+        "ordinal": 0,
+        "type_info": "Null"
+      },
+      {
+        "name": "lowest_rating?: i32",
+        "ordinal": 1,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "9e0c3c2456c7596aa64bb31c5403d56b542f8a75bfdb3c0e361ecc24ab1a7906"
+}

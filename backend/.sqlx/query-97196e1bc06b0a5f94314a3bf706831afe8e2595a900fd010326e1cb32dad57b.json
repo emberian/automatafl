@@ -1,0 +1,80 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT \n            g.id as \"id!: Uuid\",\n            g.white_player_id as \"white_player_id?: Uuid\",\n            g.black_player_id as \"black_player_id?: Uuid\",\n            g.status,\n            g.winner_id as \"winner_id?: Uuid\",\n            g.created_at as \"created_at!: chrono::DateTime<chrono::Utc>\",\n            g.updated_at as \"updated_at!: chrono::DateTime<chrono::Utc>\",\n            w.username as \"white_username?: String\",\n            b.username as \"black_username?: String\",\n            winner.username as \"winner_username?: String\",\n            COALESCE((SELECT COUNT(*) FROM game_moves WHERE game_id = g.id), 0) as \"move_count!: i64\"\n        FROM games g\n        LEFT JOIN users w ON g.white_player_id = w.id\n        LEFT JOIN users b ON g.black_player_id = b.id\n        LEFT JOIN users winner ON g.winner_id = winner.id\n        WHERE (g.white_player_id = ? OR g.black_player_id = ?)\n        ORDER BY g.created_at DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "white_player_id?: Uuid",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "black_player_id?: Uuid",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "winner_id?: Uuid",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "white_username?: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "black_username?: String",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "winner_username?: String",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "move_count!: i64",
+        "ordinal": 10,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "97196e1bc06b0a5f94314a3bf706831afe8e2595a900fd010326e1cb32dad57b"
+}

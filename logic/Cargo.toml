@@ -1,0 +1,16 @@
+[package]
+name = "automatafl-logic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+displaydoc = "0.2"
+smallvec = { version = "1.15", features = ["serde"] }
+vec_map = { version = "0.8", features = ["serde"] }
+ndarray = { version = "0.16", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+tracing = { version = "0.1", features = ["log"] }

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT user_id as \"user_id!: Uuid\" FROM spectators WHERE game_id = ? AND user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "530cd648d9232cbb60bd296d8d754c8c13811a01cd04cbb7cc07e2ba891a7fd8"
+}

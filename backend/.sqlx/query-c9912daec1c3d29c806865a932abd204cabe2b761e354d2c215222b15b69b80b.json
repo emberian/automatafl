@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE games SET black_player_id = ?, status = ?, current_state = ?, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "c9912daec1c3d29c806865a932abd204cabe2b761e354d2c215222b15b69b80b"
+}

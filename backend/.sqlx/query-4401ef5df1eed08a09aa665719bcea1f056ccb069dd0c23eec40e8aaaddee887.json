@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT white_player_id as \"white_player_id?: Uuid\", \n                 black_player_id as \"black_player_id?: Uuid\" \n           FROM games WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "white_player_id?: Uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "black_player_id?: Uuid",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "4401ef5df1eed08a09aa665719bcea1f056ccb069dd0c23eec40e8aaaddee887"
+}

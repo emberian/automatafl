@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO game_moves (id, game_id, player_id, move_number, from_x, from_y, to_x, to_y, created_at)\n           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "9d08f385e17117243fd1c262c55eb2913b16afe2754783cf60bd0845fb868033"
+}

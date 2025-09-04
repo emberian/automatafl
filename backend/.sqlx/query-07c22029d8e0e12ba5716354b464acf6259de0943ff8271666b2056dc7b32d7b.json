@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT gm.id as \"id!: Uuid\", \n           gm.game_id as \"game_id!: Uuid\", \n           gm.player_id as \"player_id!: Uuid\", \n           gm.move_number, \n           gm.from_x, gm.from_y, gm.to_x, gm.to_y, \n           gm.created_at as \"created_at!: chrono::DateTime<chrono::Utc>\",\n           u.username\n           FROM game_moves gm\n           JOIN users u ON gm.player_id = u.id\n           WHERE gm.game_id = ?\n           ORDER BY gm.move_number ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "game_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "player_id!: Uuid",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "move_number",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "from_x",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "from_y",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "to_x",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "to_y",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "username",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "07c22029d8e0e12ba5716354b464acf6259de0943ff8271666b2056dc7b32d7b"
+}

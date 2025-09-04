@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT \n            COUNT(DISTINCT g.id) as \"total_games!: i64\",\n            COALESCE(SUM(CASE WHEN g.winner_id = ? THEN 1 ELSE 0 END), 0) as \"wins!: i64\",\n            COALESCE(SUM(CASE \n                WHEN g.status = 'completed' AND g.winner_id != ? \n                     AND (g.white_player_id = ? OR g.black_player_id = ?) \n                THEN 1 ELSE 0 \n            END), 0) as \"losses!: i64\",\n            COALESCE(SUM(CASE \n                WHEN g.status = 'completed' AND g.winner_id IS NULL \n                     AND (g.white_player_id = ? OR g.black_player_id = ?)\n                THEN 1 ELSE 0 \n            END), 0) as \"draws!: i64\"\n        FROM games g\n        WHERE (g.white_player_id = ? OR g.black_player_id = ?)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "total_games!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "wins!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "losses!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "draws!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f7c2c2ce2cfb3c2e2e375d862a659975c61718e32aa8ed0b7f3340efbbbc713c"
+}

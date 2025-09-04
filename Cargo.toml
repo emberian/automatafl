@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["logic", "webapp", "backend", "api-models"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Ember Arlynx <ember@lunar.town>", "Graham Northup <grissess@nexusg.org>"]
+license = "Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+automatafl-logic = { path = "logic" }
+automatafl-webapp = { path = "webapp" }
+automatafl-backend = { path = "backend" }
+automatafl-api = { path = "api-models" }

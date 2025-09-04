@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE games \n        SET status = ?, winner_id = ?, updated_at = ?\n        WHERE id = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "573f9dcedf7b93b68757a03dddbfa3648cfe25722c2e2bd5fa053242c8abac3d"
+}
