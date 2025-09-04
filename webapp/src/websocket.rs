@@ -1,136 +1,122 @@
-use automatafl_api::WebSocketMessage;
-use futures::{StreamExt, SinkExt};
-use gloo_net::websocket::{futures::WebSocket, Message};
+use automatafl_api::{WebSocketMessage};
+use futures::{SinkExt, StreamExt};
+use futures_util::stream::SplitSink;
+use gloo_net::websocket::{futures::WebSocket, Message, WebSocketError};
 use leptos::prelude::*;
-use std::sync::Arc;
-use futures::lock::Mutex;
+use std::cell::RefCell;
+use std::rc::Rc;
 use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
 
-#[derive(Clone)]
+use crate::state::AppState;
+
 pub struct WebSocketConnection {
-    tx: Arc<Mutex<Option<futures_channel::mpsc::UnboundedSender<WebSocketMessage>>>>,
+    sink: Rc<RefCell<Option<SplitSink<WebSocket, Message>>>>,
 }
 
 impl WebSocketConnection {
-    pub fn new() -> (Self, ReadSignal<Option<WebSocketMessage>>) {
-        let (msg_signal, set_msg_signal) = create_signal(None);
-        let connection = Self {
-            tx: Arc::new(Mutex::new(None)),
-        };
-        (connection, msg_signal)
-    }
-
-    pub async fn connect(&self, auth_token: Option<String>, set_msg_signal: WriteSignal<Option<WebSocketMessage>>) {
-        let ws_url = if cfg!(debug_assertions) {
-            "ws://localhost:3000/api/ws"
-        } else {
-            let window = web_sys::window().unwrap();
-            let location = window.location();
-            let protocol = if location.protocol().unwrap() == "https:" { "wss:" } else { "ws:" };
-            let host = location.host().unwrap();
-            format!("{}//{}/api/ws", protocol, host)
-        };
-
-        let ws = match WebSocket::open(&ws_url) {
-            Ok(ws) => ws,
-            Err(e) => {
-                leptos::logging::error!("Failed to connect to WebSocket: {:?}", e);
-                return;
-            }
-        };
-
-        let (mut write, mut read) = ws.split();
-        let (tx, mut rx) = futures_channel::mpsc::unbounded();
+    pub fn new(url: String, app_state: AppState) -> Self {
+        let ws = WebSocket::open(&url).expect("Failed to connect to WebSocket");
+        let (sink, mut stream) = ws.split();
         
-        // Update our sender
-        *self.tx.lock().await = Some(tx);
+        let sink = Rc::new(RefCell::new(Some(sink)));
+        let connection = Self {
+            sink: sink.clone(),
+        };
 
-        // Send auth token if available
-        if let Some(token) = auth_token {
-            let auth_msg = serde_json::json!({
-                "type": "auth",
-                "token": token
-            });
-            if let Ok(msg) = serde_json::to_string(&auth_msg) {
-                let _ = write.send(Message::Text(msg)).await;
-            }
-        }
-
-        // Spawn tasks for reading and writing
+        // Handle incoming messages
         spawn_local(async move {
-            while let Some(msg) = read.next().await {
+            while let Some(msg) = stream.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        match serde_json::from_str::<WebSocketMessage>(&text) {
-                            Ok(ws_msg) => {
-                                set_msg_signal.set(Some(ws_msg));
-                            }
-                            Err(e) => {
-                                leptos::logging::error!("Failed to parse WebSocket message: {:?}", e);
-                            }
+                        if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
+                            app_state.handle_websocket_message(ws_msg);
+                        } else {
+                            web_sys::console::error_1(&format!("Failed to parse WebSocket message: {}", text).into());
                         }
                     }
                     Ok(Message::Bytes(_)) => {
-                        leptos::logging::warn!("Received binary WebSocket message, ignoring");
+                        web_sys::console::warn_1(&"Received binary WebSocket message (ignored)".into());
                     }
                     Err(e) => {
-                        leptos::logging::error!("WebSocket read error: {:?}", e);
+                        web_sys::console::error_1(&format!("WebSocket error: {:?}", e).into());
+                        app_state.websocket_connected.set(false);
                         break;
                     }
                 }
             }
+            
+            // Connection closed
+            app_state.websocket_connected.set(false);
+            *sink.borrow_mut() = None;
         });
 
+        app_state.websocket_connected.set(true);
+        
+        // Start ping/pong keepalive
+        let sink_clone = sink.clone();
         spawn_local(async move {
-            while let Some(msg) = rx.next().await {
-                match serde_json::to_string(&msg) {
-                    Ok(text) => {
-                        if let Err(e) = write.send(Message::Text(text)).await {
-                            leptos::logging::error!("Failed to send WebSocket message: {:?}", e);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        leptos::logging::error!("Failed to serialize WebSocket message: {:?}", e);
-                    }
+            let mut interval = gloo_timers::future::IntervalStream::new(30_000); // 30 seconds
+            while let Some(_) = interval.next().await {
+                if let Err(e) = connection.send_message(WebSocketMessage::Ping).await {
+                    web_sys::console::error_1(&format!("Failed to send ping: {:?}", e).into());
+                    break;
                 }
             }
         });
 
-        // Spawn ping task
-        let tx_clone = self.tx.clone();
-        spawn_local(async move {
-            let mut interval = gloo_timers::future::IntervalStream::new(30_000);
-            while interval.next().await.is_some() {
-                if let Some(ref tx) = *tx_clone.lock().await {
-                    let _ = tx.unbounded_send(WebSocketMessage::Ping);
-                }
-            }
-        });
+        Self { sink: sink_clone }
     }
 
-    pub async fn send(&self, msg: WebSocketMessage) -> Result<(), String> {
-        if let Some(ref tx) = *self.tx.lock().await {
-            tx.unbounded_send(msg)
-                .map_err(|_| "WebSocket connection closed".to_string())
+    pub async fn send_message(&self, msg: WebSocketMessage) -> Result<(), WebSocketError> {
+        if let Some(sink) = self.sink.borrow_mut().as_mut() {
+            let json = serde_json::to_string(&msg).map_err(|e| {
+                WebSocketError::MessageSendError(e.to_string())
+            })?;
+            sink.send(Message::Text(json)).await
         } else {
-            Err("WebSocket not connected".to_string())
+            Err(WebSocketError::ConnectionError("WebSocket not connected".into()))
         }
     }
 
-    pub async fn subscribe_to_game(&self, game_id: Uuid) -> Result<(), String> {
-        self.send(WebSocketMessage::Subscribe { game_id }).await
+    pub async fn subscribe_to_game(&self, game_id: Uuid) -> Result<(), WebSocketError> {
+        self.send_message(WebSocketMessage::Subscribe { game_id }).await
     }
 
-    pub async fn unsubscribe_from_game(&self, game_id: Uuid) -> Result<(), String> {
-        self.send(WebSocketMessage::Unsubscribe { game_id }).await
+    pub async fn unsubscribe_from_game(&self, game_id: Uuid) -> Result<(), WebSocketError> {
+        self.send_message(WebSocketMessage::Unsubscribe { game_id }).await
     }
 
-    pub async fn submit_move_ws(&self, game_id: Uuid, move_data: automatafl_api::SubmitMoveRequest) -> Result<(), String> {
-        self.send(WebSocketMessage::SubmitMove { game_id, move_data }).await
+    pub async fn submit_move(
+        &self,
+        game_id: Uuid,
+        from_x: u8,
+        from_y: u8,
+        to_x: u8,
+        to_y: u8,
+    ) -> Result<(), WebSocketError> {
+        self.send_message(WebSocketMessage::SubmitMove {
+            game_id,
+            move_data: automatafl_api::SubmitMoveRequest {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            },
+        }).await
     }
 
-    pub async fn send_chat_ws(&self, game_id: Uuid, message: String) -> Result<(), String> {
-        self.send(WebSocketMessage::SendChat { game_id, message }).await
+    pub async fn send_chat(&self, game_id: Uuid, message: String) -> Result<(), WebSocketError> {
+        self.send_message(WebSocketMessage::SendChat { game_id, message }).await
+    }
+}
+
+// Helper function to create WebSocket connection with auth
+pub fn create_websocket_connection(app_state: &AppState) -> Option<WebSocketConnection> {
+    if let Some(token) = app_state.auth_token.get() {
+        let url = format!("{}?token={}", app_state.ws_base_url, token);
+        Some(WebSocketConnection::new(url, app_state.clone()))
+    } else {
+        None
     }
 }
