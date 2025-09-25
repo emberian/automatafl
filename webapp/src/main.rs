@@ -7,7 +7,7 @@ mod websocket;
 use api::ApiClient;
 use components::*;
 use leptos::prelude::*;
-use leptos_router::*;
+use leptos_router::{Router, Routes, Route};
 use pages::*;
 use state::{AppState, MatchmakingState};
 use uuid::Uuid;
@@ -43,5 +43,5 @@ fn App() -> impl IntoView {
 
 fn main() {
     console_error_panic_hook::set_once();
-    leptos::mount_to_body(App);
+    leptos::mount::mount_to_body(App);
 }

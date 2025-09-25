@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["logic", "webapp", "backend", "api-models"]
+members = ["logic", "webapp", "backend"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,4 +12,3 @@ license = "Apache-2.0 OR MIT"
 automatafl-logic = { path = "logic" }
 automatafl-webapp = { path = "webapp" }
 automatafl-backend = { path = "backend" }
-automatafl-api = { path = "api-models" }

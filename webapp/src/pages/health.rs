@@ -23,13 +23,13 @@ pub fn HealthDashboardPage() -> impl IntoView {
             
             match client.health_check().await {
                 Ok(data) => {
-                    set_health_data(Some(data));
-                    set_loading(false);
-                    set_error(None);
+                    set_health_data.set(Some(data));
+                    set_loading.set(false);
+                    set_error.set(None);
                 }
                 Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
+                    set_error.set(Some(e));
+                    set_loading.set(false);
                 }
             }
         });
@@ -63,7 +63,7 @@ pub fn HealthDashboardPage() -> impl IntoView {
                             checked=auto_refresh
                             on:change=move |ev| {
                                 let checked = event_target_checked(&ev);
-                                set_auto_refresh(checked);
+                                set_auto_refresh.set(checked);
                                 if !checked {
                                     if let Some(handle) = refresh_interval.get_value() {
                                         handle.clear();
@@ -131,7 +131,7 @@ pub fn HealthDashboardPage() -> impl IntoView {
                                         
                                         <div class="version-info">
                                             <h3>"Version"</h3>
-                                            <code>{&data.version}</code>
+                                            <code>{data.version.clone()}</code>
                                         </div>
                                     </div>
                                     
@@ -219,13 +219,13 @@ pub fn MetricsPage() -> impl IntoView {
             
             match client.get_metrics().await {
                 Ok(data) => {
-                    set_metrics_data(data);
-                    set_loading(false);
-                    set_error(None);
+                    set_metrics_data.set(data);
+                    set_loading.set(false);
+                    set_error.set(None);
                 }
                 Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
+                    set_error.set(Some(e));
+                    set_loading.set(false);
                 }
             }
         });
@@ -259,7 +259,7 @@ pub fn MetricsPage() -> impl IntoView {
                             checked=auto_refresh
                             on:change=move |ev| {
                                 let checked = event_target_checked(&ev);
-                                set_auto_refresh(checked);
+                                set_auto_refresh.set(checked);
                                 if !checked {
                                     if let Some(handle) = refresh_interval.get_value() {
                                         handle.clear();

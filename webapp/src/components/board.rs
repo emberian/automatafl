@@ -5,7 +5,7 @@ use leptos::svg;
 #[component]
 pub fn GameBoard(
     board: Signal<BoardState>,
-    selected_cell: WriteSignal<Option<(u8, u8)>>,
+    selected_cell: ReadSignal<Option<(u8, u8)>>,
     on_cell_click: impl Fn(u8, u8) + 'static + Copy,
     show_coordinates: Signal<bool>,
     highlight_goals: Signal<bool>,

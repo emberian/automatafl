@@ -12,7 +12,7 @@ pub fn UserProfilePage() -> impl IntoView {
     let user_id = move || {
         params.get()
             .get("id")
-            .and_then(|id| Uuid::parse_str(id).ok())
+            .and_then(|id| Uuid::parse_str(&id).ok())
     };
     
     let (profile, set_profile) = create_signal(Option::<UserProfileResponse>::None);
@@ -30,12 +30,12 @@ pub fn UserProfilePage() -> impl IntoView {
                 
                 match client.get_user_profile(id).await {
                     Ok(profile_data) => {
-                        set_profile(Some(profile_data));
-                        set_loading(false);
+                        set_profile.set(Some(profile_data));
+                        set_loading.set(false);
                     }
                     Err(e) => {
-                        set_error(Some(e));
-                        set_loading(false);
+                        set_error.set(Some(e));
+                        set_loading.set(false);
                     }
                 }
             });
@@ -53,7 +53,7 @@ pub fn UserProfilePage() -> impl IntoView {
                             <div class="error-state">
                                 <h2>"User not found"</h2>
                                 <p>{move || error.get().unwrap_or_else(|| "Failed to load user profile".to_string())}</p>
-                                <A href="/leaderboard" class="button">"View Leaderboard"</A>
+                                <A href="/leaderboard" attr:class="button">"View Leaderboard"</A>
                             </div>
                         }
                     >
@@ -65,7 +65,7 @@ pub fn UserProfilePage() -> impl IntoView {
                             view! {
                                 <div class="profile-container">
                                     <div class="profile-header">
-                                        <h1>{&user.username}</h1>
+                                        <h1>{user.username.clone()}</h1>
                                         <div class="profile-badges">
                                             <span class="rating-badge">
                                                 "Rating: " <strong>{user.rating}</strong>
@@ -146,7 +146,7 @@ pub fn UserProfilePage() -> impl IntoView {
                                         </div>
                                         
                                         <div class="view-all-games">
-                                            <A href=format!("/users/{}/games", user.id) class="button">
+                                            <A href=format!("/users/{}/games", user.id) attr:class="button">
                                                 "View All Games"
                                             </A>
                                         </div>
@@ -215,7 +215,7 @@ fn GameSummaryCard(game: GameSummary, user_id: Uuid) -> impl IntoView {
             
             <div class="game-summary-info">
                 <span class="move-count">{game.total_moves} " moves"</span>
-                <A href=format!("/games/{}/history", game.id) class="view-game-link">
+                <A href=format!("/games/{}/history", game.id) attr:class="view-game-link">
                     "View Game →"
                 </A>
             </div>
@@ -231,7 +231,7 @@ pub fn UserGamesPage() -> impl IntoView {
     let user_id = move || {
         params.get()
             .get("id")
-            .and_then(|id| Uuid::parse_str(id).ok())
+            .and_then(|id| Uuid::parse_str(&id).ok())
     };
     
     let (games_response, set_games_response) = create_signal(Option::<UserGamesResponse>::None);
@@ -242,8 +242,8 @@ pub fn UserGamesPage() -> impl IntoView {
     // Fetch games
     let fetch_games = move |page: i32| {
         if let Some(id) = user_id() {
-            set_loading(true);
-            set_error(None);
+            set_loading.set(true);
+            set_error.set(None);
             
             spawn_local(async move {
                 let client = ApiClient::new(
@@ -253,12 +253,12 @@ pub fn UserGamesPage() -> impl IntoView {
                 
                 match client.get_user_games(id, page).await {
                     Ok(response) => {
-                        set_games_response(Some(response));
-                        set_loading(false);
+                        set_games_response.set(Some(response));
+                        set_loading.set(false);
                     }
                     Err(e) => {
-                        set_error(Some(e));
-                        set_loading(false);
+                        set_error.set(Some(e));
+                        set_loading.set(false);
                     }
                 }
             });
@@ -275,7 +275,7 @@ pub fn UserGamesPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Game History"</h1>
                 <Show when=move || user_id().is_some()>
-                    <A href=format!("/users/{}", user_id().unwrap()) class="button button-small">
+                    <A href=format!("/users/{}", user_id().unwrap()) attr:class="button button-small">
                         "← Back to Profile"
                     </A>
                 </Show>
@@ -290,7 +290,7 @@ pub fn UserGamesPage() -> impl IntoView {
                             <div class="error-state">
                                 <h3>"Error loading games"</h3>
                                 <p>{move || error.get().unwrap_or_default()}</p>
-                                <button class="button" on:click=move |_| fetch_games(current_page.get())>
+                                <button attr:class="button" on:click=move |_| fetch_games(current_page.get())>
                                     "Retry"
                                 </button>
                             </div>
@@ -322,11 +322,11 @@ pub fn UserGamesPage() -> impl IntoView {
                                     // Pagination
                                     <div class="pagination">
                                         <button
-                                            class="button button-small"
+                                            attr:class="button button-small"
                                             disabled=move || current_page.get() <= 1
                                             on:click=move |_| {
                                                 let new_page = current_page.get() - 1;
-                                                set_current_page(new_page);
+                                                set_current_page.set(new_page);
                                                 fetch_games(new_page);
                                             }
                                         >
@@ -338,14 +338,14 @@ pub fn UserGamesPage() -> impl IntoView {
                                         </span>
                                         
                                         <button
-                                            class="button button-small"
+                                            attr:class="button button-small"
                                             disabled=move || {
                                                 let total_pages = response.total_games / response.per_page as i64 + 1;
                                                 current_page.get() >= total_pages as i32
                                             }
                                             on:click=move |_| {
                                                 let new_page = current_page.get() + 1;
-                                                set_current_page(new_page);
+                                                set_current_page.set(new_page);
                                                 fetch_games(new_page);
                                             }
                                         >

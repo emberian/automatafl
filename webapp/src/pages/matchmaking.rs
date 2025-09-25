@@ -20,7 +20,7 @@ pub fn MatchmakingPage() -> impl IntoView {
     let poll_interval = store_value(None::<leptos::leptos_dom::helpers::IntervalHandle>);
     
     let start_matchmaking = move |_| {
-        set_error(None);
+        set_error.set(None);
         
         let rating_range = if rating_range_enabled.get() {
             let min = min_rating.get().parse::<i32>().ok();
@@ -29,7 +29,7 @@ pub fn MatchmakingPage() -> impl IntoView {
             match (min, max) {
                 (Some(min), Some(max)) if min <= max => Some((min, max)),
                 _ => {
-                    set_error(Some("Invalid rating range".to_string()));
+                    set_error.set(Some("Invalid rating range".to_string()));
                     return;
                 }
             }
@@ -81,7 +81,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                     poll_interval.set_value(handle);
                 }
                 Err(e) => {
-                    set_error(Some(e));
+                    set_error.set(Some(e));
                 }
             }
         });
@@ -129,7 +129,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                             name="time-control"
                                             value="blitz"
                                             checked=move || time_control.get() == "blitz"
-                                            on:change=move |_| set_time_control("blitz".to_string())
+                                            on:change=move |_| set_time_control.set("blitz".to_string())
                                         />
                                         <span class="option-label">"⚡ Blitz (5 min)"</span>
                                     </label>
@@ -139,7 +139,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                             name="time-control"
                                             value="rapid"
                                             checked=move || time_control.get() == "rapid"
-                                            on:change=move |_| set_time_control("rapid".to_string())
+                                            on:change=move |_| set_time_control.set("rapid".to_string())
                                         />
                                         <span class="option-label">"🏃 Rapid (10 min)"</span>
                                     </label>
@@ -149,7 +149,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                             name="time-control"
                                             value="classical"
                                             checked=move || time_control.get() == "classical"
-                                            on:change=move |_| set_time_control("classical".to_string())
+                                            on:change=move |_| set_time_control.set("classical".to_string())
                                         />
                                         <span class="option-label">"♟️ Classical (30 min)"</span>
                                     </label>
@@ -161,19 +161,19 @@ pub fn MatchmakingPage() -> impl IntoView {
                                     <input
                                         type="checkbox"
                                         checked=rating_range_enabled
-                                        on:change=move |ev| set_rating_range_enabled(event_target_checked(&ev))
+                                        on:change=move |ev| set_rating_range_enabled.set(event_target_checked(&ev))
                                     />
                                     <span>"Set rating range for opponents"</span>
                                 </label>
                                 
-                                <Show when=rating_range_enabled>
+                                <Show when=move || rating_range_enabled.get()>
                                     <div class="rating-range-inputs">
                                         <input
                                             type="number"
                                             class="form-input"
                                             placeholder="Min rating"
                                             value=min_rating
-                                            on:input=move |ev| set_min_rating(event_target_value(&ev))
+                                            on:input=move |ev| set_min_rating.set(event_target_value(&ev))
                                         />
                                         <span class="range-separator">"to"</span>
                                         <input
@@ -181,7 +181,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                             class="form-input"
                                             placeholder="Max rating"
                                             value=max_rating
-                                            on:input=move |ev| set_max_rating(event_target_value(&ev))
+                                            on:input=move |ev| set_max_rating.set(event_target_value(&ev))
                                         />
                                     </div>
                                 </Show>

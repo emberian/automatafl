@@ -5,8 +5,9 @@ use crate::state::AppState;
 #[component]
 pub fn MoveControls(
     game_state: Signal<Option<GameStateResponse>>,
-    selected_cell: RwSignal<Option<(u8, u8)>>,
+    selected_cell: ReadSignal<Option<(u8, u8)>>,
     on_submit_move: impl Fn(u8, u8, u8, u8) + 'static + Copy,
+    on_clear_selection: impl Fn() + 'static + Copy,
 ) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let current_user = app_state.current_user;
@@ -44,7 +45,7 @@ pub fn MoveControls(
     let submit_move = move |_| {
         if let (Some((from_x, from_y)), Some((to_x, to_y))) = (selected_cell.get(), destination_cell.get()) {
             on_submit_move(from_x, from_y, to_x, to_y);
-            selected_cell.set(None);
+            on_clear_selection();
             set_destination_cell(None);
             set_error(None);
         } else {
@@ -53,7 +54,7 @@ pub fn MoveControls(
     };
     
     let clear_selection = move |_| {
-        selected_cell.set(None);
+        on_clear_selection();
         set_destination_cell(None);
         set_error(None);
     };

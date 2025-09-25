@@ -6,7 +6,7 @@ use leptos::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use uuid::Uuid;
-use wasm_bindgen_futures::spawn_local;
+// wasm_bindgen_futures is already included in leptos prelude
 
 use crate::state::AppState;
 
@@ -71,11 +71,11 @@ impl WebSocketConnection {
     pub async fn send_message(&self, msg: WebSocketMessage) -> Result<(), WebSocketError> {
         if let Some(sink) = self.sink.borrow_mut().as_mut() {
             let json = serde_json::to_string(&msg).map_err(|e| {
-                WebSocketError::MessageSendError(e.to_string())
+                WebSocketError::MessageSendError(gloo_utils::errors::JsError::new(e.to_string()))
             })?;
             sink.send(Message::Text(json)).await
         } else {
-            Err(WebSocketError::ConnectionError("WebSocket not connected".into()))
+            Err(WebSocketError::ConnectionError(gloo_utils::errors::JsError::new("WebSocket not connected".to_string())))
         }
     }
 

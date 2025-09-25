@@ -14,8 +14,8 @@ pub fn LeaderboardPage() -> impl IntoView {
     
     // Fetch leaderboard data
     let fetch_leaderboard = move |page: i32| {
-        set_loading(true);
-        set_error(None);
+        set_loading.set(true);
+        set_error.set(None);
         
         spawn_local(async move {
             let client = ApiClient::new(
@@ -25,12 +25,12 @@ pub fn LeaderboardPage() -> impl IntoView {
             
             match client.get_leaderboard(page).await {
                 Ok(response) => {
-                    set_leaderboard(Some(response));
-                    set_loading(false);
+                    set_leaderboard.set(Some(response));
+                    set_loading.set(false);
                 }
                 Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
+                    set_error.set(Some(e));
+                    set_loading.set(false);
                 }
             }
         });
@@ -96,7 +96,7 @@ pub fn LeaderboardPage() -> impl IntoView {
                                                     disabled=move || current_page.get() <= 1
                                                     on:click=move |_| {
                                                         let new_page = current_page.get() - 1;
-                                                        set_current_page(new_page);
+                                                        set_current_page.set(new_page);
                                                         fetch_leaderboard(new_page);
                                                     }
                                                 >
@@ -125,7 +125,7 @@ pub fn LeaderboardPage() -> impl IntoView {
                                                     }
                                                     on:click=move |_| {
                                                         let new_page = current_page.get() + 1;
-                                                        set_current_page(new_page);
+                                                        set_current_page.set(new_page);
                                                         fetch_leaderboard(new_page);
                                                     }
                                                 >
@@ -200,7 +200,7 @@ fn LeaderboardRow(entry: LeaderboardEntry) -> impl IntoView {
                 {entry.rank}
             </div>
             <div class="table-cell player-cell">
-                <A href=format!("/users/{}", entry.user.id) class="player-link">
+                <A href=format!("/users/{}", entry.user.id) attr:class="player-link">
                     {entry.user.username}
                 </A>
                 <Show when=is_current_user>

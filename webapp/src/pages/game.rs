@@ -26,12 +26,12 @@ pub fn GamesListPage() -> impl IntoView {
             
             match client.list_games().await {
                 Ok(game_list) => {
-                    set_games(game_list);
-                    set_loading(false);
+                    set_games.set(game_list);
+                    set_loading.set(false);
                 }
                 Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
+                    set_error.set(Some(e));
+                    set_loading.set(false);
                 }
             }
         });
@@ -42,10 +42,10 @@ pub fn GamesListPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Active Games"</h1>
                 <div class="header-actions">
-                    <A href="/games/create" class="button button-primary">
+                    <A href="/games/create" attr:class="button button-primary">
                         "Create New Game"
                     </A>
-                    <A href="/matchmaking" class="button button-secondary">
+                    <A href="/matchmaking" attr:class="button button-secondary">
                         "Quick Match"
                     </A>
                 </div>
@@ -78,9 +78,9 @@ pub fn GamesListPage() -> impl IntoView {
                         <div class="error-state">
                             <h3>"Error loading games"</h3>
                             <p>{move || error.get().unwrap_or_default()}</p>
-                            <button class="button" on:click=move |_| {
-                                set_loading(true);
-                                set_error(None);
+                            <button attr:class="button" on:click=move |_| {
+                                set_loading.set(true);
+                                set_error.set(None);
                                 // Trigger refetch by updating effect
                             }>
                                 "Retry"
@@ -143,16 +143,16 @@ fn GameCard(game: GameStateResponse) -> impl IntoView {
             </Show>
             
             <div class="game-card-actions">
-                <A href=format!("/games/{}", game.id) class="button button-small">
+                <A href=format!("/games/{}", game.id) attr:class="button button-small">
                     "View Game"
                 </A>
                 <Show when=move || game.round_state == "waiting">
-                    <button class="button button-small button-primary">
+                    <button attr:class="button button-small button-primary">
                         "Join Game"
                     </button>
                 </Show>
                 <Show when=move || game.round_state == "active">
-                    <A href=format!("/games/{}/spectate", game.id) class="button button-small">
+                    <A href=format!("/games/{}/spectate", game.id) attr:class="button button-small">
                         "Spectate"
                     </A>
                 </Show>
@@ -171,8 +171,8 @@ pub fn CreateGamePage() -> impl IntoView {
     let (error, set_error) = create_signal(Option::<String>::None);
 
     let create_game = move |_| {
-        set_creating(true);
-        set_error(None);
+        set_creating.set(true);
+        set_error.set(None);
         
         let time_control_value = if time_control.get() == "none" {
             None
@@ -191,8 +191,8 @@ pub fn CreateGamePage() -> impl IntoView {
                     navigate(&format!("/games/{}", game.id), Default::default());
                 }
                 Err(e) => {
-                    set_error(Some(e));
-                    set_creating(false);
+                    set_error.set(Some(e));
+                    set_creating.set(false);
                 }
             }
         });
@@ -208,7 +208,7 @@ pub fn CreateGamePage() -> impl IntoView {
                         <label>"Time Control"</label>
                         <select
                             class="form-select"
-                            on:change=move |ev| set_time_control(event_target_value(&ev))
+                            on:change=move |ev| set_time_control.set(event_target_value(&ev))
                             prop:value=time_control
                         >
                             <option value="none">"No time limit"</option>
@@ -237,13 +237,13 @@ pub fn CreateGamePage() -> impl IntoView {
                 
                 <div class="form-actions">
                     <button
-                        class="button button-primary"
+                        attr:class="button button-primary"
                         on:click=create_game
                         disabled=creating
                     >
                         {move || if creating.get() { "Creating..." } else { "Create Game" }}
                     </button>
-                    <A href="/games" class="button button-secondary">
+                    <A href="/games" attr:class="button button-secondary">
                         "Cancel"
                     </A>
                 </div>
@@ -260,7 +260,7 @@ pub fn GamePage() -> impl IntoView {
     let game_id = move || {
         params.get()
             .get("id")
-            .and_then(|id| Uuid::parse_str(id).ok())
+            .and_then(|id| Uuid::parse_str(&id).ok())
     };
     
     let (game_state, set_game_state) = create_signal(Option::<GameStateResponse>::None);
@@ -282,8 +282,8 @@ pub fn GamePage() -> impl IntoView {
                 
                 match client.get_game(id).await {
                     Ok(game) => {
-                        set_game_state(Some(game));
-                        set_loading(false);
+                        set_game_state.set(Some(game));
+                        set_loading.set(false);
                         
                         // Setup WebSocket connection
                         if let Some(ws) = create_websocket_connection(&app_state) {
@@ -292,8 +292,8 @@ pub fn GamePage() -> impl IntoView {
                         }
                     }
                     Err(e) => {
-                        set_error(Some(e));
-                        set_loading(false);
+                        set_error.set(Some(e));
+                        set_loading.set(false);
                     }
                 }
             });
@@ -311,20 +311,20 @@ pub fn GamePage() -> impl IntoView {
                             <div class="error-state">
                                 <h2>"Error loading game"</h2>
                                 <p>{move || error.get().unwrap_or_else(|| "Game not found".to_string())}</p>
-                                <A href="/games" class="button">"Back to Games"</A>
+                                <A href="/games" attr:class="button">"Back to Games"</A>
                             </div>
                         }
                     >
                         {move || {
                             let game = game_state.get().unwrap();
-                            let board_signal = create_memo(move |_| game_state.get().unwrap().board);
+                            let board_signal = move || game_state.get().unwrap().board;
                             
                             view! {
                                 <div class="game-container">
                                     <div class="game-header">
                                         <h1>"Game " {game.id.to_string().chars().take(8).collect::<String>()}</h1>
                                         <div class="game-actions">
-                                            <A href=format!("/games/{}/history", game.id) class="button button-small">
+                                            <A href=format!("/games/{}/history", game.id) attr:class="button button-small">
                                                 "View History"
                                             </A>
                                         </div>
@@ -332,20 +332,23 @@ pub fn GamePage() -> impl IntoView {
                                     
                                     <div class="game-content">
                                         <div class="game-left-panel">
-                                            <GameInfo game_state=game_state />
+                                            <GameInfo game_state=game_state.into() />
                                             <MoveControls
-                                                game_state=game_state
+                                                game_state=game_state.into()
                                                 selected_cell=selected_cell
                                                 on_submit_move=move |from_x, from_y, to_x, to_y| {
                                                     // Submit move logic
+                                                }
+                                                on_clear_selection=move || {
+                                                    set_selected_cell.set(None);
                                                 }
                                             />
                                         </div>
                                         
                                         <div class="game-center">
                                             <GameBoard
-                                                board=board_signal
-                                                selected_cell=set_selected_cell
+                                                board=Signal::derive(board_signal)
+                                                selected_cell=selected_cell
                                                 on_cell_click=move |x, y| {
                                                     set_selected_cell.update(|sel| {
                                                         if *sel == Some((x, y)) {
@@ -355,8 +358,8 @@ pub fn GamePage() -> impl IntoView {
                                                         }
                                                     });
                                                 }
-                                                show_coordinates=create_memo(move |_| false)
-                                                highlight_goals=create_memo(move |_| true)
+                                                show_coordinates=Signal::derive(move || false)
+                                                highlight_goals=Signal::derive(move || true)
                                             />
                                         </div>
                                         

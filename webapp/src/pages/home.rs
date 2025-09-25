@@ -19,21 +19,21 @@ pub fn HomePage() -> impl IntoView {
                     <Show
                         when=move || user.get().is_some()
                         fallback=|| view! {
-                            <A href="/register" class="button button-primary button-large">
+                            <A href="/register" attr:attr:class="button button-primary button-large">
                                 "Get Started"
                             </A>
-                            <A href="/login" class="button button-secondary button-large">
+                            <A href="/login" attr:class="button button-secondary button-large">
                                 "Login"
                             </A>
                         }
                     >
-                        <A href="/games" class="button button-primary button-large">
+                        <A href="/games" attr:class="button button-primary button-large">
                             "View Games"
                         </A>
-                        <A href="/games/create" class="button button-secondary button-large">
+                        <A href="/games/create" attr:class="button button-secondary button-large">
                             "Create Game"
                         </A>
-                        <A href="/matchmaking" class="button button-secondary button-large">
+                        <A href="/matchmaking" attr:class="button button-secondary button-large">
                             "Quick Match"
                         </A>
                     </Show>
