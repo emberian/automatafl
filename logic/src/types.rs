@@ -78,7 +78,7 @@ pub enum AutomatonDecision {
 }
 
 /// Player ID within a single game
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Pid(pub u8);
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
