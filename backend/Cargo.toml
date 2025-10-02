@@ -11,9 +11,15 @@ automatafl-logic = { path = "../logic" }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+tower-http = { version = "0.6", features = ["cors"] }
 
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+bcrypt = "0.16"
+async-trait = "0.1"
