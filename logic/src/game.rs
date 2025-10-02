@@ -157,10 +157,11 @@ impl Game {
     pub fn try_complete_round(&mut self) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
-                // Lift the moved pieces off the board
+                // Lift the moved pieces off the board and mark paths as passable
 
                 for m in &moves_to_apply {
                     self.board.mark_passable(m.from);
+                    self.board.mark_passable(m.to);  // Align with Python: mark destination too
                 }
 
                 let mut results = SmallVec::with_capacity(moves_to_apply.len());
@@ -200,6 +201,7 @@ impl Game {
                     }
                     None => {
                         self.board.clear_marks();
+                        self.locked_players.clear();  // Clear locked players for next round
                         self.round = RoundState::Fresh;
                     }
                 }
@@ -208,13 +210,18 @@ impl Game {
             }
             Err(moves_conflicted) => {
                 self.round = RoundState::ResolvingConflict;
-                self.pending_moves
-                    .retain(|e| !moves_conflicted.contains(&e));
-                for m in &moves_conflicted {
-                    if !self.locked_players.contains(&m.who) {
+
+                // Lock the NON-conflicted players (they keep their moves)
+                for m in &self.pending_moves {
+                    if !moves_conflicted.contains(&m) && !self.locked_players.contains(&m.who) {
                         self.locked_players.push(m.who);
                     }
                 }
+
+                // Remove conflicted moves so conflicted players can resubmit
+                self.pending_moves
+                    .retain(|e| !moves_conflicted.contains(&e));
+
                 Err(())
             }
         }
@@ -290,13 +297,15 @@ impl Game {
 
         let offset = if x_decision > y_decision {
             x_decision.delta(Delta::XP)
+        } else if y_decision > x_decision {
+            y_decision.delta(Delta::YP)
         } else {
-            // If the options are equally preferable, don't move unless we're using the column rule.
-            if !self.use_column_rule && x_decision == y_decision {
-                info!("avoided applying the column rule");
-                Delta::ZERO
+            // Equal priority: apply column rule if enabled
+            if self.use_column_rule {
+                x_decision.delta(Delta::XP)  // Column rule: prefer X axis
             } else {
-                y_decision.delta(Delta::YP)
+                info!("avoided applying the column rule - no move");
+                Delta::ZERO
             }
         };
 
