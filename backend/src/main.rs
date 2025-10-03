@@ -1,6 +1,8 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{SystemTime, Duration}};
 
 use automatafl_logic::{Board, Coord, Move, MoveFeedback, Pid};
+use automatafl_api_types::*;
+
 use axum::{
     Json, Router,
     extract::{Path, State, FromRequestParts, ws::{WebSocket, WebSocketUpgrade, Message}},
@@ -10,7 +12,6 @@ use axum::{
 };
 
 use futures::{stream::StreamExt, SinkExt};
-use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -23,35 +24,6 @@ const CARGO_PACKAGE_VERSION: Option<&str> = std::option_env!("CARGO_PACKAGE_VERS
 // ============================================================================
 // State Types
 // ============================================================================
-
-#[derive(Clone)]
-struct PlayerInfo {
-    id: Uuid,
-    displayname: String,
-    password_hash: String,
-    is_admin: bool,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-enum GameLifecycle {
-    Waiting,
-    InProgress,
-    Finished,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ChatMessage {
-    timestamp: u64,
-    player_id: Uuid,
-    displayname: String,
-    message: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct GameEvent {
-    kind: String,
-    data: serde_json::Value,
-}
 
 #[derive(Clone)]
 struct GameState {
@@ -70,12 +42,6 @@ struct GameSnapshot {
     player_ids: HashMap<Uuid, automatafl_logic::Pid>,
     lifecycle: GameLifecycle,
     timestamp: u64,
-}
-
-#[derive(Clone)]
-struct Session {
-    player_id: Uuid,
-    expires_at: u64,  // Unix timestamp
 }
 
 const SESSION_DURATION_SECS: u64 = 24 * 60 * 60;  // 24 hours
@@ -136,6 +102,7 @@ impl FromRequestParts<Arc<RwLock<AppState>>> for AuthPlayer {
 
 /// Admin player extractor
 struct AdminPlayer {
+    #[allow(unused)]
     player_id: Uuid,
 }
 
@@ -382,14 +349,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<RwLock<AppState>>, game_uui
 // Health Check
 // ============================================================================
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: String,
-    api_version: String,
-    cargo_package_version: Option<String>,
-    timestamp: u64,
-}
-
 async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
@@ -403,20 +362,9 @@ async fn health_check() -> Json<HealthResponse> {
 // Auth Endpoints
 // ============================================================================
 
-#[derive(Deserialize)]
-struct RegisterPlayer {
-    displayname: String,
-    password: String,
-}
-
-#[derive(Serialize)]
-struct RegisterResponse {
-    player_id: Uuid,
-}
-
 async fn register_player(
     State(state): ServerState,
-    Json(payload): Json<RegisterPlayer>,
+    Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, AppError> {
     let mut state = state.write().await;
 
@@ -449,17 +397,6 @@ async fn register_player(
     }))
 }
 
-#[derive(Deserialize)]
-struct LoginRequest {
-    displayname: String,
-    password: String,
-}
-
-#[derive(Serialize)]
-struct LoginResponse {
-    session_id: Uuid,
-    player_id: Uuid,
-}
 
 async fn login(
     State(state): ServerState,
@@ -509,16 +446,6 @@ async fn logout(auth: AuthPlayer, State(state): ServerState) -> StatusCode {
 // Game Management Endpoints
 // ============================================================================
 
-#[derive(Serialize)]
-struct GameListItem {
-    id: Uuid,
-    lifecycle: GameLifecycle,
-    player_count: usize,
-    max_players: u8,
-    created_at: u64,
-    created_by: Uuid,
-}
-
 async fn list_games(State(state): ServerState) -> Json<Vec<GameListItem>> {
     let state = state.read().await;
     let games = state
@@ -534,12 +461,6 @@ async fn list_games(State(state): ServerState) -> Json<Vec<GameListItem>> {
         })
         .collect();
     Json(games)
-}
-
-#[derive(Deserialize)]
-struct CreateGameRequest {
-    player_count: u8,
-    use_column_rule: bool,
 }
 
 async fn create_game(
@@ -630,13 +551,6 @@ async fn join_game(
     Ok(Json(new_player_id))
 }
 
-#[derive(Serialize)]
-struct GameStateResponse {
-    lifecycle: GameLifecycle,
-    game: automatafl_logic::Game,
-    player_ids: HashMap<Uuid, Pid>,
-}
-
 async fn get_game_state(
     _auth: AuthPlayer,
     State(state): ServerState,
@@ -695,19 +609,6 @@ async fn pending_move(
             .find(|mv| mv.who == player_in_game.player_pid)
             .cloned(),
     ))
-}
-
-#[derive(Serialize, Deserialize)]
-struct PerformMove {
-    from: Coord,
-    to: Coord,
-}
-
-#[derive(Serialize, Deserialize)]
-struct MoveResult {
-    feedback: MoveFeedback,
-    ready_to_complete: bool,
-    auto_completed: bool,
 }
 
 async fn perform_move(
@@ -823,12 +724,6 @@ async fn perform_move(
     }))
 }
 
-#[derive(Serialize)]
-struct CompleteRoundResponse {
-    success: bool,
-    message: String,
-}
-
 async fn complete_round(
     auth: AuthPlayer,
     State(state): ServerState,
@@ -917,15 +812,6 @@ async fn complete_round(
 // Chat Endpoints
 // ============================================================================
 
-#[derive(Deserialize)]
-struct PostChatRequest {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct PostChatResponse {
-    timestamp: u64,
-}
 
 async fn post_chat(
     auth: AuthPlayer,
@@ -992,11 +878,6 @@ async fn get_chat(
 // Save/Load Endpoints
 // ============================================================================
 
-#[derive(Serialize)]
-struct SaveGameResponse {
-    snapshot_index: usize,
-}
-
 async fn save_game(
     auth: AuthPlayer,
     State(state): ServerState,
@@ -1024,17 +905,6 @@ async fn save_game(
     Ok(Json(SaveGameResponse {
         snapshot_index: index,
     }))
-}
-
-#[derive(Serialize)]
-struct ListSnapshotsResponse {
-    snapshots: Vec<SnapshotInfo>,
-}
-
-#[derive(Serialize)]
-struct SnapshotInfo {
-    index: usize,
-    timestamp: u64,
 }
 
 async fn list_snapshots(
@@ -1100,13 +970,6 @@ async fn load_game(
 // ============================================================================
 // Admin Endpoints
 // ============================================================================
-
-#[derive(Serialize)]
-struct PlayerListItem {
-    id: Uuid,
-    displayname: String,
-    is_admin: bool,
-}
 
 async fn admin_list_players(
     _admin: AdminPlayer,
@@ -1196,20 +1059,20 @@ async fn main() {
         // Authenticated endpoints
         .route("/api/v1/logout", post(logout))
         .route("/api/v1/games", get(list_games).post(create_game))
-        .route("/api/v1/games/:id", get(get_game_state).post(join_game))
-        .route("/api/v1/games/:id/goals", get(get_goals))
-        .route("/api/v1/games/:id/move", get(pending_move).post(perform_move))
-        .route("/api/v1/games/:id/complete", post(complete_round))
-        .route("/api/v1/games/:id/chat", get(get_chat).post(post_chat))
-        .route("/api/v1/games/:id/save", post(save_game))
-        .route("/api/v1/games/:id/snapshots", get(list_snapshots))
-        .route("/api/v1/games/:id/load/:snapshot_index", post(load_game))
-        .route("/api/v1/games/:id/ws", get(ws_handler))
+        .route("/api/v1/games/{:id}", get(get_game_state).post(join_game))
+        .route("/api/v1/games/{:id}/goals", get(get_goals))
+        .route("/api/v1/games/{:id}/move", get(pending_move).post(perform_move))
+        .route("/api/v1/games/{:id}/complete", post(complete_round))
+        .route("/api/v1/games/{:id}/chat", get(get_chat).post(post_chat))
+        .route("/api/v1/games/{:id}/save", post(save_game))
+        .route("/api/v1/games/{:id}/snapshots", get(list_snapshots))
+        .route("/api/v1/games/{:id}/load/{:snapshot_index}", post(load_game))
+        .route("/api/v1/games/{:id}/ws", get(ws_handler))
         // Admin endpoints
         .route("/api/v1/admin/players", get(admin_list_players))
         .route("/api/v1/admin/games", get(admin_list_all_games))
-        .route("/api/v1/admin/games/:id", axum::routing::delete(admin_delete_game))
-        .route("/api/v1/admin/games/:id/force-complete", post(admin_force_complete_round))
+        .route("/api/v1/admin/games/{:id}", axum::routing::delete(admin_delete_game))
+        .route("/api/v1/admin/games/{:id}/force-complete", post(admin_force_complete_round))
         .layer(cors)  // Apply CORS to all routes
         .with_state(Arc::new(RwLock::new(AppState {
             games: HashMap::new(),
