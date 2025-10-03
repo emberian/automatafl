@@ -1,8 +1,5 @@
 // AdminPanel component - comprehensive admin functionality
-use crate::{
-    components::{use_modal, use_toast},
-    state::AppState,
-};
+use crate::{components::use_modal, state::AppState};
 use automatafl_api_types::{GameListItem, PlayerListItem};
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -94,58 +91,35 @@ fn AdminPlayersTab(
 ) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
-    let toast = use_toast();
 
-    let (players, set_players) = signal(Vec::<PlayerListItem>::new());
-    let (refresh_trigger, set_refresh_trigger) = signal(0u32);
+    // Delete action with automatic toasts
+    let app_state_for_delete = app_state.clone();
+    let delete_player_action = crate::helpers::use_toast_action(
+        move |pid: &Uuid| {
+            let app_state = app_state_for_delete.clone();
+            let pid = *pid;
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_delete_player(pid)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Player deleted successfully".to_string()),
+        Some("Failed to delete player".to_string()),
+    );
 
-    let app_state_for_load_players = app_state.clone();
-    let load_players_action = Action::new_local(move |_: &()| {
-        let app_state = app_state_for_load_players.clone();
+    // Players resource - auto-refreshes when delete_action completes
+    let app_state_for_players = app_state.clone();
+    let players_resource = LocalResource::new(move || {
+        // Depend on delete_action.version() to auto-refresh on deletions
+        delete_player_action.version().get();
+
+        let app_state = app_state_for_players.clone();
         async move {
             let client = app_state.get_api_client();
-            client.admin_list_players().await.map_err(|e| e.to_string())
-        }
-    });
-
-    let app_state_for_delete_player = app_state.clone();
-    let delete_player_action = Action::new_local(move |pid: &Uuid| {
-        let app_state = app_state_for_delete_player.clone();
-        let pid = *pid;
-        async move {
-            let client = app_state.get_api_client();
-            client
-                .admin_delete_player(pid)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    });
-
-    let _ = Effect::new(move |_| {
-        let _ = refresh_trigger.get();
-        load_players_action.dispatch(());
-    });
-
-    let toast_clone = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = load_players_action.value().get() {
-            match result {
-                Ok(player_list) => set_players.set(player_list),
-                Err(e) => toast_clone.error(format!("Failed to load players: {}", e)),
-            }
-        }
-    });
-
-    let toast_clone2 = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = delete_player_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone2.success("Player deleted successfully");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone2.error(format!("Failed to delete player: {}", e)),
-            }
+            client.admin_list_players().await
         }
     });
 
@@ -153,12 +127,6 @@ fn AdminPlayersTab(
         <div class="admin-section">
             <div class="section-header">
                 <h3>"Player Management"</h3>
-                <button
-                    class="button button-small"
-                    on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
-                >
-                    "🔄 Refresh"
-                </button>
             </div>
 
             <div class="players-table-container">
@@ -167,16 +135,19 @@ fn AdminPlayersTab(
                 }>
                     {move || {
                         let modal = modal.clone();
-                        let player_list = players.get();
-                        if player_list.is_empty() {
-                            view! {
-                                <div class="empty-state">
-                                    <p>"No players found"</p>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <table class="admin-table">
+                        players_resource.map(|result| {
+                            match result {
+                                Ok(player_value) => {
+                                    if let Ok(player_list) = serde_json::from_value::<Vec<PlayerListItem>>(player_value.clone()) {
+                                        if player_list.is_empty() {
+                                        view! {
+                                            <div class="empty-state">
+                                                <p>"No players found"</p>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <table class="admin-table">
                                     <thead>
                                         <tr>
                                             <th>"Display Name"</th>
@@ -223,7 +194,18 @@ fn AdminPlayersTab(
                                     </tbody>
                                 </table>
                             }.into_any()
-                        }
+                                        }
+                                    } else {
+                                        view! {
+                                            <div class="error-state">"Failed to parse player data"</div>
+                                        }.into_any()
+                                    }
+                                }
+                                Err(e) => view! {
+                                    <div class="error-state">"Failed to load players: " {e.to_string()}</div>
+                                }.into_any()
+                            }
+                        })
                     }}
                 </Suspense>
             </div>
@@ -242,85 +224,51 @@ fn AdminGamesTab(
 ) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
-    let toast = use_toast();
 
-    let (games, set_games) = signal(Vec::<GameListItem>::new());
-    let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-
-    let app_state_for_load_games = app_state.clone();
-    let load_games_action = Action::new_local(move |_: &()| {
-        let app_state = app_state_for_load_games.clone();
-        async move {
-            let client = app_state.get_api_client();
-            client.admin_list_games().await.map_err(|e| e.to_string())
-        }
-    });
-
-    let app_state_for_delete_game = app_state.clone();
-    let delete_game_action = Action::new_local(move |gid: &Uuid| {
-        let app_state = app_state_for_delete_game.clone();
-        let gid = *gid;
-        async move {
-            let client = app_state.get_api_client();
-            client
-                .admin_delete_game(gid)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    });
+    let app_state_for_delete = app_state.clone();
+    let delete_game_action = crate::helpers::use_toast_action(
+        move |gid: &Uuid| {
+            let app_state = app_state_for_delete.clone();
+            let gid = *gid;
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_delete_game(gid)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Game deleted successfully".to_string()),
+        Some("Failed to delete game".to_string()),
+    );
 
     let app_state_for_force_complete = app_state.clone();
-    let force_complete_action = Action::new_local(move |gid: &Uuid| {
-        let app_state = app_state_for_force_complete.clone();
-        let gid = *gid;
+    let force_complete_action = crate::helpers::use_toast_action(
+        move |gid: &Uuid| {
+            let app_state = app_state_for_force_complete.clone();
+            let gid = *gid;
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_force_complete_round(gid)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Round completed successfully".to_string()),
+        Some("Failed to complete round".to_string()),
+    );
+
+    let app_state_for_games = app_state.clone();
+    let games_resource = LocalResource::new(move || {
+        delete_game_action.version().get();
+        force_complete_action.version().get();
+
+        let app_state = app_state_for_games.clone();
         async move {
             let client = app_state.get_api_client();
-            client
-                .admin_force_complete_round(gid)
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        }
-    });
-
-    let _ = Effect::new(move |_| {
-        let _ = refresh_trigger.get();
-        load_games_action.dispatch(());
-    });
-
-    let toast_clone = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = load_games_action.value().get() {
-            match result {
-                Ok(game_list) => set_games.set(game_list),
-                Err(e) => toast_clone.error(format!("Failed to load games: {}", e)),
-            }
-        }
-    });
-
-    let toast_clone2 = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = delete_game_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone2.success("Game deleted successfully");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone2.error(format!("Failed to delete game: {}", e)),
-            }
-        }
-    });
-
-    let toast_clone3 = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = force_complete_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone3.success("Round completed successfully");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone3.error(format!("Failed to complete round: {}", e)),
-            }
+            client.admin_list_games().await
         }
     });
 
@@ -328,12 +276,6 @@ fn AdminGamesTab(
         <div class="admin-section">
             <div class="section-header">
                 <h3>"Game Management"</h3>
-                <button
-                    class="button button-small"
-                    on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
-                >
-                    "🔄 Refresh"
-                </button>
             </div>
 
             <div class="games-table-container">
@@ -342,59 +284,62 @@ fn AdminGamesTab(
                 }>
                     {move || {
                         let modal = modal.clone();
-                        let game_list = games.get();
-                        if game_list.is_empty() {
-                            view! {
-                                <div class="empty-state">
-                                    <p>"No games found"</p>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <table class="admin-table">
-                                    <thead>
-                                        <tr>
-                                            <th>"Game ID"</th>
-                                            <th>"Status"</th>
-                                            <th>"Players"</th>
-                                            <th>"Created"</th>
-                                            <th>"Actions"</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {game_list.into_iter().map(|game| {
-                                            let game_id = game.id;
-                                            let modal = modal.clone();
-                                            let lifecycle_str = format!("{:?}", game.lifecycle);
-                                            let created_str = chrono::DateTime::from_timestamp(game.created_at as i64, 0)
-                                                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                                                .unwrap_or_else(|| "Unknown".to_string());
+                        games_resource.map(|result| {
+                            match result {
+                                Ok(game_value) => {
+                                    if let Ok(game_list) = serde_json::from_value::<Vec<GameListItem>>(game_value.clone()) {
+                                        if game_list.is_empty() {
+                                        view! {
+                                            <div class="empty-state">
+                                                <p>"No games found"</p>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <table class="admin-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>"Game ID"</th>
+                                                        <th>"Status"</th>
+                                                        <th>"Players"</th>
+                                                        <th>"Created"</th>
+                                                        <th>"Actions"</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {game_list.into_iter().map(|game| {
+                                                        let game_id = game.id;
+                                                        let modal = modal.clone();
+                                                        let lifecycle_str = format!("{:?}", game.lifecycle);
+                                                        let created_str = chrono::DateTime::from_timestamp(game.created_at as i64, 0)
+                                                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                                            .unwrap_or_else(|| "Unknown".to_string());
 
-                                            view! {
-                                                <tr>
-                                                    <td class="monospace">{game.id.to_string().chars().take(8).collect::<String>()}"..."</td>
-                                                    <td><span class="badge">{lifecycle_str}</span></td>
-                                                    <td>{game.player_count}" / "{game.max_players}</td>
-                                                    <td>{created_str}</td>
-                                                    <td class="actions">
-                                                        <a href=format!("/games/{}", game_id) class="button button-small">"View"</a>
-                                                        <button
-                                                            class="button button-small button-warning"
-                                                            on:click=move |_| { let _ = force_complete_action.dispatch(game_id); }
-                                                            disabled=move || force_complete_action.pending().get()
-                                                        >
-                                                            "Force Complete"
-                                                        </button>
-                                                        <button
-                                                            class="button button-small button-danger"
-                                                            on:click=move |_| {
-                                                                modal.confirm_danger(
-                                                                    "Delete Game?",
-                                                                    "This will permanently delete the game and all its data. This action cannot be undone.",
-                                                                    move || { delete_game_action.dispatch(game_id); }
-                                                                );
-                                                            }
-                                                            disabled=move || delete_game_action.pending().get()
+                                                        view! {
+                                                            <tr>
+                                                                <td class="monospace">{game.id.to_string().chars().take(8).collect::<String>()}"..."</td>
+                                                                <td><span class="badge">{lifecycle_str}</span></td>
+                                                                <td>{game.player_count}" / "{game.max_players}</td>
+                                                                <td>{created_str}</td>
+                                                                <td class="actions">
+                                                                    <a href=format!("/games/{}", game_id) class="button button-small">"View"</a>
+                                                                    <button
+                                                                        class="button button-small button-warning"
+                                                                        on:click=move |_| { let _ = force_complete_action.dispatch(game_id); }
+                                                                        disabled=move || force_complete_action.pending().get()
+                                                                    >
+                                                                        "Force Complete"
+                                                                    </button>
+                                                                    <button
+                                                                        class="button button-small button-danger"
+                                                                        on:click=move |_| {
+                                                                            modal.confirm_danger(
+                                                                                "Delete Game?",
+                                                                                "This will permanently delete the game and all its data. This action cannot be undone.",
+                                                                                move || { delete_game_action.dispatch(game_id); }
+                                                                            );
+                                                                        }
+                                                                        disabled=move || delete_game_action.pending().get()
                                                         >
                                                             "Delete"
                                                         </button>
@@ -405,7 +350,18 @@ fn AdminGamesTab(
                                     </tbody>
                                 </table>
                             }.into_any()
-                        }
+                                        }
+                                    } else {
+                                        view! {
+                                            <div class="error-state">"Failed to parse games data"</div>
+                                        }.into_any()
+                                    }
+                                }
+                                Err(e) => view! {
+                                    <div class="error-state">"Failed to load games: " {e.to_string()}</div>
+                                }.into_any()
+                            }
+                        })
                     }}
                 </Suspense>
             </div>
@@ -423,68 +379,49 @@ fn AdminSessionsTab(
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let toast = use_toast();
 
-    let (refresh_trigger, set_refresh_trigger) = signal(0u32);
+    let app_state_for_delete = app_state.clone();
+    let delete_session_action = crate::helpers::use_toast_action(
+        move |sid: &Uuid| {
+            let app_state = app_state_for_delete.clone();
+            let sid = *sid;
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_delete_session(sid)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Session revoked successfully".to_string()),
+        Some("Failed to revoke session".to_string()),
+    );
+
+    let app_state_for_cleanup = app_state.clone();
+    let cleanup_action = crate::helpers::use_toast_action(
+        move |_: &()| {
+            let app_state = app_state_for_cleanup.clone();
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_cleanup_expired_sessions()
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Expired sessions cleaned up".to_string()),
+        Some("Failed to cleanup sessions".to_string()),
+    );
 
     let app_state_for_sessions = app_state.clone();
     let sessions_resource = LocalResource::new(move || {
-        let _ = refresh_trigger.get();
+        delete_session_action.version().get();
+        cleanup_action.version().get();
+
         let app_state = app_state_for_sessions.clone();
         async move {
             let client = app_state.get_api_client();
             client.admin_list_sessions().await
-        }
-    });
-
-    let app_state_for_delete_session = app_state.clone();
-    let delete_session_action = Action::new_local(move |sid: &Uuid| {
-        let app_state = app_state_for_delete_session.clone();
-        let sid = *sid;
-        async move {
-            let client = app_state.get_api_client();
-            client
-                .admin_delete_session(sid)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    });
-
-    let app_state_for_cleanup = app_state.clone();
-    let cleanup_action = Action::new_local(move |_: &()| {
-        let app_state = app_state_for_cleanup.clone();
-        async move {
-            let client = app_state.get_api_client();
-            client
-                .admin_cleanup_expired_sessions()
-                .await
-                .map_err(|e| e.to_string())
-        }
-    });
-
-    let toast_clone = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = delete_session_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone.success("Session revoked successfully");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone.error(format!("Failed to revoke session: {}", e)),
-            }
-        }
-    });
-
-    let toast_clone2 = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = cleanup_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone2.success("Expired sessions cleaned up");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone2.error(format!("Failed to cleanup sessions: {}", e)),
-            }
         }
     });
 
@@ -493,18 +430,12 @@ fn AdminSessionsTab(
             <div class="section-header">
                 <h3>"Session Management"</h3>
                 <div class="header-actions">
-                                        <button
-                                            class="button button-small button-warning"
-                                            on:click=move |_| { let _ = cleanup_action.dispatch(()); }
-                                            disabled=move || cleanup_action.pending().get()
-                                        >
-                        "🧹 Cleanup Expired"
-                    </button>
                     <button
-                        class="button button-small"
-                        on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
+                        class="button button-small button-warning"
+                        on:click=move |_| { let _ = cleanup_action.dispatch(()); }
+                        disabled=move || cleanup_action.pending().get()
                     >
-                        "🔄 Refresh"
+                        "🧹 Cleanup Expired"
                     </button>
                 </div>
             </div>
@@ -591,13 +522,28 @@ fn AdminMatchmakingTab(
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let toast = use_toast();
 
-    let (refresh_trigger, set_refresh_trigger) = signal(0u32);
+    let app_state_for_remove = app_state.clone();
+    let remove_action = crate::helpers::use_toast_action(
+        move |pid: &Uuid| {
+            let app_state = app_state_for_remove.clone();
+            let pid = *pid;
+            async move {
+                let client = app_state.get_api_client();
+                client
+                    .admin_remove_from_matchmaking(pid)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
+        Some("Player removed from queue".to_string()),
+        Some("Failed to remove player".to_string()),
+    );
 
     let app_state_for_queue = app_state.clone();
     let queue_resource = LocalResource::new(move || {
-        let _ = refresh_trigger.get();
+        remove_action.version().get();
+
         let app_state = app_state_for_queue.clone();
         async move {
             let client = app_state.get_api_client();
@@ -605,42 +551,10 @@ fn AdminMatchmakingTab(
         }
     });
 
-    let app_state_for_remove = app_state.clone();
-    let remove_action = Action::new_local(move |pid: &Uuid| {
-        let app_state = app_state_for_remove.clone();
-        let pid = *pid;
-        async move {
-            let client = app_state.get_api_client();
-            client
-                .admin_remove_from_matchmaking(pid)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    });
-
-    let toast_clone = toast.clone();
-    let _ = Effect::new(move |_| {
-        if let Some(result) = remove_action.value().get() {
-            match result {
-                Ok(_) => {
-                    toast_clone.success("Player removed from queue");
-                    set_refresh_trigger.update(|n| *n += 1);
-                }
-                Err(e) => toast_clone.error(format!("Failed to remove player: {}", e)),
-            }
-        }
-    });
-
     view! {
         <div class="admin-section">
             <div class="section-header">
                 <h3>"Matchmaking Queue"</h3>
-                <button
-                    class="button button-small"
-                    on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
-                >
-                    "🔄 Refresh"
-                </button>
             </div>
 
             <Suspense fallback=move || view! {

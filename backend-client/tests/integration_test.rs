@@ -1,13 +1,13 @@
+use automatafl_api_types::GameLifecycle;
 use automatafl_backend_client::AutomataflClient;
 use automatafl_logic::Coord;
+use uuid::Uuid;
 
 const BASE_URL: &str = "http://localhost:3000";
 
 /// Helper to create a unique test user
 fn test_username() -> String {
-    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("testuser_{}", COUNTER.load(std::sync::atomic::Ordering::Relaxed))
+    format!("testuser_{}", Uuid::new_v4().to_string())
 }
 
 #[tokio::test]
@@ -125,6 +125,9 @@ async fn test_join_game() {
     // Client1 creates a game
     let game_id = client1.create_game(2, true).await.unwrap();
 
+    let state = client1.get_game_state(game_id).await.unwrap();
+    assert_eq!(state.lifecycle, GameLifecycle::Waiting);
+
     // Client2 joins the game
     let player_pid = client2
         .join_game(game_id)
@@ -134,7 +137,8 @@ async fn test_join_game() {
 
     // Get game state
     let state = client1.get_game_state(game_id).await.unwrap();
-    assert!(state.is_object());
+    assert_eq!(state.lifecycle, GameLifecycle::Waiting);
+    assert!(!state.player_ids.is_empty());
 }
 
 #[tokio::test]
@@ -217,10 +221,11 @@ async fn test_chat() {
     let game_id = client.create_game(2, true).await.unwrap();
 
     // Send a chat message
-    client
+    let response = client
         .send_chat(game_id, "Hello, world!".to_string())
         .await
         .expect("Failed to send chat");
+    assert!(response.timestamp > 0);
 
     // Get chat messages
     let messages = client.get_chat(game_id).await.expect("Failed to get chat");
@@ -330,14 +335,19 @@ async fn test_save_and_load_game() {
         .save_game(game_id)
         .await
         .expect("Failed to save game");
-    assert!(save_result.is_object());
 
     // List snapshots
     let snapshots = client1
         .list_snapshots(game_id)
         .await
         .expect("Failed to list snapshots");
-    assert!(snapshots.is_object());
+    assert!(!snapshots.snapshots.is_empty());
+    assert!(
+        snapshots
+            .snapshots
+            .iter()
+            .any(|snap| snap.index == save_result.snapshot_index)
+    );
 
     // Load snapshot
     client1

@@ -2,7 +2,7 @@
 
 use axum::{
     extract::Request,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -80,13 +80,7 @@ pub fn spawn_rate_limiter_cleanup() -> tokio::task::JoinHandle<()> {
 /// Default: 100 requests per minute per IP
 pub async fn rate_limit(req: Request, next: Next) -> Result<Response, StatusCode> {
     // Get client IP from various headers
-    let client_ip = req
-        .headers()
-        .get("x-real-ip")
-        .or_else(|| req.headers().get("x-forwarded-for"))
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+    let client_ip = extract_client_ip(&req.headers());
 
     let limiters = get_rate_limiters();
 
@@ -101,6 +95,43 @@ pub async fn rate_limit(req: Request, next: Next) -> Result<Response, StatusCode
         tracing::warn!("Rate limit exceeded for IP: {}", client_ip);
         Err(StatusCode::TOO_MANY_REQUESTS)
     }
+}
+
+/// Extract client IP from request headers with proper fallbacks
+fn extract_client_ip(headers: &HeaderMap) -> String {
+    // Try X-Real-IP first (set by proxies like nginx)
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|h| h.to_str().ok())
+        .filter(|ip| !ip.is_empty() && *ip != "unknown")
+    {
+        return ip.to_string();
+    }
+
+    // Try X-Forwarded-For (can contain multiple IPs, take the first)
+    if let Some(xff) = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .filter(|xff| !xff.is_empty())
+    {
+        if let Some(first_ip) = xff.split(',').next().map(|ip| ip.trim()) {
+            if !first_ip.is_empty() && first_ip != "unknown" {
+                return first_ip.to_string();
+            }
+        }
+    }
+
+    // Try CF-Connecting-IP (Cloudflare specific)
+    if let Some(ip) = headers
+        .get("cf-connecting-ip")
+        .and_then(|h| h.to_str().ok())
+        .filter(|ip| !ip.is_empty())
+    {
+        return ip.to_string();
+    }
+
+    // Fallback to unknown
+    "unknown".to_string()
 }
 
 /// Stricter rate limiting for auth endpoints
@@ -151,15 +182,43 @@ pub fn check_rate_limit_expensive(
     }
 }
 
+/// Enhanced rate limiting that returns proper error information
+pub fn check_rate_limit_with_error(
+    key: &str,
+    capacity: f64,
+    refill_rate: f64,
+) -> Result<(), crate::common::AppError> {
+    let limiters = get_rate_limiters();
+
+    let rate_key = format!("expensive:{}", key);
+    let mut entry = limiters
+        .entry(rate_key.clone())
+        .or_insert_with(|| TokenBucket::new(capacity, refill_rate));
+
+    if entry.try_consume() {
+        Ok(())
+    } else {
+        tracing::warn!("Rate limit exceeded for expensive operation: {}", key);
+        Err(crate::common::AppError::RateLimited(
+            "Too many requests, please slow down".to_string(),
+        ))
+    }
+}
+
 // ============================================================================
 // CSRF Protection
 // ============================================================================
 
-/// CSRF protection for HTML form submissions
-/// Relies on SameSite=Strict cookies (primary defense) and Origin/Referer checking
+/// Enhanced CSRF protection for HTML form submissions
+/// Uses multiple layers of defense:
+/// 1. SameSite=Strict cookies (primary defense)
+/// 2. Origin/Referer header validation
+/// 3. Content-Type validation for form submissions
+/// 4. Request size limits
 pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, StatusCode> {
     let method = req.method();
     let path = req.uri().path();
+    let headers = req.headers();
 
     // Only check state-changing methods for non-API routes
     if !matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH") || path.starts_with("/api/")
@@ -167,16 +226,40 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         return Ok(next.run(req).await);
     }
 
-    // Check Origin or Referer header for same-origin policy
-    let headers = req.headers();
-    let origin = headers
-        .get(header::ORIGIN)
-        .or_else(|| headers.get(header::REFERER));
+    // For form submissions, ensure proper content type
+    if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
+        if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
+            if let Ok(ct) = content_type.to_str() {
+                // Allow form submissions and JSON
+                if !ct.starts_with("application/x-www-form-urlencoded")
+                    && !ct.starts_with("application/json")
+                    && !ct.starts_with("multipart/form-data")
+                {
+                    tracing::warn!(path, content_type = %ct, "Suspicious content type for state-changing request");
+                    return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+                }
+            }
+        }
+    }
 
-    if let Some(origin_val) = origin {
-        if let Ok(origin_str) = origin_val.to_str() {
-            if origin_str.contains("localhost") || origin_str.contains("127.0.0.1") {
-                return Ok(next.run(req).await);
+    // Check Origin header for same-origin policy
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        if let Ok(origin_str) = origin.to_str() {
+            // In production, we should validate against known origins
+            // For development, allow localhost
+            if !is_allowed_origin(origin_str) {
+                tracing::warn!(path, origin = %origin_str, "Origin not allowed");
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    } else {
+        // If no Origin header, check Referer as fallback
+        if let Some(referer) = headers.get(header::REFERER) {
+            if let Ok(referer_str) = referer.to_str() {
+                if !is_allowed_referer(referer_str) {
+                    tracing::warn!(path, referer = %referer_str, "Referer not allowed");
+                    return Err(StatusCode::FORBIDDEN);
+                }
             }
         }
     }
@@ -190,15 +273,55 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         }
     }
 
-    Ok(next.run(req).await)
+    // For requests without session cookies, be more strict
+    tracing::warn!(path, method = %method, "State-changing request without session cookie");
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+/// Check if origin is allowed for CSRF protection
+fn is_allowed_origin(origin: &str) -> bool {
+    if cfg!(debug_assertions) {
+        // Development: Allow localhost origins
+        origin.starts_with("http://localhost:")
+            || origin.starts_with("http://127.0.0.1:")
+            || origin.starts_with("https://localhost:")
+            || origin.starts_with("https://127.0.0.1:")
+    } else {
+        // Production: Should validate against configured allowed origins
+        // For now, be strict and only allow if explicitly configured
+        std::env::var("ALLOWED_ORIGINS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|allowed| allowed.trim() == origin)
+    }
+}
+
+/// Check if referer is allowed for CSRF protection
+fn is_allowed_referer(referer: &str) -> bool {
+    if cfg!(debug_assertions) {
+        // Development: Allow localhost referers
+        referer.starts_with("http://localhost:")
+            || referer.starts_with("http://127.0.0.1:")
+            || referer.starts_with("https://localhost:")
+            || referer.starts_with("https://127.0.0.1:")
+    } else {
+        // Production: Should validate against configured allowed referers
+        std::env::var("ALLOWED_REFERERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|allowed| referer.starts_with(allowed.trim()))
+    }
 }
 
 // ============================================================================
 // Security Headers
 // ============================================================================
 
-/// Add security headers to all responses
-pub async fn security_headers(req: Request, next: Next) -> Response {
+/// Add comprehensive security headers to all responses
+pub async fn security_headers(mut req: Request, next: Next) -> Response {
+    // Extract path before consuming request
+    let is_api_request = req.uri().path().starts_with("/api/");
+
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
 
@@ -206,7 +329,7 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     if !cfg!(debug_assertions) {
         headers.insert(
             "Strict-Transport-Security",
-            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            HeaderValue::from_static("max-age=31536000; includeSubDomains; preload"),
         );
     }
 
@@ -219,20 +342,43 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
         HeaderValue::from_static("nosniff"),
     );
 
-    // Content Security Policy
+    // XSS Protection
+    headers.insert(
+        "X-XSS-Protection",
+        HeaderValue::from_static("1; mode=block"),
+    );
+
+    // Enhanced Content Security Policy
+    let csp = if cfg!(debug_assertions) {
+        // Development: Allow localhost WebSocket connections
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: https: http:; \
+         font-src 'self' data:; \
+         connect-src 'self' ws://localhost:* wss://localhost:* ws://127.0.0.1:* wss://127.0.0.1:*; \
+         frame-ancestors 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         upgrade-insecure-requests;"
+    } else {
+        // Production: Strict CSP
+        "default-src 'self'; \
+         script-src 'self'; \
+         style-src 'self'; \
+         img-src 'self' data: https:; \
+         font-src 'self' data:; \
+         connect-src 'self' wss:; \
+         frame-ancestors 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         upgrade-insecure-requests; \
+         block-all-mixed-content;"
+    };
+
     headers.insert(
         "Content-Security-Policy",
-        HeaderValue::from_static(
-            "default-src 'self'; \
-             script-src 'self' 'unsafe-inline'; \
-             style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data: https:; \
-             font-src 'self' data:; \
-             connect-src 'self' ws: wss:; \
-             frame-ancestors 'none'; \
-             base-uri 'self'; \
-             form-action 'self';",
-        ),
+        HeaderValue::from_str(csp).unwrap(),
     );
 
     // Referrer policy
@@ -244,15 +390,110 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     // Permissions policy - disable unnecessary features
     headers.insert(
         "Permissions-Policy",
-        HeaderValue::from_static("geolocation=(), microphone=(), camera=(), payment=(), usb=()"),
+        HeaderValue::from_static(
+            "geolocation=(), microphone=(), camera=(), payment=(), usb=(), \
+             bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=(), \
+             ambient-light-sensor=(), autoplay=(), encrypted-media=(), \
+             fullscreen=(self), picture-in-picture=()",
+        ),
     );
+
+    // Remove server information
+    headers.insert("Server", HeaderValue::from_static(""));
+    headers.remove("X-Powered-By");
+
+    // Cache control for API responses
+    if is_api_request {
+        headers.insert(
+            "Cache-Control",
+            HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+        );
+        headers.insert("Pragma", HeaderValue::from_static("no-cache"));
+        headers.insert("Expires", HeaderValue::from_static("0"));
+    }
 
     response
 }
 
 // ============================================================================
-// Content Type Validation
+// Input Validation & Security
 // ============================================================================
+
+/// Enhanced input validation for all requests
+pub async fn validate_request_security(req: Request, next: Next) -> Result<Response, StatusCode> {
+    let method = req.method();
+    let path = req.uri().path();
+    let headers = req.headers();
+
+    // Validate request size (prevent DoS attacks)
+    if let Some(content_length) = headers.get("content-length") {
+        if let Ok(length) = content_length.to_str().unwrap_or("0").parse::<usize>() {
+            // Different limits for different request types
+            let max_size = match method.as_str() {
+                "POST" | "PUT" | "PATCH" => {
+                    if path.starts_with("/api/") {
+                        2 * 1024 * 1024 // 2MB for API requests
+                    } else {
+                        10 * 1024 * 1024 // 10MB for file uploads
+                    }
+                }
+                _ => 1 * 1024 * 1024, // 1MB for other requests
+            };
+
+            if length > max_size {
+                tracing::warn!(
+                    path,
+                    content_length = length,
+                    max_size,
+                    "Request size exceeds limit"
+                );
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+        }
+    }
+
+    // Validate User-Agent header (helps with bot detection)
+    if let Some(user_agent) = headers.get("user-agent") {
+        if let Ok(ua) = user_agent.to_str() {
+            // Check for suspicious user agents
+            if ua.is_empty() || ua.len() > 500 || ua.contains('\0') {
+                tracing::warn!(path, user_agent = %ua, "Suspicious user agent");
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
+    // Validate Accept header for API requests
+    if path.starts_with("/api/") {
+        if let Some(accept) = headers.get("accept") {
+            if let Ok(accept_str) = accept.to_str() {
+                // Only allow expected content types for API responses
+                if !accept_str.contains("application/json")
+                    && !accept_str.contains("text/html")
+                    && !accept_str.contains("*/*")
+                {
+                    tracing::warn!(path, accept = %accept_str, "Unexpected accept header for API request");
+                }
+            }
+        }
+    }
+
+    // Log security-relevant events for audit purposes
+    if matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH") {
+        if path.starts_with("/api/v1/auth") || path.starts_with("/api/v1/admin") {
+            let client_ip = extract_client_ip(headers);
+            tracing::info!(
+                method = %method,
+                path = %path,
+                client_ip = %client_ip,
+                user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok()).unwrap_or("unknown"),
+                "Security audit: sensitive endpoint access"
+            );
+        }
+    }
+
+    Ok(next.run(req).await)
+}
 
 /// Validate Content-Type for API requests
 pub async fn validate_content_type(req: Request, next: Next) -> Result<Response, StatusCode> {

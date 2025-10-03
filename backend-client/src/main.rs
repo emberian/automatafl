@@ -2,7 +2,7 @@ use automatafl_api_types::GameLifecycle;
 use automatafl_backend_client::*;
 use automatafl_logic::{Coord, MoveFeedback};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -451,6 +451,18 @@ fn clear_session() -> Result<()> {
     Ok(())
 }
 
+fn parse_lifecycle(value: &str) -> Result<GameLifecycle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "waiting" => Ok(GameLifecycle::Waiting),
+        "inprogress" | "in_progress" => Ok(GameLifecycle::InProgress),
+        "finished" => Ok(GameLifecycle::Finished),
+        _ => Err(anyhow!(
+            "Invalid lifecycle '{}'. Use Waiting, InProgress, or Finished.",
+            value
+        )),
+    }
+}
+
 // ============================================================================
 // Command Handlers
 // ============================================================================
@@ -684,6 +696,7 @@ async fn handle_move_complete(client: &AutomataflClient, game_id: Uuid) -> Resul
     println!("{}", "Completing round...".cyan());
     let result = client.complete_round(game_id).await?;
     println!("{}", "✓ Round completed!".green());
+    println!("Message: {}", result.message);
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
@@ -695,8 +708,9 @@ async fn handle_chat_send(
 ) -> Result<()> {
     let message_text = message.join(" ");
     println!("{}", format!("Sending message: {}", message_text).cyan());
-    client.send_chat(game_id, message_text).await?;
+    let response = client.send_chat(game_id, message_text).await?;
     println!("{}", "✓ Message sent!".green());
+    println!("Timestamp: {}", response.timestamp);
     Ok(())
 }
 
@@ -762,14 +776,14 @@ async fn handle_game_history(
             // Extract kind from the event data enum
             let kind = match &event.data {
                 automatafl_api_types::GameEventData::PlayerJoined { .. } => "PLAYER_JOINED",
-                automatafl_api_types::GameEventData::GameStarted => "GAME_STARTED",
+                automatafl_api_types::GameEventData::GameStarted { .. } => "GAME_STARTED",
                 automatafl_api_types::GameEventData::MoveAcknowledged { .. } => "MOVE_ACK",
                 automatafl_api_types::GameEventData::MoveInvalid { .. } => "MOVE_INVALID",
                 automatafl_api_types::GameEventData::Move { .. } => "MOVE",
                 automatafl_api_types::GameEventData::AutomatonStep { .. } => "AUTOMATON_STEP",
                 automatafl_api_types::GameEventData::GameOver { .. } => "GAME_OVER",
                 automatafl_api_types::GameEventData::EloUpdate { .. } => "ELO_UPDATE",
-                automatafl_api_types::GameEventData::RoundComplete => "ROUND_COMPLETE",
+                automatafl_api_types::GameEventData::RoundComplete { .. } => "ROUND_COMPLETE",
                 automatafl_api_types::GameEventData::Conflicts { .. } => "CONFLICTS",
                 automatafl_api_types::GameEventData::Chat { .. } => "CHAT",
                 automatafl_api_types::GameEventData::GameLoaded { .. } => "GAME_LOADED",
@@ -996,6 +1010,7 @@ async fn handle_admin_game_force_complete(client: &AutomataflClient, game_id: Uu
     );
     let result = client.admin_force_complete_round(game_id).await?;
     println!("{}", "✓ Round force completed!".green());
+    println!("Message: {}", result.message);
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
@@ -1005,13 +1020,17 @@ async fn handle_admin_game_set_lifecycle(
     game_id: Uuid,
     lifecycle: String,
 ) -> Result<()> {
-    let lifecycle_value = serde_json::json!({ "lifecycle": lifecycle });
+    let lifecycle_enum = parse_lifecycle(&lifecycle)?;
     println!(
         "{}",
-        format!("Setting game {} lifecycle to {}...", game_id, lifecycle).cyan()
+        format!(
+            "Setting game {} lifecycle to {:?}...",
+            game_id, lifecycle_enum
+        )
+        .cyan()
     );
     client
-        .admin_set_game_lifecycle(game_id, lifecycle_value)
+        .admin_set_game_lifecycle(game_id, lifecycle_enum)
         .await?;
     println!("{}", "✓ Lifecycle updated!".green());
     Ok(())
@@ -1194,12 +1213,31 @@ async fn main() -> Result<()> {
             GameCommands::Goals { game_id } => handle_game_goals(&client, game_id).await,
             GameCommands::Save { game_id } => {
                 let result = client.save_game(game_id).await?;
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", "✓ Snapshot saved!".green());
+                println!("Snapshot index: {}", result.snapshot_index);
                 Ok(())
             }
             GameCommands::Snapshots { game_id } => {
                 let result = client.list_snapshots(game_id).await?;
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                if result.snapshots.is_empty() {
+                    println!("{}", "No snapshots found".dimmed());
+                } else {
+                    println!(
+                        "\n{} {}:\n",
+                        result.snapshots.len(),
+                        if result.snapshots.len() == 1 {
+                            "snapshot"
+                        } else {
+                            "snapshots"
+                        }
+                    );
+                    for snapshot in result.snapshots {
+                        println!(
+                            "  Index {} at timestamp {}",
+                            snapshot.index, snapshot.timestamp
+                        );
+                    }
+                }
                 Ok(())
             }
             GameCommands::Load { game_id, index } => {

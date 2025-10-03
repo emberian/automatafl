@@ -41,18 +41,22 @@ pub enum GameEventData {
         player_id: Uuid,
         player_pid: Pid,
         displayname: String,
+        /// Updated player_ids map (for direct state update)
+        player_ids: HashMap<Uuid, Pid>,
     },
 
     /// Game has started
     #[serde(rename = "GAME_STARTED")]
-    GameStarted,
+    GameStarted { new_lifecycle: GameLifecycle },
 
-    /// Player's move was acknowledged
+    /// Player's move was acknowledged (pending move added to game state)
     #[serde(rename = "MOVE_ACK")]
     MoveAcknowledged {
         player_pid: Pid,
         from: Coord,
         to: Coord,
+        /// The complete pending move (for direct state update)
+        pending_move: automatafl_logic::Move,
     },
 
     /// Player's move was invalid
@@ -77,7 +81,10 @@ pub enum GameEventData {
 
     /// Game has ended
     #[serde(rename = "GAME_OVER")]
-    GameOver { winner: Pid },
+    GameOver {
+        winner: Pid,
+        new_lifecycle: GameLifecycle,
+    },
 
     /// ELO ratings updated
     #[serde(rename = "ELO_UPDATE")]
@@ -85,7 +92,7 @@ pub enum GameEventData {
 
     /// Round completed successfully
     #[serde(rename = "ROUND_COMPLETE")]
-    RoundComplete,
+    RoundComplete { new_lifecycle: GameLifecycle },
 
     /// Conflicts occurred during round
     #[serde(rename = "CONFLICTS")]
@@ -163,6 +170,7 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub session_id: Uuid,
     pub player_id: Uuid,
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

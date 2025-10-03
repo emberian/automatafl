@@ -5,7 +5,7 @@ pub mod matchmaking_service;
 pub mod player_service;
 
 pub use admin_service::AdminService;
-pub use auth_service::{AuthService, AuthServiceError, LoginResult, RegisterResult};
+pub use auth_service::{AuthService, AuthServiceError, LoginResult};
 pub use game_service::GameService;
-pub use matchmaking_service::{MatchmakingService, MatchmakingServiceError};
+pub use matchmaking_service::{MatchmakingService, MatchmakingServiceError, QueueEntry};
 pub use player_service::{PlayerService, PlayerServiceError};

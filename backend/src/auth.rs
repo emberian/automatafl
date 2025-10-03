@@ -1,6 +1,6 @@
 //! Authentication endpoints (register, login, logout)
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{Json, extract::State, http::StatusCode};
 
 use crate::common::{AppError, AuthPlayer, ServerState};
 use crate::services::{AuthServiceError, LoginResult};
@@ -31,6 +31,7 @@ pub async fn login(
     let LoginResult {
         session_id,
         player_id,
+        is_admin,
     } = service
         .login(req.displayname.clone(), req.password.clone())
         .await
@@ -39,6 +40,7 @@ pub async fn login(
     Ok(Json(LoginResponse {
         session_id,
         player_id,
+        is_admin,
     }))
 }
 
@@ -58,7 +60,11 @@ fn map_auth_error(action: &str, displayname: &str, error: AuthServiceError) -> A
     match error {
         AuthServiceError::DisplaynameTaken(name) => AppError::DisplaynameTaken(name),
         AuthServiceError::InvalidCredentials => {
-            tracing::debug!(displayname = displayname, action = action, "Auth invalid credentials");
+            tracing::debug!(
+                displayname = displayname,
+                action = action,
+                "Auth invalid credentials"
+            );
             AppError::InvalidCredentials
         }
         AuthServiceError::ValidationError(msg) => AppError::ValidationError(msg),

@@ -46,6 +46,10 @@ pub struct AppState {
     pub session_validating: RwSignal<bool>,
     /// Cached API client (eliminates repeated localStorage reads)
     pub api_client: StoredValue<crate::api::ApiClient>,
+    /// Admin status for authorization checks
+    pub is_admin: RwSignal<bool>,
+    /// Derived signal for authentication status (computed from session_token)
+    pub is_authenticated: Signal<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -88,32 +92,46 @@ impl AppState {
             .unwrap_or("ws://localhost:3000")
             .to_string();
 
-        // Check localStorage for saved session
-        let (current_player_id, session_token) = if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let session = storage
-                    .get_item("session_token")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| Uuid::parse_str(&s).ok());
-                let player = storage
-                    .get_item("player_id")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| Uuid::parse_str(&s).ok());
-                (player, session)
+        // Check localStorage for saved session and admin status
+        let (current_player_id, session_token, is_admin_stored) =
+            if let Some(window) = web_sys::window() {
+                if let Ok(Some(storage)) = window.local_storage() {
+                    let session = storage
+                        .get_item("session_token")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| Uuid::parse_str(&s).ok());
+                    let player = storage
+                        .get_item("player_id")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| Uuid::parse_str(&s).ok());
+                    let is_admin = storage
+                        .get_item("is_admin")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<bool>().ok())
+                        .unwrap_or(false);
+                    (player, session, is_admin)
+                } else {
+                    (None, None, false)
+                }
             } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
+                (None, None, false)
+            };
 
         let api_client = crate::api::ApiClient::new(api_base_url.clone(), session_token);
 
+        // Create reactive signals
+        let session_token_signal = RwSignal::new(session_token);
+        let is_admin_signal = RwSignal::new(is_admin_stored);
+
+        // Derived signal for authentication (automatically updates when session_token changes)
+        let is_authenticated = Signal::derive(move || session_token_signal.get().is_some());
+
         let app_state = Self {
             current_player_id: RwSignal::new(current_player_id),
-            session_token: RwSignal::new(session_token),
+            session_token: session_token_signal,
             games: RwSignal::new(HashMap::new()),
             active_game_id: RwSignal::new(None),
             matchmaking_status: RwSignal::new(MatchmakingState::default()),
@@ -121,6 +139,8 @@ impl AppState {
             ws_base_url,
             session_validating: RwSignal::new(false),
             api_client: StoredValue::new(api_client),
+            is_admin: is_admin_signal,
+            is_authenticated,
         };
 
         // Validate session on startup if we have one
@@ -157,9 +177,10 @@ impl AppState {
         });
     }
 
-    pub fn login(&self, session_token: Uuid, player_id: Uuid) {
+    pub fn login(&self, session_token: Uuid, player_id: Uuid, is_admin: bool) {
         self.session_token.set(Some(session_token));
         self.current_player_id.set(Some(player_id));
+        self.is_admin.set(is_admin);
 
         // Update cached API client with new session token
         let new_client = crate::api::ApiClient::new(self.api_base_url.clone(), Some(session_token));
@@ -170,6 +191,7 @@ impl AppState {
             if let Ok(Some(storage)) = window.local_storage() {
                 let _ = storage.set_item("session_token", &session_token.to_string());
                 let _ = storage.set_item("player_id", &player_id.to_string());
+                let _ = storage.set_item("is_admin", &is_admin.to_string());
             }
         }
     }
@@ -193,8 +215,9 @@ impl AppState {
         }
     }
 
-    pub fn is_authenticated(&self) -> bool {
-        self.session_token.get().is_some()
+    /// Check if the current user has admin privileges
+    pub fn is_admin(&self) -> bool {
+        self.is_admin.get()
     }
 
     /// Get the cached API client (avoids repeated localStorage reads)
@@ -263,6 +286,22 @@ impl AppState {
         });
     }
 
+    /// Helper to apply a mutation to a specific game's state
+    /// Reduces boilerplate in event handlers
+    fn with_game_state_mut<F>(&self, game_id: Uuid, mut f: F)
+    where
+        F: FnMut(&mut GameStateResponse),
+    {
+        self.games.update(|games| {
+            if let Some(game_state) = games.get_mut(&game_id) {
+                if let Some(mut state) = game_state.state.get_untracked() {
+                    f(&mut state);
+                    game_state.state.set(Some(state));
+                }
+            }
+        });
+    }
+
     /// Update specific board position (for incremental Move updates)
     pub fn update_board_position(&self, game_id: Uuid, from: Coord, to: Coord) {
         self.games.update(|games| {
@@ -289,16 +328,11 @@ impl AppState {
         });
     }
 
-    /// Increment history version (still fetched via HTTP)
+    /// Increment history version (for history panel refresh)
     ///
-    /// TODO: Remove this "pull" pattern once events include full state deltas.
-    /// Events should contain all necessary data to update state directly without HTTP refetch.
-    /// Required backend changes:
-    /// - GameStarted: include new lifecycle state
-    /// - PlayerJoined: include player info & updated player list
-    /// - MoveAcknowledged: include pending move data
-    /// - RoundComplete: include new lifecycle/round state
-    /// - GameOver: include final lifecycle state
+    /// Note: This is only used for GameLoaded event now, as all other events
+    /// update state directly. History is still fetched via HTTP as it's a
+    /// separate concern from real-time game state.
     pub fn bump_history(&self, game_id: Uuid) {
         self.games.update(|games| {
             if let Some(game) = games.get_mut(&game_id) {
@@ -357,23 +391,36 @@ impl AppState {
 
         // Direct state updates - no trigger counters, just reactive signals!
         match &event.data {
-            GameEventData::PlayerJoined { displayname, .. } => {
+            GameEventData::PlayerJoined {
+                displayname,
+                player_ids,
+                ..
+            } => {
                 web_sys::console::log_1(&format!("Player {} joined", displayname).into());
-                // PlayerJoined doesn't include full player state, so we need to refetch
-                self.bump_history(game_id);
+                // DIRECT UPDATE: Update player_ids map from enriched event
+                self.with_game_state_mut(game_id, |state| {
+                    state.player_ids = player_ids.clone();
+                });
             }
-            GameEventData::GameStarted => {
+            GameEventData::GameStarted { new_lifecycle } => {
                 web_sys::console::log_1(&"Game started event".into());
-                // GameStarted changes lifecycle, but the event doesn't include the new state
-                self.bump_history(game_id);
+                // DIRECT UPDATE: Update lifecycle from enriched event
+                self.with_game_state_mut(game_id, |state| {
+                    state.lifecycle = new_lifecycle.clone();
+                });
             }
-            GameEventData::MoveAcknowledged { player_pid, .. } => {
+            GameEventData::MoveAcknowledged {
+                player_pid,
+                pending_move,
+                ..
+            } => {
                 web_sys::console::log_1(
                     &format!("Player {} move acknowledged", player_pid.0).into(),
                 );
-                // MoveAcknowledged doesn't include the pending move data, so we need to refetch
-                // In the future, this event should include the pending move
-                self.bump_history(game_id);
+                // DIRECT UPDATE: Add pending move from enriched event
+                self.with_game_state_mut(game_id, |state| {
+                    state.game.pending_moves.push(pending_move.clone());
+                });
             }
             GameEventData::MoveInvalid {
                 player_pid,
@@ -440,16 +487,23 @@ impl AppState {
                 });
                 // No bump_history needed - automaton position updated directly above
             }
-            GameEventData::RoundComplete => {
+            GameEventData::RoundComplete { new_lifecycle } => {
                 web_sys::console::log_1(&"Round completed".into());
-                // RoundComplete changes lifecycle and round number, need full state
-                // Ideally this event would include the new lifecycle state
-                self.bump_history(game_id);
+                // DIRECT UPDATE: Update lifecycle from enriched event
+                self.with_game_state_mut(game_id, |state| {
+                    state.lifecycle = new_lifecycle.clone();
+                    state.game.pending_moves.clear(); // Round complete clears pending moves
+                });
             }
-            GameEventData::GameOver { winner } => {
+            GameEventData::GameOver {
+                winner,
+                new_lifecycle,
+            } => {
                 web_sys::console::log_1(&format!("Game over! Winner: {}", winner.0).into());
-                // GameOver changes lifecycle, need full state refresh
-                self.bump_history(game_id);
+                // DIRECT UPDATE: Update lifecycle from enriched event
+                self.with_game_state_mut(game_id, |state| {
+                    state.lifecycle = new_lifecycle.clone();
+                });
             }
             GameEventData::EloUpdate { .. } => {
                 web_sys::console::log_1(&"ELO ratings updated".into());

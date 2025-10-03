@@ -4,7 +4,6 @@ use crate::{
         SkeletonGameBoard, SkeletonList, use_toast,
     },
     state::AppState,
-    websocket::create_game_websocket,
 };
 use automatafl_api_types::{GameLifecycle, GameListItem};
 use leptos::prelude::*;
@@ -386,29 +385,22 @@ pub fn GamePage() -> impl IntoView {
         let gid = *gid;
         async move {
             let client = app_state.get_api_client();
-            client.get_game_state_typed(gid).await
+            match client.get_game_state(gid).await {
+                Ok(value) => Ok(value),
+                Err(e) => Err(e.to_string()),
+            }
         }
     });
 
-    // Setup: fetch initial state and connect WebSocket
-    let app_state_for_setup = app_state.clone();
+    // Setup: fetch initial state on game_id change
     Effect::new(move |_| {
         if let Some(gid) = game_id.get() {
-            // Fetch initial state
             initial_load_action.dispatch(gid);
-
-            // Connect WebSocket - the connection is kept alive by the effect!
-            // When effect re-runs or component unmounts, connection drops
-            let _ws = create_game_websocket(gid, &app_state_for_setup);
-
-            // Return cleanup function
-            Some(move || {
-                drop(_ws);
-            })
-        } else {
-            None
         }
     });
+
+    // Connect WebSocket reactively using the new hook
+    crate::websocket::use_game_websocket(game_id);
 
     // Update state signal when initial load completes
     let app_state_for_load = app_state.clone();

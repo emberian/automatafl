@@ -47,7 +47,12 @@
         {% endif %}
     </div>
     <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
-        <strong>Total Playtime:</strong> {{ stats.total_playtime / 3600 }} hours
+        <strong>Total Playtime:</strong>
+        {% if stats.total_playtime >= 3600 %}
+            {{ stats.total_playtime / 3600 }}.{{ (stats.total_playtime % 3600) / 360 }} hours
+        {% else %}
+            {{ stats.total_playtime / 60 }} minutes
+        {% endif %}
     </div>
 </div>
 

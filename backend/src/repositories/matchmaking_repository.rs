@@ -25,9 +25,8 @@ impl MatchmakingRepository {
             game_preferences: preferences,
         };
 
-        self
-            .db
-            .create::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string()))
+        self.db
+            .create::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id))
             .content(record)
             .await?;
 
@@ -36,9 +35,8 @@ impl MatchmakingRepository {
 
     /// Remove a player from the matchmaking queue
     pub async fn leave_queue(&self, player_id: Uuid) -> Result<(), surrealdb::Error> {
-        self
-            .db
-            .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string()))
+        self.db
+            .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id))
             .await?;
         Ok(())
     }
@@ -48,10 +46,7 @@ impl MatchmakingRepository {
         &self,
         player_id: Uuid,
     ) -> Result<Option<MatchmakingQueueRecord>, surrealdb::Error> {
-        self
-            .db
-            .select(("matchmaking_queue", player_id.to_string()))
-            .await
+        self.db.select(("matchmaking_queue", player_id)).await
     }
 
     /// Retrieve the entire matchmaking queue
@@ -64,9 +59,17 @@ impl MatchmakingRepository {
         for player_id in player_ids {
             let _ = self
                 .db
-                .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string()))
+                .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", *player_id))
                 .await;
         }
+        Ok(())
+    }
+
+    /// Remove a single player without ignoring errors
+    pub async fn remove_player(&self, player_id: Uuid) -> Result<(), surrealdb::Error> {
+        self.db
+            .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id))
+            .await?;
         Ok(())
     }
 }

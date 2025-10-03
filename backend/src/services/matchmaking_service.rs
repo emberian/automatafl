@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
-    db::MatchmakingQueueRecord,
+    db::{MatchmakingQueueRecord, as_uuid},
     repositories::{MatchmakingRepository, PlayerRepository},
 };
 use uuid::Uuid;
@@ -18,6 +18,23 @@ pub struct MatchmakingService {
 pub enum MatchmakingServiceError {
     Database(surrealdb::Error),
     PlayerNotFound(Uuid),
+}
+
+#[derive(Clone)]
+pub struct QueueEntry {
+    pub player_id: Uuid,
+    pub queued_at: u64,
+    pub game_preferences: String,
+}
+
+impl From<MatchmakingQueueRecord> for QueueEntry {
+    fn from(record: MatchmakingQueueRecord) -> Self {
+        Self {
+            player_id: as_uuid(&record.player_id),
+            queued_at: record.queued_at,
+            game_preferences: record.game_preferences,
+        }
+    }
 }
 
 impl From<surrealdb::Error> for MatchmakingServiceError {
@@ -61,8 +78,7 @@ impl MatchmakingService {
             return Err(MatchmakingServiceError::PlayerNotFound(player_id));
         }
 
-        self
-            .matchmaking_repo
+        self.matchmaking_repo
             .join_queue(player_id, queued_at, preferences)
             .await?;
         Ok(())
@@ -76,18 +92,17 @@ impl MatchmakingService {
     pub async fn get_status(
         &self,
         player_id: Uuid,
-    ) -> Result<Option<MatchmakingQueueRecord>, MatchmakingServiceError> {
-        self.matchmaking_repo.get_status(player_id).await.map_err(Into::into)
+    ) -> Result<Option<QueueEntry>, MatchmakingServiceError> {
+        let record = self.matchmaking_repo.get_status(player_id).await?;
+        Ok(record.map(QueueEntry::from))
     }
 
-    pub async fn list_queue(&self) -> Result<Vec<MatchmakingQueueRecord>, MatchmakingServiceError> {
-        self.matchmaking_repo.list_queue().await.map_err(Into::into)
+    pub async fn list_queue(&self) -> Result<Vec<QueueEntry>, MatchmakingServiceError> {
+        let records = self.matchmaking_repo.list_queue().await?;
+        Ok(records.into_iter().map(QueueEntry::from).collect())
     }
 
-    pub async fn remove_players(
-        &self,
-        player_ids: &[Uuid],
-    ) -> Result<(), MatchmakingServiceError> {
+    pub async fn remove_players(&self, player_ids: &[Uuid]) -> Result<(), MatchmakingServiceError> {
         self.matchmaking_repo.remove_players(player_ids).await?;
         Ok(())
     }

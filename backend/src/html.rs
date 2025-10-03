@@ -4,65 +4,73 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    http::{
-        StatusCode,
-        header::{COOKIE, SET_COOKIE},
-    },
+    http::{StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Redirect},
 };
+use std::collections::HashMap;
 use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::db;
 use crate::{
-    common::{ServerState, broadcast_event, timestamp},
-    db::as_uuid,
+    common::{AppState, GameLifecycleState, ServerState, broadcast_event, timestamp},
+    db::{self, PlayerRecord, PlayerStatsRecord, as_uuid},
+    services::AuthServiceError,
+    web::{self, AdminWebPlayer, HtmlTemplate, WebPlayer},
 };
-use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem, GameStateResponse};
+use automatafl_api_types::{
+    GameLifecycle, GameListItem, GameStateResponse, JoinMatchmakingRequest,
+};
 use automatafl_logic::Pid;
 
 // ============================================================================
 // Session Cookie Helpers
 // ============================================================================
 
-const SESSION_COOKIE_NAME: &str = "automatafl_session";
+// CRITICAL SECURITY TODO: Implement CSRF protection for all state-changing POST requests
+// Current implementation relies solely on SameSite=Strict cookies, which provides partial
+// protection but is not sufficient. Consider using the axum-csrf crate or implementing
+// a token-based CSRF protection system with:
+// 1. CSRF token generation and storage per session
+// 2. Hidden form fields containing CSRF tokens
+// 3. Middleware to validate CSRF tokens on all POST/PUT/DELETE requests
+// See: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 
 fn get_session_from_cookies(headers: &axum::http::HeaderMap) -> Option<Uuid> {
-    headers
-        .get(COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|cookie| {
-            let cookie = cookie.trim();
-            if let Some(value) = cookie.strip_prefix(&format!("{}=", SESSION_COOKIE_NAME)) {
-                Uuid::parse_str(value).ok()
-            } else {
-                None
-            }
-        })
+    web::session_id_from_headers(headers)
 }
 
 async fn get_player_from_session(
-    db: &db::Db,
+    state: &AppState,
     session_id: Uuid,
-) -> Option<(Uuid, db::PlayerRecord)> {
-    let session = db::get_session(db, session_id).await.ok()??;
+) -> Option<(Uuid, PlayerRecord)> {
+    web::resolve_session_player(state, session_id).await
+}
 
-    // Check expiration
-    if session.expires_at < timestamp() {
-        return None;
+fn auth_error_message(err: &AuthServiceError) -> String {
+    match err {
+        AuthServiceError::InvalidCredentials => "Invalid username or password".to_string(),
+        AuthServiceError::DisplaynameTaken(name) => {
+            format!("Display name '{}' is already taken", name)
+        }
+        AuthServiceError::ValidationError(msg) => msg.clone(),
+        AuthServiceError::PasswordHash(_) => "Password hashing failed".to_string(),
+        AuthServiceError::Database(_) => "An authentication error occurred".to_string(),
     }
+}
 
-    let player_id = as_uuid(&session.player_id);
-    let player = db::get_player(db, player_id).await.ok()??;
-    Some((player_id, player))
+fn empty_stats(player_id: Uuid) -> PlayerStatsRecord {
+    PlayerStatsRecord {
+        player_id: RecordId::from_table_key("players", player_id),
+        games_played: 0,
+        games_won: 0,
+        total_playtime: 0,
+    }
 }
 
 fn set_session_cookie(session_id: Uuid) -> String {
     format!(
         "{}={}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age={}",
-        SESSION_COOKIE_NAME,
+        web::SESSION_COOKIE_NAME,
         session_id,
         60 * 60 * 24 * 7 // 7 days
     )
@@ -71,7 +79,7 @@ fn set_session_cookie(session_id: Uuid) -> String {
 fn clear_session_cookie() -> String {
     format!(
         "{}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0",
-        SESSION_COOKIE_NAME
+        web::SESSION_COOKIE_NAME
     )
 }
 
@@ -266,21 +274,14 @@ pub async fn html_index(
 ) -> impl IntoResponse {
     // Check if user is logged in
     if let Some(session_id) = get_session_from_cookies(&headers) {
-        if let Some(_) = get_player_from_session(&state.db, session_id).await {
+        if let Some(_) = get_player_from_session(state.as_ref(), session_id).await {
             // Redirect to dashboard if logged in
             return Redirect::to("/dashboard").into_response();
         }
     }
 
     let template = IndexTemplate { session_id: None };
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_login_page() -> impl IntoResponse {
@@ -288,14 +289,7 @@ pub async fn html_login_page() -> impl IntoResponse {
         session_id: None,
         error: None,
     };
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_register_page() -> impl IntoResponse {
@@ -303,67 +297,33 @@ pub async fn html_register_page() -> impl IntoResponse {
         session_id: None,
         error: None,
     };
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_login_submit(
     State(state): ServerState,
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
-    // Find player
-    match db::find_player_by_displayname(&state.db, form.displayname.clone()).await {
-        Ok(Some(player)) => {
-            // Verify password
-            use argon2::{
-                Argon2,
-                password_hash::{PasswordHash, PasswordVerifier},
+    match state
+        .auth_service
+        .login(form.displayname.clone(), form.password.clone())
+        .await
+    {
+        Ok(login) => {
+            let mut response = Redirect::to("/dashboard").into_response();
+            if let Ok(cookie_value) = set_session_cookie(login.session_id).parse() {
+                response.headers_mut().insert(SET_COOKIE, cookie_value);
+            }
+            response
+        }
+        Err(err) => {
+            let template = LoginTemplate {
+                session_id: None,
+                error: Some(auth_error_message(&err)),
             };
 
-            if let Ok(parsed_hash) = PasswordHash::new(&player.password_hash) {
-                if Argon2::default()
-                    .verify_password(form.password.as_bytes(), &parsed_hash)
-                    .is_ok()
-                {
-                    // Create session
-                    let player_id = db::as_uuid(&player.id);
-                    let session_id = Uuid::new_v4();
-                    let expires_at = timestamp() + state.config.session_duration;
-
-                    if db::create_session(&state.db, session_id, player_id, expires_at)
-                        .await
-                        .is_ok()
-                    {
-                        let mut response = Redirect::to("/dashboard").into_response();
-                        response
-                            .headers_mut()
-                            .insert(SET_COOKIE, set_session_cookie(session_id).parse().unwrap());
-                        return response;
-                    }
-                }
-            }
+            HtmlTemplate(template).into_response()
         }
-        _ => {}
-    }
-
-    // Failed login
-    let template = LoginTemplate {
-        session_id: None,
-        error: Some("Invalid username or password".to_string()),
-    };
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
     }
 }
 
@@ -377,110 +337,34 @@ pub async fn html_register_submit(
             session_id: None,
             error: Some("Passwords do not match".to_string()),
         };
-        return match template.render() {
-            Ok(html) => axum::response::Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Template error: {}", err),
-            )
-                .into_response(),
-        };
+        return HtmlTemplate(template).into_response();
     }
 
-    // Validate username length
-    if form.displayname.len() < 3 {
-        let template = RegisterTemplate {
-            session_id: None,
-            error: Some("Username must be at least 3 characters".to_string()),
-        };
-        return match template.render() {
-            Ok(html) => axum::response::Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Template error: {}", err),
-            )
-                .into_response(),
-        };
-    }
-
-    // Check if username is taken
-    match db::find_player_by_displayname(&state.db, form.displayname.clone()).await {
-        Ok(Some(_)) => {
-            let template = RegisterTemplate {
-                session_id: None,
-                error: Some("Username already taken".to_string()),
-            };
-            return match template.render() {
-                Ok(html) => axum::response::Html(html).into_response(),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Template error: {}", err),
-                )
-                    .into_response(),
-            };
-        }
-        _ => {}
-    }
-
-    // Hash password with argon2
-    use argon2::{
-        Argon2,
-        password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
-    };
-
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = match argon2.hash_password(form.password.as_bytes(), &salt) {
-        Ok(hash) => hash.to_string(),
-        Err(_) => {
-            let template = RegisterTemplate {
-                session_id: None,
-                error: Some("Failed to hash password".to_string()),
-            };
-            return match template.render() {
-                Ok(html) => axum::response::Html(html).into_response(),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Template error: {}", err),
-                )
-                    .into_response(),
-            };
-        }
-    };
-
-    // Create player
-    let new_uuid = Uuid::new_v4();
-    match db::create_player(&state.db, new_uuid, form.displayname, password_hash, false).await {
+    match state
+        .auth_service
+        .register(form.displayname.clone(), form.password.clone())
+        .await
+    {
         Ok(_) => Redirect::to("/login").into_response(),
-        Err(e) => {
+        Err(err) => {
             let template = RegisterTemplate {
                 session_id: None,
-                error: Some(format!("Failed to create account: {}", e)),
+                error: Some(auth_error_message(&err)),
             };
-            match template.render() {
-                Ok(html) => axum::response::Html(html).into_response(),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Template error: {}", err),
-                )
-                    .into_response(),
-            }
+
+            HtmlTemplate(template).into_response()
         }
     }
 }
 
-pub async fn html_logout(
-    State(state): ServerState,
-    headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
-    if let Some(session_id) = get_session_from_cookies(&headers) {
-        let _ = db::delete_session(&state.db, session_id).await;
-    }
+pub async fn html_logout(State(state): ServerState, web_player: WebPlayer) -> impl IntoResponse {
+    let session_id = web_player.session_id();
+    let _ = state.auth_service.logout(session_id).await;
 
     let mut response = Redirect::to("/").into_response();
-    response
-        .headers_mut()
-        .insert(SET_COOKIE, clear_session_cookie().parse().unwrap());
+    if let Ok(cookie_value) = clear_session_cookie().parse() {
+        response.headers_mut().insert(SET_COOKIE, cookie_value);
+    }
     response
 }
 
@@ -494,71 +378,35 @@ pub async fn html_games_list(
         session_id: session_id.map(|s| s.to_string()),
         games,
     };
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 // ============================================================================
 // Authenticated Pages
 // ============================================================================
 
-pub async fn html_dashboard(
-    State(state): ServerState,
-    headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
+pub async fn html_dashboard(State(state): ServerState, web_player: WebPlayer) -> impl IntoResponse {
+    let WebPlayer {
+        player_id, player, ..
+    } = web_player;
 
-    let (player_id, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let stats = db::get_player_stats(&state.db, player_id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(db::PlayerStatsRecord {
-            player_id: RecordId::from_table_key("players", player_id),
-            games_played: 0,
-            games_won: 0,
-            total_playtime: 0,
-        });
-
-    // Get recent games (games the player is in)
-    let all_games = db::list_games(&state.db).await.unwrap_or_default();
-    let mut recent_games = Vec::new();
-    for game_record in all_games.into_iter().take(10) {
-        let game_id = as_uuid(&game_record.id);
-        if let Ok(game_players) = db::get_game_players(&state.db, game_id).await {
-            if game_players
-                .iter()
-                .any(|gp| as_uuid(&gp.player_id) == player_id)
-            {
-                if let (Ok(lifecycle), created_by) = (
-                    serde_json::from_str(&game_record.lifecycle),
-                    as_uuid(&game_record.created_by),
-                ) {
-                    recent_games.push(GameListItem {
-                        id: game_id,
-                        lifecycle,
-                        player_count: game_players.len(),
-                        max_players: game_record.player_count,
-                        created_at: game_record.created_at,
-                        created_by,
-                    });
-                }
-            }
+    let stats = match state.player_service.get_stats(player_id).await {
+        Ok(Some(stats)) => stats,
+        Ok(None) => empty_stats(player_id),
+        Err(err) => {
+            tracing::error!(player_id = %player_id, "Failed to load stats: {}", err);
+            empty_stats(player_id)
         }
-    }
+    };
+
+    let recent_games = state
+        .game_service
+        .list_recent_games_for_player(player_id, 10)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::error!(player_id = %player_id, "Failed to list recent games: {}", err);
+            Vec::new()
+        });
 
     let template = DashboardTemplate {
         displayname: player.displayname,
@@ -569,14 +417,7 @@ pub async fn html_dashboard(
         is_admin: player.is_admin,
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_profile(
@@ -585,30 +426,32 @@ pub async fn html_profile(
     Path(player_id): Path<Uuid>,
 ) -> impl IntoResponse {
     let session_player_id = if let Some(session_id) = get_session_from_cookies(&headers) {
-        get_player_from_session(&state.db, session_id)
+        get_player_from_session(state.as_ref(), session_id)
             .await
             .map(|(id, _)| id)
     } else {
         None
     };
 
-    let player = match db::get_player(&state.db, player_id).await {
+    let player = match state.player_service.get_player(player_id).await {
         Ok(Some(p)) => p,
-        _ => {
+        Ok(None) => {
             return (StatusCode::NOT_FOUND, "Player not found").into_response();
+        }
+        Err(err) => {
+            tracing::error!(player_id = %player_id, "Failed to load player: {}", err);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load player").into_response();
         }
     };
 
-    let stats = db::get_player_stats(&state.db, player_id)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(db::PlayerStatsRecord {
-            player_id: RecordId::from_table_key("players", player_id),
-            games_played: 0,
-            games_won: 0,
-            total_playtime: 0,
-        });
+    let stats = match state.player_service.get_stats(player_id).await {
+        Ok(Some(stats)) => stats,
+        Ok(None) => empty_stats(player_id),
+        Err(err) => {
+            tracing::error!(player_id = %player_id, "Failed to load stats: {}", err);
+            empty_stats(player_id)
+        }
+    };
 
     let template = ProfileTemplate {
         player_id,
@@ -621,14 +464,7 @@ pub async fn html_profile(
         is_own_profile: session_player_id == Some(player_id),
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_update_profile(
@@ -642,7 +478,7 @@ pub async fn html_update_profile(
         None => return Redirect::to("/login").into_response(),
     };
 
-    let (session_player_id, _) = match get_player_from_session(&state.db, session_id).await {
+    let (session_player_id, _) = match get_player_from_session(state.as_ref(), session_id).await {
         Some(p) => p,
         None => return Redirect::to("/login").into_response(),
     };
@@ -652,7 +488,14 @@ pub async fn html_update_profile(
         return Redirect::to(&format!("/profile/{}", player_id)).into_response();
     }
 
-    let _ = db::update_player_profile(&state.db, player_id, form.bio, form.avatar_url).await;
+    let UpdateProfileForm { bio, avatar_url } = form;
+    if let Err(err) = state
+        .player_service
+        .update_profile(player_id, bio, avatar_url)
+        .await
+    {
+        tracing::error!(player_id = %player_id, "Failed to update profile: {}", err);
+    }
 
     Redirect::to(&format!("/profile/{}", player_id)).into_response()
 }
@@ -663,16 +506,16 @@ pub async fn html_game_detail(
     Path(game_id): Path<Uuid>,
 ) -> impl IntoResponse {
     let session_player_id = if let Some(session_id) = get_session_from_cookies(&headers) {
-        get_player_from_session(&state.db, session_id)
+        get_player_from_session(state.as_ref(), session_id)
             .await
             .map(|(id, _)| id)
     } else {
         None
     };
 
-    let (game_core, lifecycle, player_ids) = match db::load_game_state(&state.db, game_id).await {
-        Ok(Some(state)) => state,
-        _ => {
+    let (game_core, lifecycle, player_ids) = match state.game_service.load_game(game_id).await {
+        Ok(state) => state,
+        Err(_) => {
             return (StatusCode::NOT_FOUND, "Game not found").into_response();
         }
     };
@@ -686,8 +529,12 @@ pub async fn html_game_detail(
     // Get player names
     let mut player_names = Vec::new();
     for (uuid, pid) in &player_ids {
-        if let Ok(Some(player)) = db::get_player(&state.db, *uuid).await {
-            player_names.push((*pid, player.displayname));
+        match state.player_service.get_player(*uuid).await {
+            Ok(Some(player)) => player_names.push((*pid, player.displayname)),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::error!(player_id = %uuid, "Failed to resolve player for game detail: {}", err);
+            }
         }
     }
     player_names.sort_by_key(|(pid, _)| pid.0);
@@ -721,110 +568,54 @@ pub async fn html_game_detail(
         all_moves_ready,
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_create_game_page(
-    State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    State(_state): ServerState,
+    web_player: WebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
+    let WebPlayer { player, .. } = web_player;
     let template = CreateGameTemplate {
         displayname: player.displayname,
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_create_game_submit(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    web_player: WebPlayer,
     Form(form): Form<CreateGameForm>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
+    let WebPlayer { player_id, .. } = web_player;
 
-    let (player_id, _) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    use automatafl_logic::Board;
-    let board = Board::stock_two_player();
     let use_column_rule = form.use_column_rule.is_some();
-    let mut game_core = automatafl_logic::Game::new(board, form.player_count, use_column_rule);
 
-    // Set up goals for two-player game
-    if form.player_count == 2 {
-        use automatafl_logic::Coord;
-        game_core.goals.push((Coord { x: 0, y: 0 }, Pid(0)));
-        game_core.goals.push((Coord { x: 10, y: 0 }, Pid(0)));
-        game_core.goals.push((Coord { x: 0, y: 10 }, Pid(1)));
-        game_core.goals.push((Coord { x: 10, y: 10 }, Pid(1)));
-    }
-
-    let game_id = Uuid::new_v4();
-    let lifecycle = GameLifecycle::Waiting;
-
-    if db::create_game(
-        &state.db,
-        game_id,
-        &game_core,
-        &lifecycle,
-        player_id,
-        form.player_count,
-    )
-    .await
-    .is_ok()
+    match state
+        .game_service
+        .create_game(player_id, form.player_count, use_column_rule)
+        .await
     {
-        // Auto-join the creator
-        let _ = db::add_player_to_game(&state.db, game_id, player_id, Pid(0)).await;
-        Redirect::to(&format!("/game/{}", game_id)).into_response()
-    } else {
-        Redirect::to("/create-game").into_response()
+        Ok(game_id) => Redirect::to(&format!("/game/{}", game_id)).into_response(),
+        Err(err) => {
+            tracing::error!(player_id = %player_id, "Failed to create game: {}", err);
+            Redirect::to("/create-game").into_response()
+        }
     }
 }
 
 pub async fn html_matchmaking_page(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    web_player: WebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
+    let WebPlayer {
+        player_id, player, ..
+    } = web_player;
 
-    let (player_id, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let in_queue = db::get_matchmaking_status(&state.db, player_id)
+    let in_queue = state
+        .matchmaking_service
+        .get_status(player_id)
         .await
         .ok()
         .flatten()
@@ -835,14 +626,7 @@ pub async fn html_matchmaking_page(
         in_queue,
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -857,48 +641,57 @@ pub async fn html_leaderboard(
     let sort_by = query.sort_by.as_deref().unwrap_or("elo");
 
     let (leaderboard_type, entries) = match sort_by {
-        "wins" => {
-            let ranked = db::get_leaderboard_by_wins(&state.db, 100)
-                .await
-                .unwrap_or_default();
-            let entries: Vec<LeaderboardEntry> = ranked
-                .into_iter()
-                .map(|(player, stats, rank)| LeaderboardEntry {
-                    rank,
-                    displayname: player.displayname,
-                    value: stats.games_won as i64,
-                })
-                .collect();
-            ("Wins".to_string(), entries)
-        }
-        "games" => {
-            let ranked = db::get_leaderboard_by_games(&state.db, 100)
-                .await
-                .unwrap_or_default();
-            let entries: Vec<LeaderboardEntry> = ranked
-                .into_iter()
-                .map(|(player, stats, rank)| LeaderboardEntry {
-                    rank,
-                    displayname: player.displayname,
-                    value: stats.games_played as i64,
-                })
-                .collect();
-            ("Games Played".to_string(), entries)
-        }
-        _ => {
-            let ranked = db::get_leaderboard_by_elo(&state.db, 100)
-                .await
-                .unwrap_or_default();
-            let entries: Vec<LeaderboardEntry> = ranked
-                .into_iter()
-                .map(|(player, rank)| LeaderboardEntry {
-                    rank,
-                    displayname: player.displayname,
-                    value: player.elo_rating as i64,
-                })
-                .collect();
-            ("ELO Rating".to_string(), entries)
-        }
+        "wins" => match state.player_service.leaderboard_by_wins(100).await {
+            Ok(ranked) => {
+                let entries = ranked
+                    .into_iter()
+                    .map(|(player, stats, rank)| LeaderboardEntry {
+                        rank,
+                        displayname: player.displayname,
+                        value: stats.games_won as i64,
+                    })
+                    .collect();
+                ("Wins".to_string(), entries)
+            }
+            Err(err) => {
+                tracing::error!("Failed to load wins leaderboard: {}", err);
+                ("Wins".to_string(), Vec::new())
+            }
+        },
+        "games" => match state.player_service.leaderboard_by_games(100).await {
+            Ok(ranked) => {
+                let entries = ranked
+                    .into_iter()
+                    .map(|(player, stats, rank)| LeaderboardEntry {
+                        rank,
+                        displayname: player.displayname,
+                        value: stats.games_played as i64,
+                    })
+                    .collect();
+                ("Games Played".to_string(), entries)
+            }
+            Err(err) => {
+                tracing::error!("Failed to load games leaderboard: {}", err);
+                ("Games Played".to_string(), Vec::new())
+            }
+        },
+        _ => match state.player_service.leaderboard_by_elo(100).await {
+            Ok(ranked) => {
+                let entries = ranked
+                    .into_iter()
+                    .map(|(player, rank)| LeaderboardEntry {
+                        rank,
+                        displayname: player.displayname,
+                        value: player.elo_rating as i64,
+                    })
+                    .collect();
+                ("ELO Rating".to_string(), entries)
+            }
+            Err(err) => {
+                tracing::error!("Failed to load ELO leaderboard: {}", err);
+                ("ELO Rating".to_string(), Vec::new())
+            }
+        },
     };
 
     let template = LeaderboardTemplate {
@@ -906,14 +699,7 @@ pub async fn html_leaderboard(
         entries,
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 // ============================================================================
@@ -938,54 +724,25 @@ pub async fn html_join_game(
         None => return Redirect::to("/login").into_response(),
     };
 
-    let (player_id, _) = match get_player_from_session(&state.db, session_id).await {
+    let (player_id, _) = match get_player_from_session(state.as_ref(), session_id).await {
         Some(p) => p,
         None => return Redirect::to("/login").into_response(),
     };
 
-    // Get game and find next available PID
-    let game_players = db::get_game_players(&state.db, game_id)
-        .await
-        .unwrap_or_default();
-    let next_pid = Pid(game_players.len() as u8);
-
-    // Add player to game
-    if db::add_player_to_game(&state.db, game_id, player_id, next_pid)
-        .await
-        .is_ok()
-    {
-        // Broadcast player joined event
-        if let Ok(Some(player)) = db::get_player(&state.db, player_id).await {
-            let _ = crate::common::broadcast_event(
-                &state,
-                game_id,
-                GameEventData::PlayerJoined {
-                    player_id,
-                    player_pid: next_pid,
-                    displayname: player.displayname,
-                },
-            )
-            .await;
-        }
-
-        // Check if game should start
-        if let Ok(Some(game_record)) = db::get_game(&state.db, game_id).await {
-            let player_count = game_players.len() + 1;
-            if player_count == game_record.player_count as usize {
-                // Start game - update lifecycle in game record
-                if let Ok(Some((game_core, _, _player_ids))) =
-                    db::load_game_state(&state.db, game_id).await
-                {
-                    let _ = db::update_game_state(
-                        &state.db,
-                        game_id,
-                        &game_core,
-                        &GameLifecycle::InProgress,
-                    )
-                    .await;
-                    let _ = broadcast_event(&state, game_id, GameEventData::GameStarted).await;
+    match state.game_service.join_game(game_id, player_id).await {
+        Ok((_pid, events)) => {
+            for event in events {
+                if let Err(broadcast_err) = broadcast_event(state.as_ref(), game_id, event).await {
+                    tracing::error!(
+                        game_id = %game_id,
+                        "Failed to broadcast join event: {}",
+                        broadcast_err
+                    );
                 }
             }
+        }
+        Err(err) => {
+            tracing::error!(player_id = %player_id, game_id = %game_id, "Failed to join game: {}", err);
         }
     }
 
@@ -1004,21 +761,18 @@ pub async fn html_submit_move(
         None => return Redirect::to("/login").into_response(),
     };
 
-    let (player_id, _) = match get_player_from_session(&state.db, session_id).await {
+    let (player_id, _) = match get_player_from_session(state.as_ref(), session_id).await {
         Some(p) => p,
         None => return Redirect::to("/login").into_response(),
     };
 
-    // Get player's PID in this game
-    let game_players = db::get_game_players(&state.db, game_id)
-        .await
-        .unwrap_or_default();
-    let player_pid = match game_players
-        .iter()
-        .find(|gp| as_uuid(&gp.player_id) == player_id)
-    {
-        Some(gp) => Pid(gp.player_pid),
-        None => return Redirect::to(&format!("/game/{}", game_id)).into_response(),
+    // Get player's PID in this game via service lookup
+    let player_pid = match state.game_service.player_pid(game_id, player_id).await {
+        Ok(pid) => pid,
+        Err(err) => {
+            tracing::error!(player_id = %player_id, game_id = %game_id, "Failed to resolve player PID: {}", err);
+            return Redirect::to(&format!("/game/{}", game_id)).into_response();
+        }
     };
 
     use automatafl_logic::Coord;
@@ -1032,21 +786,29 @@ pub async fn html_submit_move(
     };
 
     // Get game start time for potential completion stats
-    let game_start_time = db::get_game(&state.db, game_id)
+    let game_start_time = state
+        .game_service
+        .get_game_created_at(game_id)
         .await
         .ok()
-        .flatten()
-        .map(|g| g.created_at);
+        .flatten();
 
     // Call service - ALL business logic is there
-    if let Ok((_response, events)) = state
+    match state
         .game_service
         .submit_move_and_maybe_complete(game_id, player_pid, from, to, game_start_time)
         .await
     {
-        // Broadcast all events from service
-        for event in events {
-            let _ = broadcast_event(&state, game_id, event).await;
+        Ok((_response, events)) => {
+            // Broadcast all events from service
+            for event in events {
+                if let Err(err) = broadcast_event(state.as_ref(), game_id, event).await {
+                    tracing::error!(game_id = %game_id, "Failed to broadcast move event: {}", err);
+                }
+            }
+        }
+        Err(err) => {
+            tracing::error!(player_id = %player_id, game_id = %game_id, "Failed to submit move: {}", err);
         }
     }
 
@@ -1054,20 +816,51 @@ pub async fn html_submit_move(
 }
 
 pub async fn html_complete_round(
-    State(_state): ServerState,
+    State(state): ServerState,
     headers: axum::http::HeaderMap,
     Path(game_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // This is now handled automatically in html_submit_move
-    // Just redirect back to the game page
     let session_id = match get_session_from_cookies(&headers) {
         Some(id) => id,
         None => return Redirect::to("/login").into_response(),
     };
 
-    // Verify they have a session
-    if session_id.is_nil() {
-        return Redirect::to("/login").into_response();
+    let (player_id, _) = match get_player_from_session(state.as_ref(), session_id).await {
+        Some(p) => p,
+        None => return Redirect::to("/login").into_response(),
+    };
+
+    // Verify player is in this game
+    if let Err(err) = state.game_service.player_pid(game_id, player_id).await {
+        tracing::error!(player_id = %player_id, game_id = %game_id, "Player not in game or game not found: {}", err);
+        return Redirect::to(&format!("/game/{}", game_id)).into_response();
+    }
+
+    // Get game start time for potential completion stats
+    let game_start_time = state
+        .game_service
+        .get_game_created_at(game_id)
+        .await
+        .ok()
+        .flatten();
+
+    // Complete the round
+    match state
+        .game_service
+        .complete_round(game_id, game_start_time)
+        .await
+    {
+        Ok((_response, events)) => {
+            // Broadcast all events from service
+            for event in events {
+                if let Err(err) = broadcast_event(state.as_ref(), game_id, event).await {
+                    tracing::error!(game_id = %game_id, "Failed to broadcast round completion event: {}", err);
+                }
+            }
+        }
+        Err(err) => {
+            tracing::error!(game_id = %game_id, "Failed to complete round: {}", err);
+        }
     }
 
     Redirect::to(&format!("/game/{}", game_id)).into_response()
@@ -1079,118 +872,57 @@ pub async fn html_complete_round(
 
 pub async fn html_admin_panel(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    // Gather stats
-    let players: Vec<db::PlayerRecord> = state.db.select("players").await.unwrap_or_default();
-    let games: Vec<db::GameRecord> = state.db.select("games").await.unwrap_or_default();
-    let sessions: Vec<db::SessionRecord> = state.db.select("sessions").await.unwrap_or_default();
-    let queue: Vec<db::MatchmakingQueueRecord> = state
-        .db
-        .select("matchmaking_queue")
-        .await
-        .unwrap_or_default();
-
-    let now = timestamp();
-    let active_sessions = sessions.iter().filter(|s| s.expires_at > now).count();
-
-    let stats = AdminStats {
-        total_players: players.len(),
-        total_games: games.len(),
-        active_sessions,
-        queue_size: queue.len(),
+    let stats = match state.admin_service.dashboard_stats().await {
+        Ok(snapshot) => AdminStats {
+            total_players: snapshot.total_players,
+            total_games: snapshot.total_games,
+            active_sessions: snapshot.active_sessions,
+            queue_size: snapshot.queue_size,
+        },
+        Err(err) => {
+            tracing::error!("Failed to load admin dashboard stats: {}", err);
+            AdminStats {
+                total_players: 0,
+                total_games: 0,
+                active_sessions: 0,
+                queue_size: 0,
+            }
+        }
     };
 
     let template = AdminTemplate { stats };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_players(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    let players: Vec<db::PlayerRecord> = state.db.select("players").await.unwrap_or_default();
+    let players = state
+        .admin_service
+        .list_players()
+        .await
+        .unwrap_or_else(|err| {
+            tracing::error!("Failed to list players for admin view: {}", err);
+            Vec::new()
+        });
     let template = AdminPlayersTemplate { players };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_query_page(
-    State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    State(_state): ServerState,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
     let template = AdminQueryTemplate {
         query_text: String::new(),
         result: None,
         error: None,
         timestamp: timestamp(),
     };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1200,26 +932,11 @@ pub struct QueryForm {
 
 pub async fn html_admin_query_execute(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Form(form): Form<QueryForm>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    // Execute query
-    let query_result: Result<surrealdb::Response, surrealdb::Error> =
-        state.db.query(&form.query).await;
+    // Execute query through admin service
+    let query_result = state.admin_service.run_query(&form.query).await;
 
     let (result, error) = match query_result {
         Ok(mut response) => {
@@ -1243,42 +960,17 @@ pub async fn html_admin_query_execute(
         error,
         timestamp: timestamp(),
     };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_cleanup_sessions(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    // Delete expired sessions
     let now = timestamp();
-    let _: Result<surrealdb::Response, _> = state
-        .db
-        .query("DELETE FROM sessions WHERE expires_at < $expires_at")
-        .bind(("expires_at", now))
-        .await;
+    if let Err(err) = state.admin_service.cleanup_expired_sessions(now).await {
+        tracing::error!("Failed to cleanup expired sessions: {}", err);
+    }
 
     Redirect::to("/admin").into_response()
 }
@@ -1294,41 +986,42 @@ struct SessionInfo {
 
 pub async fn html_admin_sessions(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    // Get all sessions from database
-    let sessions_result: Result<Vec<db::SessionRecord>, _> = state
-        .db
-        .query("SELECT * FROM sessions ORDER BY created_at DESC")
+    let sessions = state
+        .admin_service
+        .list_sessions()
         .await
-        .and_then(|mut resp| resp.take(0));
+        .unwrap_or_else(|err| {
+            tracing::error!("Failed to list sessions for admin view: {}", err);
+            Vec::new()
+        });
 
-    let sessions = match sessions_result {
-        Ok(sessions) => sessions,
-        Err(_) => vec![],
-    };
+    let player_ids: Vec<Uuid> = sessions.iter().map(|s| as_uuid(&s.player_id)).collect();
+
+    let player_lookup = state
+        .admin_service
+        .players_by_ids(&player_ids)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::error!("Failed to resolve player names for sessions: {}", err);
+            HashMap::new()
+        });
 
     let now = timestamp();
     let session_infos: Vec<SessionInfo> = sessions
         .into_iter()
         .map(|s| {
+            let session_id = as_uuid(&s.id);
+            let player_id = as_uuid(&s.player_id);
+            let player_name = player_lookup
+                .get(&player_id)
+                .map(|p| p.displayname.clone())
+                .unwrap_or_else(|| player_id.to_string());
+
             SessionInfo {
-                session_id: as_uuid(&s.id).to_string(),
-                player_name: as_uuid(&s.player_id).to_string(),
+                session_id: session_id.to_string(),
+                player_name,
                 created_at: 0, // Not available in current schema
                 expires_at: s.expires_at,
                 is_expired: s.expires_at < now,
@@ -1339,38 +1032,24 @@ pub async fn html_admin_sessions(
     let template = AdminSessionsTemplate {
         sessions: session_infos,
     };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_delete_session(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Path(session_to_delete): Path<String>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
+    if let Ok(session_uuid) = Uuid::parse_str(&session_to_delete) {
+        if let Err(err) = state.admin_service.delete_session(session_uuid).await {
+            tracing::error!("Failed to delete session {}: {}", session_to_delete, err);
+        }
+    } else {
+        tracing::warn!(
+            "Invalid session id provided for deletion: {}",
+            session_to_delete
+        );
     }
-
-    let _: Result<Option<db::SessionRecord>, _> =
-        state.db.delete(("sessions", session_to_delete)).await;
 
     Redirect::to("/admin/sessions").into_response()
 }
@@ -1381,51 +1060,40 @@ struct GameSummary {
     lifecycle: GameLifecycle,
     player_count: usize,
     max_players: u8,
-    round: u32,
+    round: String,
     created_at: u64,
 }
 
 pub async fn html_admin_games(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
     let filter = params.get("filter").map(|s| s.as_str()).unwrap_or("all");
 
-    // Get all game states
-    let game_states_result: Result<Vec<db::GameRecord>, _> = state
-        .db
-        .query("SELECT * FROM games ORDER BY created_at DESC")
-        .await
-        .and_then(|mut resp| resp.take(0));
-
-    let game_states = match game_states_result {
-        Ok(states) => states,
-        Err(_) => vec![],
+    let mut game_records = match state.admin_service.list_game_records().await {
+        Ok(records) => records,
+        Err(err) => {
+            tracing::error!("Failed to list games for admin view: {}", err);
+            Vec::new()
+        }
     };
 
+    game_records.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
     let mut games: Vec<GameSummary> = vec![];
-    for gs in game_states {
-        // Parse lifecycle from string
-        let lifecycle = match gs.lifecycle.as_str() {
-            "Waiting" => GameLifecycle::Waiting,
-            "InProgress" => GameLifecycle::InProgress,
-            "Finished" => GameLifecycle::Finished,
-            _ => continue,
+    for gs in game_records {
+        // Parse lifecycle from string using the new enum
+        let lifecycle_state = match GameLifecycleState::try_from(gs.lifecycle.clone()) {
+            Ok(state) => state,
+            Err(_) => continue, // Skip invalid lifecycle states
+        };
+
+        // Convert to the API type
+        let lifecycle = match lifecycle_state {
+            GameLifecycleState::Waiting => GameLifecycle::Waiting,
+            GameLifecycleState::InProgress => GameLifecycle::InProgress,
+            GameLifecycleState::Finished => GameLifecycle::Finished,
         };
 
         // Apply filter
@@ -1455,10 +1123,10 @@ pub async fn html_admin_games(
             player_count: actual_player_count,
             max_players: gs.player_count,
             round: match game.round {
-                automatafl_logic::RoundState::Fresh => 0,
-                automatafl_logic::RoundState::PartiallySubmitted => 1,
-                automatafl_logic::RoundState::ResolvingConflict => 1,
-                automatafl_logic::RoundState::GameOver => 999,
+                automatafl_logic::RoundState::Fresh => "Fresh".to_string(),
+                automatafl_logic::RoundState::PartiallySubmitted => "Partial".to_string(),
+                automatafl_logic::RoundState::ResolvingConflict => "Resolving".to_string(),
+                automatafl_logic::RoundState::GameOver => "Game Over".to_string(),
             },
             created_at: gs.created_at,
         });
@@ -1469,82 +1137,41 @@ pub async fn html_admin_games(
         filter: filter.to_string(),
     };
 
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_delete_game(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Path(game_id): Path<String>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
+    match Uuid::parse_str(&game_id) {
+        Ok(game_uuid) => {
+            if let Err(err) = state.admin_service.delete_game(game_uuid).await {
+                tracing::error!(game_id = %game_uuid, "Failed to delete game: {}", err);
+            }
+        }
+        Err(_) => {
+            tracing::warn!("Invalid game id provided for deletion: {}", game_id);
+        }
     }
-
-    let _: Result<Option<db::GameRecord>, _> = state.db.delete(("games", game_id)).await;
 
     Redirect::to("/admin/games").into_response()
 }
 
 pub async fn html_admin_force_complete(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Path(game_id): Path<String>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
     // Parse game UUID
     let game_uuid = match game_id.parse::<uuid::Uuid>() {
         Ok(uuid) => uuid,
         Err(_) => return Redirect::to(&format!("/game/{}", game_id)).into_response(),
     };
 
-    // Load and force complete the round
-    let result = db::load_game_state(&state.db, game_uuid).await;
-    if let Ok(Some((mut game_core, lifecycle, _player_ids))) = result {
-        if matches!(lifecycle, GameLifecycle::InProgress) {
-            // Force complete by trying to complete the round
-            if let Ok(_) = game_core.try_complete_round() {
-                // Save updated game state
-                let game_json = serde_json::to_string(&game_core).unwrap_or_default();
-                let _: Result<Option<db::GameRecord>, _> = state
-                    .db
-                    .query("UPDATE games SET game_state = $state WHERE id = $id")
-                    .bind(("id", game_uuid.to_string()))
-                    .bind(("state", game_json))
-                    .await
-                    .and_then(|mut r| r.take(0));
-            }
-        }
+    if let Err(err) = state.admin_service.force_complete_round(game_uuid).await {
+        tracing::error!(game_id = %game_uuid, "Failed to force complete round: {}", err);
     }
 
     Redirect::to(&format!("/game/{}", game_id)).into_response()
@@ -1561,93 +1188,54 @@ struct QueueEntry {
 
 pub async fn html_admin_queue(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
-    // Get matchmaking queue entries
-    let queue_result: Result<Vec<db::MatchmakingQueueRecord>, _> = state
-        .db
-        .query("SELECT * FROM matchmaking_queue ORDER BY queued_at ASC")
+    let queue_entries = state
+        .admin_service
+        .queue_entries()
         .await
-        .and_then(|mut resp| resp.take(0));
+        .unwrap_or_else(|err| {
+            tracing::error!("Failed to fetch matchmaking queue for admin view: {}", err);
+            Vec::new()
+        });
 
-    let queue_entries = match queue_result {
-        Ok(entries) => entries,
-        Err(_) => vec![],
-    };
-
-    let now = timestamp();
     let mut queue = vec![];
     for entry in queue_entries {
-        // Get player info
-        let player: Option<db::PlayerRecord> = state
-            .db
-            .select(("players", as_uuid(&entry.player_id)))
-            .await
-            .ok()
-            .flatten();
-
-        if let Some(p) = player {
-            let waiting_time = format!("{}s", now.saturating_sub(entry.queued_at));
+        if let (Some(displayname), Some(elo_rating)) =
+            (entry.player_displayname, entry.player_elo_rating)
+        {
             queue.push(QueueEntry {
-                player_id: as_uuid(&entry.player_id).to_string(),
-                displayname: p.displayname,
-                elo_rating: p.elo_rating,
+                player_id: entry.player_id.to_string(),
+                displayname,
+                elo_rating,
                 joined_at: entry.queued_at,
-                waiting_time,
+                waiting_time: format!("{}s", entry.wait_time_seconds),
             });
         }
     }
 
     let template = AdminQueueTemplate { queue };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 pub async fn html_admin_remove_from_queue(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Path(player_id): Path<String>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
+    match Uuid::parse_str(&player_id) {
+        Ok(uuid) => {
+            if let Err(err) = state.admin_service.remove_from_queue(uuid).await {
+                tracing::error!(player_id = %uuid, "Failed to remove player from queue: {}", err);
+            }
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Invalid player id provided for queue removal: {}",
+                player_id
+            );
+        }
     }
-
-    let _: Result<surrealdb::Response, _> = state
-        .db
-        .query("DELETE FROM matchmaking_queue WHERE player_id = $player_id")
-        .bind(("player_id", player_id))
-        .await;
 
     Redirect::to("/admin/queue").into_response()
 }
@@ -1662,68 +1250,61 @@ struct GameEventInfo {
 
 pub async fn html_admin_events(
     State(state): ServerState,
-    headers: axum::http::HeaderMap,
+    _admin: AdminWebPlayer,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let session_id = match get_session_from_cookies(&headers) {
-        Some(id) => id,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    let (_, player) = match get_player_from_session(&state.db, session_id).await {
-        Some(p) => p,
-        None => return Redirect::to("/login").into_response(),
-    };
-
-    if !player.is_admin {
-        return (StatusCode::FORBIDDEN, "Admin access required").into_response();
-    }
-
     let game_id_filter = params.get("game_id").map(|s| s.to_string());
 
-    let query = if let Some(ref game_id) = game_id_filter {
-        format!(
-            "SELECT * FROM game_events WHERE game_id = '{}' ORDER BY timestamp DESC LIMIT 100",
-            game_id
-        )
-    } else {
-        "SELECT * FROM game_events ORDER BY timestamp DESC LIMIT 100".to_string()
+    let filter_uuid = match game_id_filter.as_ref() {
+        Some(id_str) => match Uuid::parse_str(id_str) {
+            Ok(uuid) => Some(uuid),
+            Err(_) => {
+                tracing::warn!("Invalid game id provided for events filter: {}", id_str);
+                None
+            }
+        },
+        None => None,
     };
 
-    let events_result: Result<Vec<crate::db::GameEventRecord>, _> = state
-        .db
-        .query(&query)
+    let events_records = state
+        .admin_service
+        .recent_game_events(filter_uuid, 100)
         .await
-        .and_then(|mut resp| resp.take(0));
-
-    let events_records = match events_result {
-        Ok(events) => events,
-        Err(_) => vec![],
-    };
+        .unwrap_or_else(|err| {
+            tracing::error!("Failed to load game events for admin view: {}", err);
+            Vec::new()
+        });
 
     let events: Vec<GameEventInfo> = events_records
         .into_iter()
         .map(|ev| {
-            let event_type = match &ev.event {
-                automatafl_api_types::GameEventData::PlayerJoined { .. } => "PLAYER_JOINED",
-                automatafl_api_types::GameEventData::GameStarted => "GAME_STARTED",
-                automatafl_api_types::GameEventData::MoveAcknowledged { .. } => "MOVE_ACK",
-                automatafl_api_types::GameEventData::MoveInvalid { .. } => "MOVE_INVALID",
-                automatafl_api_types::GameEventData::Move { .. } => "MOVE",
-                automatafl_api_types::GameEventData::AutomatonStep { .. } => "AUTOMATON_STEP",
-                automatafl_api_types::GameEventData::GameOver { .. } => "GAME_OVER",
-                automatafl_api_types::GameEventData::EloUpdate { .. } => "ELO_UPDATE",
-                automatafl_api_types::GameEventData::RoundComplete => "ROUND_COMPLETE",
-                automatafl_api_types::GameEventData::Conflicts { .. } => "CONFLICTS",
-                automatafl_api_types::GameEventData::Chat { .. } => "CHAT",
-                automatafl_api_types::GameEventData::GameLoaded { .. } => "GAME_LOADED",
-                automatafl_api_types::GameEventData::State { .. } => "STATE",
+            let event_value = ev.event;
+            let event_type = match serde_json::from_value::<automatafl_api_types::GameEventData>(
+                event_value.clone(),
+            ) {
+                Ok(automatafl_api_types::GameEventData::PlayerJoined { .. }) => "PLAYER_JOINED",
+                Ok(automatafl_api_types::GameEventData::GameStarted { .. }) => "GAME_STARTED",
+                Ok(automatafl_api_types::GameEventData::MoveAcknowledged { .. }) => "MOVE_ACK",
+                Ok(automatafl_api_types::GameEventData::MoveInvalid { .. }) => "MOVE_INVALID",
+                Ok(automatafl_api_types::GameEventData::Move { .. }) => "MOVE",
+                Ok(automatafl_api_types::GameEventData::AutomatonStep { .. }) => "AUTOMATON_STEP",
+                Ok(automatafl_api_types::GameEventData::GameOver { .. }) => "GAME_OVER",
+                Ok(automatafl_api_types::GameEventData::EloUpdate { .. }) => "ELO_UPDATE",
+                Ok(automatafl_api_types::GameEventData::RoundComplete { .. }) => "ROUND_COMPLETE",
+                Ok(automatafl_api_types::GameEventData::Conflicts { .. }) => "CONFLICTS",
+                Ok(automatafl_api_types::GameEventData::Chat { .. }) => "CHAT",
+                Ok(automatafl_api_types::GameEventData::GameLoaded { .. }) => "GAME_LOADED",
+                Ok(automatafl_api_types::GameEventData::State { .. }) => "STATE",
+                Err(err) => {
+                    tracing::warn!(error = %err, "Failed to deserialize game event for admin view");
+                    "UNKNOWN"
+                }
             };
             GameEventInfo {
                 timestamp: ev.timestamp,
                 game_id: as_uuid(&ev.game_id).to_string(),
                 event_type: event_type.to_string(),
-                details: serde_json::to_string_pretty(&ev.event)
+                details: serde_json::to_string_pretty(&event_value)
                     .unwrap_or_else(|_| "{}".to_string()),
             }
         })
@@ -1733,15 +1314,7 @@ pub async fn html_admin_events(
         events,
         game_id_filter,
     };
-
-    match template.render() {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Template error: {}", err),
-        )
-            .into_response(),
-    }
+    HtmlTemplate(template).into_response()
 }
 
 // Matchmaking HTML handlers
@@ -1754,20 +1327,25 @@ pub async fn html_matchmaking_join(
         None => return Redirect::to("/login").into_response(),
     };
 
-    let (player_id, _player) = match get_player_from_session(&state.db, session_id).await {
+    let (player_id, _player) = match get_player_from_session(state.as_ref(), session_id).await {
         Some(p) => p,
         None => return Redirect::to("/login").into_response(),
     };
 
-    // Add to matchmaking queue directly
-    let entry = db::MatchmakingQueueRecord {
-        player_id: RecordId::from_table_key("players", player_id),
-        queued_at: timestamp(),
-        game_preferences: r#"{"player_count":2,"use_column_rule":false}"#.to_string(),
+    let default_request = JoinMatchmakingRequest {
+        player_count: 2,
+        use_column_rule: false,
     };
 
-    let _: Result<Option<db::MatchmakingQueueRecord>, _> =
-        state.db.create("matchmaking_queue").content(entry).await;
+    let preferences = serde_json::to_string(&default_request).unwrap_or_else(|_| "{}".to_string());
+
+    if let Err(err) = state
+        .matchmaking_service
+        .join_queue(player_id, timestamp(), preferences)
+        .await
+    {
+        tracing::error!(player_id = %player_id, "Failed to join matchmaking queue: {}", err);
+    }
 
     Redirect::to("/matchmaking").into_response()
 }
@@ -1781,17 +1359,14 @@ pub async fn html_matchmaking_leave(
         None => return Redirect::to("/login").into_response(),
     };
 
-    let (player_id, _) = match get_player_from_session(&state.db, session_id).await {
+    let (player_id, _) = match get_player_from_session(state.as_ref(), session_id).await {
         Some(p) => p,
         None => return Redirect::to("/login").into_response(),
     };
 
-    // Remove from queue
-    let _: Result<surrealdb::Response, _> = state
-        .db
-        .query("DELETE FROM matchmaking_queue WHERE player_id = $player_id")
-        .bind(("player_id", player_id.to_string()))
-        .await;
+    if let Err(err) = state.matchmaking_service.leave_queue(player_id).await {
+        tracing::error!(player_id = %player_id, "Failed to leave matchmaking queue: {}", err);
+    }
 
     Redirect::to("/matchmaking").into_response()
 }

@@ -36,7 +36,7 @@
     </form>
     
     <form method="POST" action="/admin/query">
-        <input type="hidden" name="query" value="SELECT * FROM sessions WHERE expires_at > {{ timestamp }};">
+        <input type="hidden" name="query" value="SELECT * FROM sessions WHERE expires_at > {{ timestamp }}">
         <button type="submit" style="width: 100%; background: #f39c12; font-size: 12px;">Active Sessions</button>
     </form>
     
@@ -56,18 +56,19 @@
     </form>
 </div>
 
-{% if result.is_some() %}
+{% if let Some(err) = error %}
+<h3>Query Error</h3>
+<div style="background: #fee; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #e74c3c;">
+    <div style="color: #e74c3c; font-family: monospace;">
+        <strong>Error:</strong> {{ err }}
+    </div>
+</div>
+{% endif %}
+
+{% if let Some(res) = result %}
 <h3>Query Results</h3>
 <div style="background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; overflow-x: auto;">
-    {% if let Some(res) = result %}
-        {% if let Some(err) = error %}
-            <div style="color: #e74c3c; font-family: monospace;">
-                <strong>Error:</strong> {{ err }}
-            </div>
-        {% else %}
-            <pre style="margin: 0; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{{ res }}</pre>
-        {% endif %}
-    {% endif %}
+    <pre style="margin: 0; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{{ res }}</pre>
 </div>
 {% endif %}
 

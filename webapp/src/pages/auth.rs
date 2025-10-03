@@ -12,7 +12,7 @@ pub fn LoginPage() -> impl IntoView {
     let app_state_for_redirect = app_state.clone();
     let navigate_for_redirect = navigate.clone();
     Effect::new(move |_| {
-        if app_state_for_redirect.is_authenticated() {
+        if app_state_for_redirect.is_authenticated.get() {
             navigate_for_redirect("/", Default::default());
         }
     });
@@ -53,7 +53,11 @@ pub fn LoginPage() -> impl IntoView {
     Effect::new(move |_| {
         match login_action.value().get() {
             Some(Ok(login_response)) => {
-                app_state_for_login.login(login_response.session_id, login_response.player_id);
+                app_state_for_login.login(
+                    login_response.session_id,
+                    login_response.player_id,
+                    login_response.is_admin,
+                );
                 toast_for_login.success("Login successful! Redirecting...");
                 navigate_for_login("/", Default::default());
             }
@@ -126,7 +130,7 @@ pub fn RegisterPage() -> impl IntoView {
     let app_state_for_redirect = app_state.clone();
     let navigate_for_redirect = navigate.clone();
     Effect::new(move |_| {
-        if app_state_for_redirect.is_authenticated() {
+        if app_state_for_redirect.is_authenticated.get() {
             navigate_for_redirect("/", Default::default());
         }
     });

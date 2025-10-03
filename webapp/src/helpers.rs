@@ -49,72 +49,48 @@ where
     create_api_resource_with_trigger(move || refresh_trigger.get(), fetch_fn)
 }
 
-/// Helper to create a game-aware resource that refreshes on WebSocket state changes
-/// Note: This is now deprecated - prefer subscribing directly to game state signals
-pub fn create_game_resource<T, F, Fut>(
-    game_id: Uuid,
-    fetch_fn: F,
-) -> LocalResource<Result<T, automatafl_backend_client::ClientError>>
-where
-    T: 'static,
-    F: Fn(ApiClient) -> Fut + 'static,
-    Fut: std::future::Future<Output = Result<T, automatafl_backend_client::ClientError>> + 'static,
-{
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-
-    create_api_resource_with_trigger(
-        move || {
-            // React to game state signal changes (full state updates)
-            app_state.get_game_signal(game_id).map(|sig| sig.get())
-        },
-        fetch_fn,
-    )
-}
-
-/// Helper to handle action results with toast notifications
-pub fn handle_action_result<T: Clone + 'static>(
-    action: Action<impl Clone + 'static, Result<T, automatafl_backend_client::ClientError>>,
-    on_success: impl Fn(T) + 'static,
+/// Creates a Leptos Action that automatically displays success/error toasts.
+/// This is more ergonomic than creating an action and then calling handle_action_result.
+pub fn use_toast_action<I, O, E, F, Fut>(
+    action_fn: F,
     success_message: Option<String>,
     error_prefix: Option<String>,
-) {
+) -> Action<I, Result<O, E>>
+where
+    I: Clone + 'static,
+    O: Clone + 'static,
+    E: std::fmt::Display + 'static,
+    F: Fn(&I) -> Fut + 'static,
+    Fut: std::future::Future<Output = Result<O, E>> + 'static,
+{
+    let action = Action::new_local(action_fn);
     let toast = use_toast();
+    let value_signal = action.value();
 
     Effect::new(move |_| {
-        if let Some(result) = action.value().get() {
-            match result {
-                Ok(value) => {
-                    if let Some(msg) = success_message.clone() {
-                        toast.success(msg);
+        // Use .version() to track action completion
+        action.version().track();
+
+        value_signal.with(|maybe_result| {
+            if let Some(result) = maybe_result {
+                match result {
+                    Ok(_) => {
+                        if let Some(msg) = success_message.clone() {
+                            toast.success(msg);
+                        }
                     }
-                    on_success(value);
-                }
-                Err(e) => {
-                    let prefix = error_prefix
-                        .clone()
-                        .unwrap_or_else(|| "Operation failed".to_string());
-                    toast.error(format!("{}: {}", prefix, e));
+                    Err(e) => {
+                        let prefix = error_prefix
+                            .clone()
+                            .unwrap_or_else(|| "Operation failed".to_string());
+                        toast.error(format!("{}: {}", prefix, e));
+                    }
                 }
             }
-        }
+        });
     });
-}
 
-/// Simple toast notification for action results
-/// Use this in an Effect that watches action.value()
-pub fn toast_on_result<T>(
-    result: Option<Result<T, automatafl_backend_client::ClientError>>,
-    success_message: impl Into<String>,
-    error_prefix: impl Into<String>,
-) {
-    let toast = use_toast();
-
-    if let Some(res) = result {
-        match res {
-            Ok(_) => toast.success(success_message.into()),
-            Err(e) => toast.error(format!("{}: {}", error_prefix.into(), e)),
-        }
-    }
+    action
 }
 
 /// Debounce a callback (useful for search inputs, chat, etc.)
@@ -174,7 +150,7 @@ pub fn truncate_uuid(uuid: Uuid, chars: usize) -> String {
 /// Check if user is authenticated (common pattern)
 pub fn use_auth_check() -> bool {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    app_state.is_authenticated()
+    app_state.is_authenticated.get()
 }
 
 /// Get current player ID (common pattern)

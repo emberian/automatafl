@@ -25,8 +25,7 @@ impl SessionRepository {
             expires_at,
         };
 
-        self
-            .db
+        self.db
             .create::<Option<SessionRecord>>(("sessions", session_id))
             .content(record)
             .await?;
@@ -35,20 +34,30 @@ impl SessionRepository {
     }
 
     /// Fetch a session by identifier
-    pub async fn get(
-        &self,
-        session_id: Uuid,
-    ) -> Result<Option<SessionRecord>, surrealdb::Error> {
-    self.db.select(("sessions", session_id.to_string())).await
+    pub async fn get(&self, session_id: Uuid) -> Result<Option<SessionRecord>, surrealdb::Error> {
+        self.db.select(("sessions", session_id)).await
     }
 
     /// Delete a session by identifier
     pub async fn delete(&self, session_id: Uuid) -> Result<(), surrealdb::Error> {
-        self
-            .db
+        self.db
             .delete::<Option<SessionRecord>>(("sessions", session_id))
             .await?;
         Ok(())
+    }
+
+    /// Delete all sessions belonging to a player
+    pub async fn delete_by_player(&self, player_id: Uuid) -> Result<(), surrealdb::Error> {
+        self.db
+            .query("DELETE sessions WHERE player_id = $player_id")
+            .bind(("player_id", player_id.to_string()))
+            .await?;
+        Ok(())
+    }
+
+    /// List all sessions (admin use case)
+    pub async fn list_all(&self) -> Result<Vec<SessionRecord>, surrealdb::Error> {
+        self.db.select("sessions").await
     }
 
     /// Remove expired sessions, returning the number of deleted rows

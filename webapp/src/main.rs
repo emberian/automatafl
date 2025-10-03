@@ -64,12 +64,12 @@ fn App() -> impl IntoView {
                         <a href="/" class="nav-brand">"Automatafl"</a>
                         <div class="nav-links">
                             <a href="/games">"Games"</a>
-                            <Show when=move || app_state_for_nav.is_authenticated()>
+                            <Show when=move || app_state_for_nav.is_authenticated.get()>
                                 <a href="/games/create">"Create Game"</a>
                                 <a href="/matchmaking">"Quick Match"</a>
                             </Show>
                             <a href="/leaderboard">"Leaderboard"</a>
-                            <Show when=move || app_state_for_nav_leader.is_authenticated()>
+                            <Show when=move || app_state_for_nav_leader.is_authenticated.get()>
                                 {{
                                     move || {
                                         let player_id = app_state_for_profile.current_player_id.get();
@@ -78,6 +78,8 @@ fn App() -> impl IntoView {
                                         })
                                     }
                                 }}
+                            </Show>
+                            <Show when=move || app_state_for_profile.is_admin()>
                                 <a href="/admin">"Admin"</a>
                             </Show>
                             <a href="/health">"Status"</a>
@@ -85,7 +87,7 @@ fn App() -> impl IntoView {
                         <div class="nav-auth">
                             <ConnectionStatus />
                             <Show
-                                when=move || app_state_for_auth.is_authenticated()
+                                when=move || app_state_for_auth.is_authenticated.get()
                                 fallback=|| view! {
                                     <a href="/login" class="button button-small">"Login"</a>
                                     <a href="/register" class="button button-small button-primary">"Register"</a>

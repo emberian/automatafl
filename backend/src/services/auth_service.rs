@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     common::timestamp,
-    db::{as_uuid, PlayerRecord, SessionRecord},
+    db::{PlayerRecord, SessionRecord, as_uuid},
     repositories::{PlayerRepository, SessionRepository},
     validation,
 };
@@ -10,12 +10,14 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 /// Result returned after a successful login
 pub struct LoginResult {
     pub session_id: Uuid,
     pub player_id: Uuid,
+    pub is_admin: bool,
 }
 
 /// Result returned after a successful registration
@@ -48,7 +50,9 @@ impl From<surrealdb::Error> for AuthServiceError {
 impl fmt::Display for AuthServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AuthServiceError::DisplaynameTaken(name) => write!(f, "Displayname already taken: {}", name),
+            AuthServiceError::DisplaynameTaken(name) => {
+                write!(f, "Displayname already taken: {}", name)
+            }
             AuthServiceError::InvalidCredentials => write!(f, "Invalid credentials"),
             AuthServiceError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
             AuthServiceError::Database(e) => write!(f, "Database error: {}", e),
@@ -100,9 +104,15 @@ impl AuthService {
             .to_string();
 
         let player_id = Uuid::new_v4();
-        self
-            .player_repo
-            .create(player_id, displayname, password_hash, false)
+        debug!(player_id = %player_id, displayname = %displayname, "Creating player with password hash");
+        self.player_repo
+            .create(
+                player_id,
+                displayname,
+                password_hash,
+                salt.to_string(),
+                false,
+            )
             .await?;
 
         Ok(RegisterResult { player_id })
@@ -125,14 +135,14 @@ impl AuthService {
 
         let session_id = Uuid::new_v4();
         let expires_at = timestamp() + self.session_duration;
-        self
-            .session_repo
+        self.session_repo
             .create(session_id, player_id, expires_at)
             .await?;
 
         Ok(LoginResult {
             session_id,
             player_id,
+            is_admin: player.is_admin,
         })
     }
 
@@ -152,7 +162,10 @@ impl AuthService {
 
     /// Cleanup expired sessions
     pub async fn cleanup_expired(&self, now: u64) -> Result<u64, AuthServiceError> {
-        self.session_repo.cleanup_expired(now).await.map_err(Into::into)
+        self.session_repo
+            .cleanup_expired(now)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -176,10 +189,18 @@ fn validate_password(password: &str) -> Result<(), AuthServiceError> {
 }
 
 fn verify_password(player: &PlayerRecord, password: &str) -> Result<(), AuthServiceError> {
-    let parsed_hash = PasswordHash::new(&player.password_hash)
-        .map_err(|e| AuthServiceError::PasswordHash(e.to_string()))?;
+    let player_id = crate::db::as_uuid(&player.id);
+    debug!(player_id = %player_id, "Verifying player password");
+
+    let parsed_hash = PasswordHash::new(&player.password_hash).map_err(|e| {
+        warn!(player_id = %player_id, error = %e, "Stored password hash invalid");
+        AuthServiceError::PasswordHash(e.to_string())
+    })?;
 
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed_hash)
-        .map_err(|_| AuthServiceError::InvalidCredentials)
+        .map_err(|e| {
+            warn!(player_id = %player_id, error = %e, "Password verification failed");
+            AuthServiceError::InvalidCredentials
+        })
 }

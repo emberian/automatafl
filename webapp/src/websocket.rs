@@ -331,3 +331,52 @@ impl Drop for WebSocketConnection {
 pub fn create_game_websocket(game_id: Uuid, app_state: &AppState) -> WebSocketConnection {
     WebSocketConnection::new(game_id, app_state.clone())
 }
+
+/// Reactive hook for managing WebSocket connection lifecycle
+///
+/// Automatically connects when game_id is Some and disconnects on cleanup.
+/// Uses Leptos effect system for proper lifecycle management.
+///
+/// # Example
+/// ```rust
+/// use_game_websocket(game_id_signal);
+/// ```
+pub fn use_game_websocket<S>(game_id: S)
+where
+    S: leptos::prelude::Get<Value = Option<Uuid>> + Copy + 'static,
+{
+    use crate::state::AppState;
+    use leptos::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
+
+    // Use Rc<RefCell> to store connection (compatible with single-threaded WASM)
+    let ws_connection = Rc::new(RefCell::new(None::<WebSocketConnection>));
+
+    Effect::new(move |prev_gid: Option<Option<Uuid>>| {
+        let current_gid = game_id.get();
+
+        // Only reconnect if game_id actually changed
+        if prev_gid != Some(current_gid) {
+            // Drop previous connection if exists
+            *ws_connection.borrow_mut() = None;
+
+            // Create new connection if we have a game_id
+            if let Some(gid) = current_gid {
+                let ws = WebSocketConnection::new(gid, app_state.clone());
+                web_sys::console::log_1(
+                    &format!(
+                        "🔌 WebSocket connected for game {} (via use_game_websocket)",
+                        gid
+                    )
+                    .into(),
+                );
+                *ws_connection.borrow_mut() = Some(ws);
+            }
+        }
+
+        current_gid
+    });
+}

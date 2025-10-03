@@ -10,121 +10,12 @@ use automatafl_logic::{Board, Coord, Pid};
 
 use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
 use crate::db::as_uuid;
-use crate::services::{MatchmakingServiceError, PlayerServiceError};
-use crate::{db, middleware};
+use crate::middleware;
+use crate::services::{MatchmakingServiceError, PlayerServiceError, QueueEntry};
 
 // ============================================================================
 // ELO Rating System
 // ============================================================================
-
-/// Calculate new ELO ratings after a game
-/// Uses standard ELO formula with K-factor from constants
-fn calculate_elo_change(winner_elo: i32, loser_elo: i32) -> (i32, i32) {
-    use crate::common::ELO_K_FACTOR;
-
-    // Expected scores
-    let expected_winner = 1.0 / (1.0 + 10_f64.powf((loser_elo - winner_elo) as f64 / 400.0));
-    let expected_loser = 1.0 / (1.0 + 10_f64.powf((winner_elo - loser_elo) as f64 / 400.0));
-
-    // Actual scores (1 for win, 0 for loss)
-    let winner_change = (ELO_K_FACTOR * (1.0 - expected_winner)).round() as i32;
-    let loser_change = (ELO_K_FACTOR * (0.0 - expected_loser)).round() as i32;
-
-    let new_winner_elo = winner_elo + winner_change;
-    let new_loser_elo = loser_elo + loser_change;
-
-    (new_winner_elo, new_loser_elo)
-}
-
-/// Update player stats and ELO ratings after a game finishes
-pub async fn update_game_completion_stats(
-    db: &db::Db,
-    game_id: Uuid,
-    winner_pid: Pid,
-    game_start_time: u64,
-) -> Result<Vec<EloChange>, Box<dyn std::error::Error + Send + Sync>> {
-    let game_players = db::get_game_players(db, game_id).await?;
-    let game_end_time = timestamp();
-    let playtime = game_end_time.saturating_sub(game_start_time);
-
-    // Get all player IDs and their PIDs
-    let mut players_info: Vec<(Uuid, u8, i32)> = Vec::new();
-    for gp in &game_players {
-        let player_uuid = as_uuid(&gp.player_id);
-        let player = db::get_player(db, player_uuid)
-            .await?
-            .ok_or("Player not found")?;
-        players_info.push((player_uuid, gp.player_pid, player.elo_rating));
-    }
-
-    let mut elo_changes = Vec::new();
-
-    // For 2-player games, update ELO
-    if players_info.len() == 2 {
-        let (p1_uuid, p1_pid, p1_elo) = players_info[0];
-        let (p2_uuid, _p2_pid, p2_elo) = players_info[1];
-
-        let (new_winner_elo, new_loser_elo) = if winner_pid.0 == p1_pid {
-            calculate_elo_change(p1_elo, p2_elo)
-        } else {
-            let (new_p2, new_p1) = calculate_elo_change(p2_elo, p1_elo);
-            (new_p1, new_p2)
-        };
-
-        // Track ELO changes
-        if winner_pid.0 == p1_pid {
-            elo_changes.push(EloChange {
-                player_id: p1_uuid,
-                old_elo: p1_elo,
-                new_elo: new_winner_elo,
-                change: new_winner_elo - p1_elo,
-            });
-            elo_changes.push(EloChange {
-                player_id: p2_uuid,
-                old_elo: p2_elo,
-                new_elo: new_loser_elo,
-                change: new_loser_elo - p2_elo,
-            });
-        } else {
-            elo_changes.push(EloChange {
-                player_id: p1_uuid,
-                old_elo: p1_elo,
-                new_elo: new_loser_elo,
-                change: new_loser_elo - p1_elo,
-            });
-            elo_changes.push(EloChange {
-                player_id: p2_uuid,
-                old_elo: p2_elo,
-                new_elo: new_winner_elo,
-                change: new_winner_elo - p2_elo,
-            });
-        }
-
-        tracing::info!(
-            "ELO updated for game {}: {} changes recorded",
-            game_id,
-            elo_changes.len()
-        );
-    }
-
-    // Update stats for all players atomically (including ELO if applicable)
-    for (player_uuid, player_pid, _player_elo) in players_info {
-        let won = player_pid == winner_pid.0;
-
-        // Find new ELO for this player if it was updated
-        let new_elo = elo_changes
-            .iter()
-            .find(|ec| ec.player_id == player_uuid)
-            .map(|ec| ec.new_elo);
-
-        // Use atomic update to prevent race conditions
-        crate::transactions::update_player_stats_atomic(db, player_uuid, won, playtime, new_elo)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-    }
-
-    Ok(elo_changes)
-}
 
 // Re-export EloChange from api_types
 pub use automatafl_api_types::EloChange;
@@ -216,16 +107,15 @@ pub async fn get_leaderboard_games(
     let entries: Vec<LeaderboardEntry> = ranked
         .into_iter()
         .filter_map(|(player, stats, rank)| {
-            Some(as_uuid(&player.id))
-                .map(|id| LeaderboardEntry {
-                    rank,
-                    player_id: id,
-                    displayname: player.displayname.clone(),
-                    value: stats.games_played as i64,
-                    elo_rating: Some(player.elo_rating),
-                    games_played: Some(stats.games_played),
-                    games_won: Some(stats.games_won),
-                })
+            Some(as_uuid(&player.id)).map(|id| LeaderboardEntry {
+                rank,
+                player_id: id,
+                displayname: player.displayname.clone(),
+                value: stats.games_played as i64,
+                elo_rating: Some(player.elo_rating),
+                games_played: Some(stats.games_played),
+                games_won: Some(stats.games_won),
+            })
         })
         .collect();
 
@@ -248,14 +138,11 @@ pub async fn join_matchmaking(
     Json(req): Json<JoinMatchmakingRequest>,
 ) -> Result<StatusCode, AppError> {
     // Rate limit matchmaking joins - 5 joins per minute per player
-    middleware::check_rate_limit_expensive(
+    middleware::check_rate_limit_with_error(
         &format!("matchmaking:{}", auth.player_id),
         5.0,
         5.0 / 60.0,
-    )
-    .map_err(|_| {
-        AppError::ValidationError("Too many matchmaking requests, please wait".to_string())
-    })?;
+    )?;
 
     let preferences = serde_json::to_string(&req).unwrap();
 
@@ -324,11 +211,7 @@ fn map_player_error(action: &str, err: PlayerServiceError) -> AppError {
     }
 }
 
-fn map_matchmaking_error(
-    action: &str,
-    player_id: Uuid,
-    err: MatchmakingServiceError,
-) -> AppError {
+fn map_matchmaking_error(action: &str, player_id: Uuid, err: MatchmakingServiceError) -> AppError {
     match err {
         MatchmakingServiceError::PlayerNotFound(_) => AppError::NoSuchPlayer(player_id),
         MatchmakingServiceError::Database(e) => {
@@ -342,176 +225,261 @@ fn map_matchmaking_error(
 // Background Matchmaking Task
 // ============================================================================
 
+#[derive(serde::Deserialize)]
+struct MatchPrefs {
+    player_count: u8,
+    use_column_rule: bool,
+}
+
+/// Enhanced matchmaking task with better error handling and performance
 pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
-    let mut interval =
-        tokio::time::interval(Duration::from_secs(state.config.matchmaking_interval));
+    let mut interval = tokio::time::interval(state.config.matchmaking_interval);
+
+    tracing::info!(
+        "Matchmaking task started with {:?} interval",
+        state.config.matchmaking_interval
+    );
 
     loop {
         interval.tick().await;
 
-        // Get all players in queue
-        let Ok(queue) = db::get_matchmaking_queue(&state.db).await else {
-            continue;
-        };
-
-        if queue.len() < 2 {
-            continue;
-        }
-
-        // Group by preferences
-        let mut by_prefs: HashMap<String, Vec<db::MatchmakingQueueRecord>> = HashMap::new();
-        for entry in queue {
-            by_prefs
-                .entry(entry.game_preferences.clone())
-                .or_default()
-                .push(entry);
-        }
-
-        // Match players with same preferences
-        for (_prefs, players) in by_prefs {
-            if players.len() < 2 {
-                continue;
-            }
-
-            #[derive(serde::Deserialize)]
-            struct MatchPrefs {
-                player_count: u8,
-                use_column_rule: bool,
-            }
-
-            let prefs: MatchPrefs = match serde_json::from_str(&players[0].game_preferences) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-
-            let num_players = prefs.player_count as usize;
-            if players.len() < num_players {
-                continue;
-            }
-
-            // Get player ELO ratings
-            let mut players_with_elo: Vec<(db::MatchmakingQueueRecord, i32)> = Vec::new();
-            for player in players {
-                let player_uuid = as_uuid(&player.player_id);
-                if let Ok(Some(player_record)) = db::get_player(&state.db, player_uuid).await {
-                    players_with_elo.push((player, player_record.elo_rating));
-                }
-            }
-
-            if players_with_elo.len() < num_players {
-                continue;
-            }
-
-            // Sort by wait time first (for fairness)
-            players_with_elo.sort_by_key(|(p, _)| p.queued_at);
-
-            // Try to match players with similar ELO (oldest player first, then find best match)
-            let mut matched_indices = Vec::new();
-            let elo_tolerance = state.config.matchmaking_elo_tolerance;
-
-            // Take the player who waited longest
-            matched_indices.push(0);
-            let base_elo = players_with_elo[0].1;
-
-            // Find other players within ELO tolerance
-            for i in 1..players_with_elo.len() {
-                if matched_indices.len() >= num_players {
-                    break;
-                }
-                let elo_diff = (players_with_elo[i].1 - base_elo).abs();
-                if elo_diff <= elo_tolerance {
-                    matched_indices.push(i);
-                }
-            }
-
-            // If we couldn't find enough players within tolerance, expand search
-            if matched_indices.len() < num_players {
-                matched_indices.clear();
-                // Just take the first N players sorted by wait time (fairness over perfect ELO matching)
-                for i in 0..num_players.min(players_with_elo.len()) {
-                    matched_indices.push(i);
-                }
-            }
-
-            if matched_indices.len() < num_players {
-                continue;
-            }
-
-            let matched_players: Vec<_> = matched_indices
-                .iter()
-                .map(|&i| &players_with_elo[i].0)
-                .collect();
-
-            // Create game for matched players
-            let board = Board::stock_two_player();
-            let mut game_core =
-                automatafl_logic::Game::new(board, prefs.player_count, prefs.use_column_rule);
-
-            // Set up goals for two-player game
-            if prefs.player_count == 2 {
-                game_core.goals.push((Coord { x: 0, y: 0 }, Pid(0)));
-                game_core.goals.push((Coord { x: 10, y: 0 }, Pid(0)));
-                game_core.goals.push((Coord { x: 0, y: 10 }, Pid(1)));
-                game_core.goals.push((Coord { x: 10, y: 10 }, Pid(1)));
-            }
-
-            let game_id = Uuid::new_v4();
-            let lifecycle = GameLifecycle::Waiting;
-            let first_player_id = as_uuid(&matched_players[0].player_id);
-
-            // Parse player UUIDs first
-            let mut player_uuids = Vec::new();
-            for player in &matched_players {
-                player_uuids.push(as_uuid(&player.player_id));
-            }
-
-            if player_uuids.len() != matched_players.len() {
-                tracing::error!("Failed to parse all player UUIDs, skipping match");
-                continue;
-            }
-
-            // Create game and add players atomically using transaction
-            let player_pids: Vec<(Uuid, u8)> = player_uuids
-                .iter()
-                .enumerate()
-                .map(|(i, &uuid)| (uuid, i as u8))
-                .collect();
-
-            match crate::transactions::create_game_with_players(
-                &state.db,
-                game_id,
-                &game_core,
-                &lifecycle,
-                first_player_id,
-                prefs.player_count,
-                player_pids,
-            )
-            .await
-            {
-                Ok(_) => {
-                    tracing::info!(
-                        "Created game {} with {} players atomically",
-                        game_id,
-                        player_uuids.len()
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to create game atomically: {}", e);
-                    continue;
-                }
-            }
-
-            // Remove matched players from queue (separate operation, logs errors but continues)
-            if let Err(e) = db::remove_from_queue(&state.db, player_uuids.clone()).await {
-                tracing::error!("Failed to remove players from queue: {}", e);
-            }
-
-            // Broadcast match found event (would need WebSocket notification system)
-            tracing::info!(
-                "Match found! Game {} created with {} players",
-                game_id,
-                player_uuids.len()
-            );
+        if let Err(e) = run_matchmaking_cycle(&state).await {
+            tracing::error!("Matchmaking cycle failed: {}", e);
         }
     }
+}
+
+/// Single matchmaking cycle - extracted for better error handling
+async fn run_matchmaking_cycle(
+    state: &Arc<crate::common::AppState>,
+) -> Result<(), crate::common::AppError> {
+    // Get all players in queue
+    let queue = state.matchmaking_service.list_queue().await.map_err(|e| {
+        tracing::error!("Failed to load matchmaking queue: {}", e);
+        crate::common::AppError::DatabaseError("Failed to load matchmaking queue".to_string())
+    })?;
+
+    if queue.len() < 2 {
+        tracing::debug!("Not enough players in queue ({}), waiting...", queue.len());
+        return Ok(());
+    }
+
+    tracing::debug!("Processing matchmaking for {} players", queue.len());
+
+    // Group by preferences
+    let mut by_prefs: HashMap<String, Vec<QueueEntry>> = HashMap::new();
+    for entry in queue {
+        let preferences = entry.game_preferences.clone();
+        by_prefs.entry(preferences).or_default().push(entry);
+    }
+
+    // Match players with same preferences
+    for (_prefs, players) in by_prefs {
+        if players.len() < 2 {
+            continue;
+        }
+
+        if let Err(e) = process_preference_group(state, &players).await {
+            tracing::error!("Failed to process preference group: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Process a group of players with the same preferences
+async fn process_preference_group(
+    state: &Arc<crate::common::AppState>,
+    players: &[QueueEntry],
+) -> Result<(), crate::common::AppError> {
+    let prefs: MatchPrefs = serde_json::from_str(&players[0].game_preferences).map_err(|e| {
+        tracing::warn!("Invalid game preferences format: {}", e);
+        crate::common::AppError::ValidationError("Invalid game preferences".to_string())
+    })?;
+
+    let num_players = prefs.player_count as usize;
+    if players.len() < num_players {
+        tracing::debug!(
+            "Not enough players for {} player game (have {})",
+            num_players,
+            players.len()
+        );
+        return Ok(());
+    }
+
+    // Get player ELO ratings in batch
+    let players_with_elo = get_players_with_elo(state, players).await?;
+
+    if players_with_elo.len() < num_players {
+        tracing::debug!(
+            "Not enough valid players for {} player game (have {})",
+            num_players,
+            players_with_elo.len()
+        );
+        return Ok(());
+    }
+
+    // Sort by wait time first (for fairness)
+    let mut players_with_elo = players_with_elo;
+    players_with_elo.sort_by_key(|(p, _)| p.queued_at);
+
+    // Try to match players with similar ELO
+    let matched_indices = find_best_matches(
+        &players_with_elo,
+        num_players,
+        state.config.matchmaking_elo_tolerance,
+    );
+
+    if matched_indices.len() < num_players {
+        tracing::debug!(
+            "Could not find enough similar players, need {} but found {}",
+            num_players,
+            matched_indices.len()
+        );
+        return Ok(());
+    }
+
+    let matched_players: Vec<QueueEntry> = matched_indices
+        .iter()
+        .map(|&i| players_with_elo[i].0.clone())
+        .collect();
+
+    // Create game for matched players
+    create_game_for_players(state, &matched_players, &prefs).await?;
+
+    Ok(())
+}
+
+/// Get ELO ratings for all players in batch
+async fn get_players_with_elo(
+    state: &Arc<crate::common::AppState>,
+    players: &[QueueEntry],
+) -> Result<Vec<(QueueEntry, i32)>, crate::common::AppError> {
+    let mut players_with_elo = Vec::new();
+
+    for player in players {
+        let player_uuid = player.player_id;
+        match state.player_service.get_player(player_uuid).await {
+            Ok(Some(player_record)) => {
+                players_with_elo.push((player.clone(), player_record.elo_rating));
+            }
+            Ok(None) => {
+                tracing::warn!(player_id = %player_uuid, "Player not found during matchmaking");
+            }
+            Err(e) => {
+                tracing::error!(player_id = %player_uuid, "Failed to load player during matchmaking: {}", e);
+            }
+        }
+    }
+
+    Ok(players_with_elo)
+}
+
+/// Find the best matches for a game based on ELO similarity and wait time
+fn find_best_matches(
+    players_with_elo: &[(QueueEntry, i32)],
+    num_players: usize,
+    elo_tolerance: i32,
+) -> Vec<usize> {
+    if players_with_elo.len() < num_players {
+        return Vec::new();
+    }
+
+    // Start with the player who waited longest (index 0 after sorting)
+    let mut matched_indices = vec![0];
+    let base_elo = players_with_elo[0].1;
+
+    // Find other players within ELO tolerance
+    for i in 1..players_with_elo.len() {
+        if matched_indices.len() >= num_players {
+            break;
+        }
+        let elo_diff = (players_with_elo[i].1 - base_elo).abs();
+        if elo_diff <= elo_tolerance {
+            matched_indices.push(i);
+        }
+    }
+
+    // If we couldn't find enough players within tolerance, fall back to wait time
+    if matched_indices.len() < num_players {
+        matched_indices.clear();
+        // Just take the first N players sorted by wait time
+        for i in 0..num_players.min(players_with_elo.len()) {
+            matched_indices.push(i);
+        }
+    }
+
+    matched_indices
+}
+
+/// Create a game for the matched players
+async fn create_game_for_players(
+    state: &Arc<crate::common::AppState>,
+    matched_players: &[QueueEntry],
+    prefs: &MatchPrefs,
+) -> Result<(), crate::common::AppError> {
+    // Create game for matched players
+    let board = Board::stock_two_player();
+    let mut game_core =
+        automatafl_logic::Game::new(board, prefs.player_count, prefs.use_column_rule);
+
+    // Set up goals for two-player game
+    if prefs.player_count == 2 {
+        game_core.goals.push((Coord { x: 0, y: 0 }, Pid(0)));
+        game_core.goals.push((Coord { x: 10, y: 0 }, Pid(0)));
+        game_core.goals.push((Coord { x: 0, y: 10 }, Pid(1)));
+        game_core.goals.push((Coord { x: 10, y: 10 }, Pid(1)));
+    }
+
+    let game_id = Uuid::new_v4();
+    let lifecycle = GameLifecycle::Waiting;
+    let first_player_id = matched_players[0].player_id;
+
+    // Parse player UUIDs
+    let player_uuids: Vec<Uuid> = matched_players.iter().map(|p| p.player_id).collect();
+
+    // Create game and add players atomically using transaction
+    let player_pids: Vec<(Uuid, u8)> = player_uuids
+        .iter()
+        .enumerate()
+        .map(|(i, &uuid)| (uuid, i as u8))
+        .collect();
+
+    state
+        .game_service
+        .create_game_with_players(
+            game_id,
+            &game_core,
+            lifecycle,
+            first_player_id,
+            prefs.player_count,
+            &player_pids,
+        )
+        .await?;
+
+    tracing::info!(
+        "Created game {} with {} players atomically",
+        game_id,
+        player_uuids.len()
+    );
+
+    // Remove matched players from queue
+    state
+        .matchmaking_service
+        .remove_players(&player_uuids)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to remove players from queue: {}", e);
+            crate::common::AppError::DatabaseError(
+                "Failed to remove players from queue".to_string(),
+            )
+        })?;
+
+    tracing::info!(
+        "Match found! Game {} created with {} players",
+        game_id,
+        player_uuids.len()
+    );
+
+    Ok(())
 }

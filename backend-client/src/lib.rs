@@ -1,6 +1,6 @@
 use automatafl_api_types::*;
 use automatafl_logic::{Coord, Move, Pid};
-
+use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +57,8 @@ pub struct AutomataflClient {
     session_token: Option<Uuid>,
 }
 
+const SESSION_COOKIE_NAME: &str = "automatafl_session";
+
 impl AutomataflClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -86,6 +88,20 @@ impl AutomataflClient {
         self.session_token
             .map(|t| format!("Bearer {}", t))
             .ok_or(ClientError::NotAuthenticated)
+    }
+
+    fn session_cookie(&self) -> Result<String> {
+        self.session_token
+            .map(|t| format!("{}={}", SESSION_COOKIE_NAME, t))
+            .ok_or(ClientError::NotAuthenticated)
+    }
+
+    fn auth_request(&self, builder: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+        let auth = self.auth_header()?;
+        let cookie = self.session_cookie()?;
+        Ok(builder
+            .header("Authorization", auth)
+            .header("Cookie", cookie))
     }
 
     // ========================================================================
@@ -146,9 +162,8 @@ impl AutomataflClient {
     pub async fn logout(&mut self) -> Result<()> {
         let url = format!("{}/api/v1/logout", self.base_url);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -166,12 +181,7 @@ impl AutomataflClient {
 
     pub async fn list_games(&self) -> Result<Vec<GameListItem>> {
         let url = format!("{}/api/v1/games", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -187,9 +197,7 @@ impl AutomataflClient {
             use_column_rule,
         };
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
             .json(&request)
             .send()
             .await?;
@@ -204,9 +212,8 @@ impl AutomataflClient {
     pub async fn join_game(&self, game_id: Uuid) -> Result<Pid> {
         let url = format!("{}/api/v1/games/{}", self.base_url, game_id);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -217,14 +224,9 @@ impl AutomataflClient {
         }
     }
 
-    pub async fn get_game_state(&self, game_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn get_game_state(&self, game_id: Uuid) -> Result<GameStateResponse> {
         let url = format!("{}/api/v1/games/{}", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -235,12 +237,7 @@ impl AutomataflClient {
 
     pub async fn get_goals(&self, game_id: Uuid) -> Result<Vec<(Coord, Pid)>> {
         let url = format!("{}/api/v1/games/{}/goals", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -255,12 +252,7 @@ impl AutomataflClient {
 
     pub async fn get_pending_move(&self, game_id: Uuid) -> Result<Option<Move>> {
         let url = format!("{}/api/v1/games/{}/move", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -278,9 +270,7 @@ impl AutomataflClient {
         let url = format!("{}/api/v1/games/{}/move", self.base_url, game_id);
         let request = PerformMove { from, to };
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
             .json(&request)
             .send()
             .await?;
@@ -292,12 +282,11 @@ impl AutomataflClient {
         }
     }
 
-    pub async fn complete_round(&self, game_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn complete_round(&self, game_id: Uuid) -> Result<CompleteRoundResponse> {
         let url = format!("{}/api/v1/games/{}/complete", self.base_url, game_id);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -312,13 +301,11 @@ impl AutomataflClient {
     // Chat
     // ========================================================================
 
-    pub async fn send_chat(&self, game_id: Uuid, message: String) -> Result<serde_json::Value> {
+    pub async fn send_chat(&self, game_id: Uuid, message: String) -> Result<PostChatResponse> {
         let url = format!("{}/api/v1/games/{}/chat", self.base_url, game_id);
         let request = PostChatRequest { message };
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
             .json(&request)
             .send()
             .await?;
@@ -332,12 +319,7 @@ impl AutomataflClient {
 
     pub async fn get_chat(&self, game_id: Uuid) -> Result<Vec<ChatMessage>> {
         let url = format!("{}/api/v1/games/{}/chat", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -348,12 +330,7 @@ impl AutomataflClient {
 
     pub async fn get_game_history(&self, game_id: Uuid) -> Result<Vec<GameEvent>> {
         let url = format!("{}/api/v1/games/{}/history", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -382,12 +359,7 @@ impl AutomataflClient {
         }
         url.push_str(&params.join("&"));
 
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -400,12 +372,11 @@ impl AutomataflClient {
     // Save/Load
     // ========================================================================
 
-    pub async fn save_game(&self, game_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn save_game(&self, game_id: Uuid) -> Result<SaveGameResponse> {
         let url = format!("{}/api/v1/games/{}/save", self.base_url, game_id);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -416,14 +387,9 @@ impl AutomataflClient {
         }
     }
 
-    pub async fn list_snapshots(&self, game_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn list_snapshots(&self, game_id: Uuid) -> Result<ListSnapshotsResponse> {
         let url = format!("{}/api/v1/games/{}/snapshots", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -438,9 +404,8 @@ impl AutomataflClient {
             self.base_url, game_id, snapshot_index
         );
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -457,12 +422,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_players(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/players", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -473,12 +433,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_player(&self, player_id: Uuid) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -494,9 +449,7 @@ impl AutomataflClient {
     ) -> Result<()> {
         let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
         let response = self
-            .client
-            .put(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.put(&url))?
             .json(&data)
             .send()
             .await?;
@@ -510,12 +463,7 @@ impl AutomataflClient {
 
     pub async fn admin_delete_player(&self, player_id: Uuid) -> Result<()> {
         let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -526,12 +474,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_player_stats(&self, player_id: Uuid) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/players/{}/stats", self.base_url, player_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -547,9 +490,7 @@ impl AutomataflClient {
     ) -> Result<()> {
         let url = format!("{}/api/v1/admin/players/{}/stats", self.base_url, player_id);
         let response = self
-            .client
-            .put(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.put(&url))?
             .json(&data)
             .send()
             .await?;
@@ -567,12 +508,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_games(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/games", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -583,12 +519,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_game(&self, game_id: Uuid) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/games/{}", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -599,12 +530,7 @@ impl AutomataflClient {
 
     pub async fn admin_delete_game(&self, game_id: Uuid) -> Result<()> {
         let url = format!("{}/api/v1/admin/games/{}", self.base_url, game_id);
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -613,15 +539,14 @@ impl AutomataflClient {
         }
     }
 
-    pub async fn admin_force_complete_round(&self, game_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn admin_force_complete_round(&self, game_id: Uuid) -> Result<CompleteRoundResponse> {
         let url = format!(
             "{}/api/v1/admin/games/{}/force-complete",
             self.base_url, game_id
         );
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -635,13 +560,11 @@ impl AutomataflClient {
     pub async fn admin_set_game_lifecycle(
         &self,
         game_id: Uuid,
-        lifecycle: serde_json::Value,
+        lifecycle: GameLifecycle,
     ) -> Result<()> {
         let url = format!("{}/api/v1/admin/games/{}/lifecycle", self.base_url, game_id);
         let response = self
-            .client
-            .put(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.put(&url))?
             .json(&lifecycle)
             .send()
             .await?;
@@ -655,12 +578,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_game_events(&self, game_id: Uuid) -> Result<Vec<GameEvent>> {
         let url = format!("{}/api/v1/admin/games/{}/events", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -671,12 +589,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_game_chat(&self, game_id: Uuid) -> Result<Vec<ChatMessage>> {
         let url = format!("{}/api/v1/admin/games/{}/chat", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -690,12 +603,7 @@ impl AutomataflClient {
             "{}/api/v1/admin/games/{}/chat/{}",
             self.base_url, game_id, timestamp
         );
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -706,12 +614,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_snapshots(&self, game_id: Uuid) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/games/{}/snapshots", self.base_url, game_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -725,12 +628,7 @@ impl AutomataflClient {
             "{}/api/v1/admin/games/{}/snapshots/{}",
             self.base_url, game_id, snapshot_index
         );
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -745,12 +643,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_sessions(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/sessions", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -761,12 +654,7 @@ impl AutomataflClient {
 
     pub async fn admin_delete_session(&self, session_id: Uuid) -> Result<()> {
         let url = format!("{}/api/v1/admin/sessions/{}", self.base_url, session_id);
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -778,9 +666,8 @@ impl AutomataflClient {
     pub async fn admin_cleanup_expired_sessions(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/sessions/cleanup", self.base_url);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -797,12 +684,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_matchmaking_queue(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/matchmaking/queue", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -816,12 +698,7 @@ impl AutomataflClient {
             "{}/api/v1/admin/matchmaking/queue/{}",
             self.base_url, player_id
         );
-        let response = self
-            .client
-            .delete(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.delete(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -836,12 +713,7 @@ impl AutomataflClient {
 
     pub async fn admin_get_database_stats(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/stats", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -852,12 +724,7 @@ impl AutomataflClient {
 
     pub async fn admin_list_tables(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/tables", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -872,12 +739,7 @@ impl AutomataflClient {
 
     pub async fn get_player_profile(&self, player_id: Uuid) -> Result<PlayerProfile> {
         let url = format!("{}/api/v1/players/{}", self.base_url, player_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -895,9 +757,7 @@ impl AutomataflClient {
         let url = format!("{}/api/v1/players/{}", self.base_url, player_id);
         let request = UpdateProfileRequest { bio, avatar_url };
         let response = self
-            .client
-            .put(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.put(&url))?
             .json(&request)
             .send()
             .await?;
@@ -911,12 +771,7 @@ impl AutomataflClient {
 
     pub async fn get_player_stats(&self, player_id: Uuid) -> Result<PlayerStats> {
         let url = format!("{}/api/v1/players/{}/stats", self.base_url, player_id);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -931,12 +786,7 @@ impl AutomataflClient {
 
     pub async fn get_leaderboard_elo(&self) -> Result<LeaderboardResponse> {
         let url = format!("{}/api/v1/leaderboard/elo", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -947,12 +797,7 @@ impl AutomataflClient {
 
     pub async fn get_leaderboard_wins(&self) -> Result<LeaderboardResponse> {
         let url = format!("{}/api/v1/leaderboard/wins", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -963,12 +808,7 @@ impl AutomataflClient {
 
     pub async fn get_leaderboard_games(&self) -> Result<LeaderboardResponse> {
         let url = format!("{}/api/v1/leaderboard/games", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)
@@ -988,9 +828,7 @@ impl AutomataflClient {
             use_column_rule,
         };
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
             .json(&request)
             .send()
             .await?;
@@ -1005,9 +843,8 @@ impl AutomataflClient {
     pub async fn leave_matchmaking(&self) -> Result<()> {
         let url = format!("{}/api/v1/matchmaking/leave", self.base_url);
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", self.auth_header()?)
+            .auth_request(self.client.post(&url))?
+            .json(&json!({}))
             .send()
             .await?;
 
@@ -1020,12 +857,7 @@ impl AutomataflClient {
 
     pub async fn get_matchmaking_status(&self) -> Result<MatchmakingStatus> {
         let url = format!("{}/api/v1/matchmaking/status", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", self.auth_header()?)
-            .send()
-            .await?;
+        let response = self.auth_request(self.client.get(&url))?.send().await?;
 
         if response.status().is_success() {
             Ok(response.json().await?)

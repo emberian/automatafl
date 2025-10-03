@@ -44,6 +44,7 @@ pub fn validate_displayname(displayname: &str) -> Result<(), AppError> {
 /// - 3-32 characters
 /// - Alphanumeric, underscore, hyphen only
 /// - Must start with alphanumeric
+#[allow(unused)]
 pub fn validate_username(username: &str) -> Result<(), AppError> {
     if username.len() < 3 {
         return Err(AppError::ValidationError(
@@ -149,6 +150,7 @@ pub fn validate_move_coords(from_x: u8, from_y: u8, to_x: u8, to_y: u8) -> Resul
     Ok(())
 }
 
+#[allow(unused)]
 /// Validate game name
 pub fn validate_game_name(name: &str) -> Result<(), AppError> {
     let trimmed = name.trim();
@@ -181,6 +183,7 @@ pub fn validate_game_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(unused)]
 /// Validate player count for game creation
 pub fn validate_player_count(count: u8) -> Result<(), AppError> {
     if count < 2 {
@@ -198,6 +201,7 @@ pub fn validate_player_count(count: u8) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(unused)]
 /// Validate ELO rating is within reasonable bounds
 pub fn validate_elo_rating(elo: i32) -> Result<(), AppError> {
     if elo < 0 {
@@ -215,6 +219,7 @@ pub fn validate_elo_rating(elo: i32) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(unused)]
 /// Validate pagination parameters
 pub fn validate_pagination(
     offset: Option<usize>,
@@ -238,6 +243,7 @@ pub fn validate_pagination(
     Ok((offset, limit))
 }
 
+#[allow(unused)]
 /// Validate snapshot name
 pub fn validate_snapshot_name(name: &str) -> Result<(), AppError> {
     if name.is_empty() {

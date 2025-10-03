@@ -1,7 +1,5 @@
 //! Game management, moves, chat, and save/load endpoints
 
-use std::sync::Arc;
-
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -10,13 +8,11 @@ use axum::{
 use uuid::Uuid;
 
 use automatafl_api_types::*;
-use automatafl_logic::{Board, Coord, Pid};
+use automatafl_logic::{Coord, Move, Pid};
 
-use crate::common::{
-    AppError, AuthPlayer, GameSnapshot, PlayerInGame, ServerState, broadcast_event,
-    timestamp,
-};
-use crate::{db, validation};
+use crate::common::{AppError, AuthPlayer, PlayerInGame, ServerState, broadcast_event};
+use crate::services::game_service::ServiceError;
+use crate::validation;
 
 // ============================================================================
 // Game Management
@@ -40,40 +36,13 @@ pub async fn create_game(
     State(state): ServerState,
     Json(req): Json<CreateGameRequest>,
 ) -> Result<Json<Uuid>, AppError> {
-    // Validate player count
-    validation::validate_player_count(req.player_count)?;
+    let game_id = state
+        .game_service
+        .create_game(auth.player_id, req.player_count, req.use_column_rule)
+        .await
+        .map_err(|err| map_game_error(None, err))?;
 
-    let board = Board::stock_two_player();
-
-    let mut game_core = automatafl_logic::Game::new(board, req.player_count, req.use_column_rule);
-
-    // Set up goals for two-player game
-    if req.player_count == 2 {
-        game_core.goals.push((Coord { x: 0, y: 0 }, Pid(0)));
-        game_core.goals.push((Coord { x: 10, y: 0 }, Pid(0)));
-        game_core.goals.push((Coord { x: 0, y: 10 }, Pid(1)));
-        game_core.goals.push((Coord { x: 10, y: 10 }, Pid(1)));
-    }
-
-    let new_uuid = Uuid::new_v4();
-    let lifecycle = GameLifecycle::Waiting;
-
-    // Store game in database
-    db::create_game(
-        &state.db,
-        new_uuid,
-        &game_core,
-        &lifecycle,
-        auth.player_id,
-        req.player_count,
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create game: {}", e);
-        AppError::ValidationError("Failed to create game".to_string())
-    })?;
-
-    Ok(Json(new_uuid))
+    Ok(Json(game_id))
 }
 
 #[tracing::instrument(skip(auth, state), fields(player_id = %auth.player_id, game_id = %game_uuid))]
@@ -84,55 +53,17 @@ pub async fn join_game(
 ) -> Result<Json<Pid>, AppError> {
     let player_uuid = auth.player_id;
 
-    // Get player name
-    let player = db::get_player(&state.db, player_uuid)
+    let (pid, events) = state
+        .game_service
+        .join_game(game_uuid, player_uuid)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_uuid))?
-        .ok_or(AppError::NoSuchPlayer(player_uuid))?;
-    let player_name = player.displayname;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    // Load game state
-    let (game_core, _, player_ids) = db::load_game_state(&state.db, game_uuid)
-        .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
-
-    if player_ids.len() >= (game_core.player_count as usize) {
-        return Err(AppError::GameFull(game_uuid));
-    }
-    if player_ids.contains_key(&player_uuid) {
-        return Err(AppError::PlayerAlreadyExists(player_uuid));
+    for event in events {
+        broadcast_event(&state, game_uuid, event).await?;
     }
 
-    let new_player_pid = Pid(player_ids.len() as u8);
-
-    // Add player to game
-    db::add_player_to_game(&state.db, game_uuid, player_uuid, new_player_pid)
-        .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-    // Broadcast join event
-    broadcast_event(
-        &state,
-        game_uuid,
-        GameEventData::PlayerJoined {
-            player_id: player_uuid,
-            player_pid: new_player_pid,
-            displayname: player_name,
-        },
-    )
-    .await?;
-
-    // Auto-start game when full
-    if player_ids.len() + 1 == game_core.player_count as usize {
-        db::update_game_state(&state.db, game_uuid, &game_core, &GameLifecycle::InProgress)
-            .await
-            .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-        broadcast_event(&state, game_uuid, GameEventData::GameStarted).await?;
-    }
-
-    Ok(Json(new_player_pid))
+    Ok(Json(pid))
 }
 
 #[tracing::instrument(skip(_auth, state), fields(game_id = %game_uuid))]
@@ -141,10 +72,11 @@ pub async fn get_game_state(
     State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
 ) -> Result<Json<GameStateResponse>, AppError> {
-    let (game_core, lifecycle, player_ids) = db::load_game_state(&state.db, game_uuid)
+    let (game_core, lifecycle, player_ids) = state
+        .game_service
+        .load_game(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     Ok(Json(GameStateResponse {
         lifecycle,
@@ -158,10 +90,11 @@ pub async fn get_goals(
     State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
 ) -> Result<Json<Vec<(Coord, Pid)>>, AppError> {
-    let (game_core, _, _) = db::load_game_state(&state.db, game_uuid)
+    let (game_core, _, _) = state
+        .game_service
+        .load_game(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     Ok(Json(game_core.goals.to_vec()))
 }
@@ -174,13 +107,14 @@ pub async fn pending_move(
     auth: AuthPlayer,
     State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
-) -> Result<Json<Option<automatafl_logic::Move>>, AppError> {
+) -> Result<Json<Option<Move>>, AppError> {
     let player_in_game = PlayerInGame::extract(auth, game_uuid, &state).await?;
 
-    let (game_core, _, _) = db::load_game_state(&state.db, player_in_game.game_uuid)
+    let (game_core, _, _) = state
+        .game_service
+        .load_game(player_in_game.game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?
-        .ok_or(AppError::NoSuchGame(player_in_game.game_uuid))?;
+        .map_err(|err| map_game_error(Some(player_in_game.game_uuid), err))?;
 
     Ok(Json(
         game_core
@@ -210,11 +144,11 @@ pub async fn perform_move(
     )?;
 
     // Get game start time for potential completion stats
-    let game_start_time = db::get_game(&app_state.db, game_uuid)
+    let game_start_time = app_state
+        .game_service
+        .get_game_created_at(game_uuid)
         .await
-        .ok()
-        .flatten()
-        .map(|g| g.created_at);
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     // Call service - ALL business logic is there
     let (response, events) = app_state
@@ -227,15 +161,7 @@ pub async fn perform_move(
             game_start_time,
         )
         .await
-        .map_err(|e| match e {
-            crate::services::game_service::ServiceError::GameNotFound(id) => {
-                AppError::NoSuchGame(id)
-            }
-            crate::services::game_service::ServiceError::GameNotInProgress => {
-                AppError::GameNotInProgress
-            }
-            _ => AppError::NoSuchGame(game_uuid),
-        })?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     // Broadcast all events from service
     for event in events {
@@ -255,26 +181,18 @@ pub async fn complete_round(
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
     // Get game start time
-    let game_start_time = db::get_game(&app_state.db, game_uuid)
+    let game_start_time = app_state
+        .game_service
+        .get_game_created_at(game_uuid)
         .await
-        .ok()
-        .flatten()
-        .map(|g| g.created_at);
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     // Call service
     let (response, events) = app_state
         .game_service
         .complete_round(game_uuid, game_start_time)
         .await
-        .map_err(|e| match e {
-            crate::services::game_service::ServiceError::GameNotFound(id) => {
-                AppError::NoSuchGame(id)
-            }
-            crate::services::game_service::ServiceError::GameNotInProgress => {
-                AppError::GameNotInProgress
-            }
-            _ => AppError::NoSuchGame(game_uuid),
-        })?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     // Broadcast all events
     for event in events {
@@ -297,44 +215,17 @@ pub async fn post_chat(
 ) -> Result<Json<PostChatResponse>, AppError> {
     let player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    // Validate chat message
     crate::validation::validate_chat_message(&req.message)?;
 
-    // Get player name
-    let player = db::get_player(&app_state.db, player_in_game.player_uuid)
+    let (timestamp, event) = app_state
+        .game_service
+        .post_chat(game_uuid, player_in_game.player_uuid, req.message.clone())
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_in_game.player_uuid))?
-        .ok_or(AppError::NoSuchPlayer(player_in_game.player_uuid))?;
-    let player_name = player.displayname;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    let ts = timestamp();
+    broadcast_event(&app_state, player_in_game.game_uuid, event).await?;
 
-    // Save to database
-    db::add_chat_message(
-        &app_state.db,
-        game_uuid,
-        ts,
-        player_in_game.player_uuid,
-        player_name.clone(),
-        req.message.clone(),
-    )
-    .await
-    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-    // Broadcast event
-    broadcast_event(
-        &app_state,
-        player_in_game.game_uuid,
-        GameEventData::Chat {
-            timestamp: ts,
-            player_id: player_in_game.player_uuid,
-            displayname: player_name,
-            message: req.message,
-        },
-    )
-    .await?;
-
-    Ok(Json(PostChatResponse { timestamp: ts }))
+    Ok(Json(PostChatResponse { timestamp }))
 }
 
 pub async fn get_chat(
@@ -344,23 +235,13 @@ pub async fn get_chat(
 ) -> Result<Json<Vec<ChatMessage>>, AppError> {
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    let messages = db::get_chat_messages(&app_state.db, game_uuid)
+    let messages = app_state
+        .game_service
+        .get_chat_messages(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    let chat_msgs: Vec<ChatMessage> = messages
-        .into_iter()
-        .filter_map(|msg| {
-            Some(db::as_uuid(&msg.player_id)).map(|id| ChatMessage {
-                timestamp: msg.timestamp,
-                player_id: id,
-                displayname: msg.displayname,
-                message: msg.message,
-            })
-        })
-        .collect();
-
-    Ok(Json(chat_msgs))
+    Ok(Json(messages))
 }
 
 // ============================================================================
@@ -382,25 +263,13 @@ pub async fn get_game_history(
 ) -> Result<Json<Vec<GameEvent>>, AppError> {
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    let events = db::get_game_history(
-        &app_state.db,
-        game_uuid,
-        query.since,
-        query.until,
-        query.event_kind,
-    )
-    .await
-    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+    let events = app_state
+        .game_service
+        .get_history(game_uuid, query.since, query.until, query.event_kind)
+        .await
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    let game_events: Vec<GameEvent> = events
-        .into_iter()
-        .map(|evt| GameEvent {
-            data: evt.event,
-            timestamp: Some(evt.timestamp),
-        })
-        .collect();
-
-    Ok(Json(game_events))
+    Ok(Json(events))
 }
 
 // ============================================================================
@@ -414,36 +283,11 @@ pub async fn save_game(
 ) -> Result<Json<SaveGameResponse>, AppError> {
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    // Load current game state
-    let (game_core, lifecycle, player_ids) = db::load_game_state(&app_state.db, game_uuid)
+    let index = app_state
+        .game_service
+        .save_snapshot(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
-
-    let snapshot = GameSnapshot {
-        core: game_core,
-        player_ids,
-        lifecycle,
-        timestamp: timestamp(),
-    };
-
-    // Get current snapshot count to determine index
-    let snapshots = db::list_snapshots(&app_state.db, game_uuid)
-        .await
-        .unwrap_or_default();
-    let index = snapshots.len();
-
-    // Save snapshot
-    let snapshot_json = serde_json::to_string(&snapshot).unwrap();
-    db::save_snapshot(
-        &app_state.db,
-        game_uuid,
-        index,
-        snapshot.timestamp,
-        &snapshot_json,
-    )
-    .await
-    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     Ok(Json(SaveGameResponse {
         snapshot_index: index,
@@ -457,9 +301,11 @@ pub async fn list_snapshots(
 ) -> Result<Json<ListSnapshotsResponse>, AppError> {
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    let snapshots = db::list_snapshots(&app_state.db, game_uuid)
+    let snapshots = app_state
+        .game_service
+        .list_snapshots(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
     let info: Vec<_> = snapshots
         .iter()
@@ -479,26 +325,12 @@ pub async fn load_game(
 ) -> Result<StatusCode, AppError> {
     let _player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
-    // Load snapshot
-    let snapshot_record = db::get_snapshot(&app_state.db, game_uuid, snapshot_index)
+    let _snapshot = app_state
+        .game_service
+        .load_snapshot(game_uuid, snapshot_index)
         .await
-        .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?
-        .ok_or(AppError::NoSuchSnapshot(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    let snapshot: GameSnapshot = serde_json::from_str(&snapshot_record.snapshot_data)
-        .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?;
-
-    // Update game state in database
-    db::update_game_state(
-        &app_state.db,
-        game_uuid,
-        &snapshot.core,
-        &snapshot.lifecycle,
-    )
-    .await
-    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-    // Broadcast event
     broadcast_event(
         &app_state,
         game_uuid,
@@ -507,4 +339,32 @@ pub async fn load_game(
     .await?;
 
     Ok(StatusCode::OK)
+}
+
+fn map_game_error(game_id: Option<Uuid>, err: ServiceError) -> AppError {
+    match err {
+        ServiceError::GameNotFound(id) => AppError::NoSuchGame(id),
+        ServiceError::GameNotInProgress => AppError::GameNotInProgress,
+        ServiceError::GameFull(id) => AppError::GameFull(id),
+        ServiceError::PlayerAlreadyInGame(id) => AppError::PlayerAlreadyExists(id),
+        ServiceError::PlayerNotFound(id) => AppError::NoSuchPlayer(id),
+        ServiceError::ValidationFailed(msg) => AppError::ValidationError(msg),
+        ServiceError::SnapshotNotFound(id, _) => AppError::NoSuchSnapshot(id),
+        ServiceError::DatabaseError(e) => {
+            tracing::error!(error = %e, ?game_id, "Game service operation failed");
+            if let Some(gid) = game_id {
+                AppError::NoSuchGame(gid)
+            } else {
+                AppError::ValidationError("Operation failed".to_string())
+            }
+        }
+        ServiceError::SerializationError(e) => {
+            tracing::error!(error = %e, ?game_id, "Game service serialization error");
+            if let Some(gid) = game_id {
+                AppError::NoSuchGame(gid)
+            } else {
+                AppError::ValidationError("Operation failed".to_string())
+            }
+        }
+    }
 }

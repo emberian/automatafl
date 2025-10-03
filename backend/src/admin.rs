@@ -8,12 +8,18 @@ use axum::{
 use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::db;
-use crate::{
-    common::{AdminPlayer, AppError, ServerState},
-    db::as_uuid,
+use automatafl_api_types::{
+    CompleteRoundResponse, GameLifecycle, GameListItem, JoinMatchmakingRequest, PlayerListItem,
+    PlayerStats,
 };
-use automatafl_api_types::*;
+
+use crate::{
+    common::{AdminPlayer, AppError, ServerState, broadcast_event, timestamp},
+    db::{ChatMessageRecord, GameEventRecord, PlayerStatsRecord, SnapshotRecord, as_uuid},
+    services::admin_service::{AdminQueueEntry, AdminServiceError},
+    services::game_service::ServiceError,
+    services::player_service::PlayerServiceError,
+};
 
 // ============================================================================
 // Player Management
@@ -21,22 +27,20 @@ use automatafl_api_types::*;
 
 pub async fn admin_list_players(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Json<Vec<PlayerListItem>> {
-    let players = db::get_all_players(&app_state.db).await.unwrap_or_default();
+    let players = state.admin_service.list_players().await.unwrap_or_default();
 
-    let player_list = players
+    let items = players
         .into_iter()
-        .filter_map(|p| {
-            Some(PlayerListItem {
-                id: as_uuid(&p.id),
-                displayname: p.displayname,
-                is_admin: p.is_admin,
-            })
+        .map(|record| PlayerListItem {
+            id: as_uuid(&record.id),
+            displayname: record.displayname,
+            is_admin: record.is_admin,
         })
         .collect();
 
-    Json(player_list)
+    Json(items)
 }
 
 #[derive(serde::Deserialize)]
@@ -59,30 +63,35 @@ pub struct AdminGetPlayerResponse {
 
 pub async fn admin_get_player(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
     Query(query): Query<AdminGetPlayerQuery>,
 ) -> Result<Json<AdminGetPlayerResponse>, AppError> {
-    let player = db::get_player(&app_state.db, player_id)
+    let player = state
+        .admin_service
+        .get_player(player_id)
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?
         .ok_or(AppError::NoSuchPlayer(player_id))?;
 
     let stats = if query.include_stats.unwrap_or(false) {
-        db::get_player_stats(&app_state.db, player_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|s| PlayerStats {
-                games_played: s.games_played,
-                games_won: s.games_won,
-                total_playtime: s.total_playtime,
-                win_rate: if s.games_played > 0 {
-                    s.games_won as f64 / s.games_played as f64
+        match state.admin_service.player_stats(player_id).await {
+            Ok(Some(record)) => Some(PlayerStats {
+                games_played: record.games_played,
+                games_won: record.games_won,
+                total_playtime: record.total_playtime,
+                win_rate: if record.games_played > 0 {
+                    record.games_won as f64 / record.games_played as f64
                 } else {
                     0.0
                 },
-            })
+            }),
+            Ok(None) => None,
+            Err(err) => {
+                tracing::error!(player_id = %player_id, "Failed to load player stats: {}", err);
+                None
+            }
+        }
     } else {
         None
     };
@@ -110,77 +119,39 @@ pub struct AdminUpdatePlayerRequest {
 
 pub async fn admin_update_player(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
     Json(req): Json<AdminUpdatePlayerRequest>,
 ) -> Result<StatusCode, AppError> {
-    // Build update JSON
-    let mut updates = serde_json::json!({});
-
-    if let Some(displayname) = req.displayname {
-        updates["displayname"] = serde_json::json!(displayname);
-    }
-    if let Some(is_admin) = req.is_admin {
-        updates["is_admin"] = serde_json::json!(is_admin);
-    }
-    if req.bio.is_some() {
-        updates["bio"] = serde_json::json!(req.bio);
-    }
-    if req.avatar_url.is_some() {
-        updates["avatar_url"] = serde_json::json!(req.avatar_url);
-    }
-    if let Some(elo_rating) = req.elo_rating {
-        updates["elo_rating"] = serde_json::json!(elo_rating);
-    }
-
-    // Apply updates using SurrealDB's merge functionality
-    let _: Option<db::PlayerRecord> = app_state
-        .db
-        .update(("players", player_id.to_string()))
-        .merge(updates)
+    state
+        .admin_service
+        .update_player_fields(
+            player_id,
+            req.displayname,
+            req.is_admin,
+            req.bio,
+            req.avatar_url,
+            req.elo_rating,
+        )
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
+        .map_err(|err| {
+            tracing::error!(player_id = %player_id, "Failed to update player: {}", err);
+            AppError::NoSuchPlayer(player_id)
+        })?;
 
     Ok(StatusCode::OK)
 }
 
 pub async fn admin_delete_player(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    // Delete player sessions
-    app_state
-        .db
-        .query("DELETE sessions WHERE player_id = $player_id")
-        .bind(("player_id", player_id.to_string()))
+    state
+        .admin_service
+        .delete_player(player_id)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
-
-    // Delete player from game_players
-    app_state
-        .db
-        .query("DELETE game_players WHERE player_id = $player_id")
-        .bind(("player_id", player_id.to_string()))
-        .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
-
-    // Delete player stats
-    app_state
-        .db
-        .delete::<Option<db::PlayerStatsRecord>>(("player_stats", player_id.to_string()))
-        .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
-
-    // Delete player from matchmaking queue
-    let _ = db::leave_matchmaking_queue(&app_state.db, player_id).await;
-
-    // Delete player record
-    app_state
-        .db
-        .delete::<Option<db::PlayerRecord>>(("players", player_id.to_string()))
-        .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
+        .map_err(|err| map_admin_error_for_player(player_id, err))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -191,9 +162,15 @@ pub async fn admin_delete_player(
 
 pub async fn admin_list_all_games(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Json<Vec<GameListItem>> {
-    crate::game::list_games(State(app_state)).await
+    let games = state
+        .game_service
+        .list_games_with_player_counts()
+        .await
+        .unwrap_or_default();
+
+    Json(games)
 }
 
 #[derive(serde::Serialize)]
@@ -209,15 +186,18 @@ pub struct AdminGetGameResponse {
 
 pub async fn admin_get_game(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
 ) -> Result<Json<AdminGetGameResponse>, AppError> {
-    let (game_core, lifecycle, player_ids) = db::load_game_state(&app_state.db, game_uuid)
+    let (game_core, lifecycle, player_ids) = state
+        .game_service
+        .load_game(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_game_error(Some(game_uuid), err))?;
 
-    let game_record = db::get_game(&app_state.db, game_uuid)
+    let game_record = state
+        .admin_service
+        .get_game_record(game_uuid)
         .await
         .map_err(|_| AppError::NoSuchGame(game_uuid))?
         .ok_or(AppError::NoSuchGame(game_uuid))?;
@@ -235,10 +215,12 @@ pub async fn admin_get_game(
 
 pub async fn admin_delete_game(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    db::delete_game(&app_state.db, game_uuid)
+    state
+        .admin_service
+        .delete_game(game_uuid)
         .await
         .map_err(|_| AppError::NoSuchGame(game_uuid))?;
 
@@ -247,88 +229,33 @@ pub async fn admin_delete_game(
 
 pub async fn admin_force_complete_round(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
 ) -> Result<Json<CompleteRoundResponse>, AppError> {
-    // Load game state
-    let (mut game_core, mut lifecycle, _) = db::load_game_state(&app_state.db, game_uuid)
+    let (response, events) = state
+        .admin_service
+        .force_complete_round(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_admin_error_for_game(game_uuid, err))?;
 
-    match game_core.try_complete_round() {
-        Ok(_results) => {
-            if let Some(winner) = game_core.winner {
-                lifecycle = GameLifecycle::Finished;
-
-                // Get game creation time for playtime calculation
-                if let Ok(Some(game_record)) = db::get_game(&app_state.db, game_uuid).await {
-                    // Update player stats and ELO ratings
-                    match crate::matchmaking::update_game_completion_stats(
-                        &app_state.db,
-                        game_uuid,
-                        winner,
-                        game_record.created_at,
-                    )
-                    .await
-                    {
-                        Ok(elo_changes) if !elo_changes.is_empty() => {
-                            // Broadcast ELO changes
-                            let _ = crate::common::broadcast_event(
-                                &app_state,
-                                game_uuid,
-                                automatafl_api_types::GameEventData::EloUpdate {
-                                    changes: elo_changes,
-                                },
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to update game completion stats: {}", e);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            // Save updated state
-            db::update_game_state(&app_state.db, game_uuid, &game_core, &lifecycle)
-                .await
-                .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-            Ok(Json(CompleteRoundResponse {
-                success: true,
-                message: "Admin forced round completion".to_string(),
-            }))
-        }
-        Err(_) => {
-            // Save state even with conflicts
-            db::update_game_state(&app_state.db, game_uuid, &game_core, &lifecycle)
-                .await
-                .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-            Ok(Json(CompleteRoundResponse {
-                success: false,
-                message: "Conflict resolution needed".to_string(),
-            }))
-        }
+    for event in events {
+        broadcast_event(&state, game_uuid, event).await?;
     }
+
+    Ok(Json(response))
 }
 
 pub async fn admin_set_game_lifecycle(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
     Json(lifecycle): Json<GameLifecycle>,
 ) -> Result<StatusCode, AppError> {
-    let (game_core, _, _) = db::load_game_state(&app_state.db, game_uuid)
+    state
+        .admin_service
+        .set_game_lifecycle(game_uuid, lifecycle)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?
-        .ok_or(AppError::NoSuchGame(game_uuid))?;
-
-    db::update_game_state(&app_state.db, game_uuid, &game_core, &lifecycle)
-        .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| map_admin_error_for_game(game_uuid, err))?;
 
     Ok(StatusCode::OK)
 }
@@ -347,24 +274,37 @@ pub struct AdminSessionInfo {
 
 pub async fn admin_list_sessions(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Result<Json<Vec<AdminSessionInfo>>, AppError> {
-    let sessions: Vec<db::SessionRecord> = app_state
-        .db
-        .select("sessions")
+    let sessions = state.admin_service.list_sessions().await.map_err(|err| {
+        tracing::error!(error = %err, "Failed to list admin sessions");
+        AppError::Unauthorized
+    })?;
+
+    let player_ids: Vec<Uuid> = sessions
+        .iter()
+        .map(|session| as_uuid(&session.player_id))
+        .collect();
+
+    let players_by_id = state
+        .admin_service
+        .players_by_ids(&player_ids)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| {
+            tracing::error!(error = %err, "Failed to load players for sessions");
+            AppError::Unauthorized
+        })?;
 
     let mut session_info = Vec::new();
     for session in sessions {
-        let session_id = db::as_uuid(&session.id);
-        let player_id = db::as_uuid(&session.player_id);
-        // Get player displayname
-        if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
+        let session_id = as_uuid(&session.id);
+        let player_id = as_uuid(&session.player_id);
+
+        if let Some(player) = players_by_id.get(&player_id) {
             session_info.push(AdminSessionInfo {
                 id: session_id,
                 player_id,
-                player_displayname: player.displayname,
+                player_displayname: player.displayname.clone(),
                 expires_at: session.expires_at,
             });
         }
@@ -375,12 +315,17 @@ pub async fn admin_list_sessions(
 
 pub async fn admin_delete_session(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(session_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    db::delete_session(&app_state.db, session_id)
+    state
+        .admin_service
+        .delete_session(session_id)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| {
+            tracing::error!(session_id = %session_id, error = %err, "Failed to delete session");
+            AppError::Unauthorized
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -392,12 +337,17 @@ pub struct SessionCleanupResponse {
 
 pub async fn admin_cleanup_expired_sessions(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Result<Json<SessionCleanupResponse>, AppError> {
-    let now = crate::common::timestamp();
-    let deleted = db::cleanup_expired_sessions(&app_state.db, now)
+    let now = timestamp();
+    let deleted = state
+        .admin_service
+        .cleanup_expired_sessions(now)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| {
+            tracing::error!(error = %err, "Failed to cleanup expired sessions");
+            AppError::Unauthorized
+        })?;
 
     Ok(Json(SessionCleanupResponse {
         deleted_count: deleted,
@@ -417,46 +367,52 @@ pub struct AdminEventsQuery {
 
 pub async fn admin_get_game_events(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
     Query(query): Query<AdminEventsQuery>,
-) -> Result<Json<Vec<db::GameEventRecord>>, AppError> {
-    let events = db::get_game_history(
-        &app_state.db,
-        game_uuid,
-        query.since,
-        query.until,
-        query.event_kind,
-    )
-    .await
-    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+) -> Result<Json<Vec<GameEventRecord>>, AppError> {
+    let events = state
+        .admin_service
+        .game_events(game_uuid, query.since, query.until, query.event_kind)
+        .await
+        .map_err(|err| {
+            tracing::error!(game_id = %game_uuid, error = %err, "Failed to load game events");
+            AppError::NoSuchGame(game_uuid)
+        })?;
 
     Ok(Json(events))
 }
 
 pub async fn admin_get_game_chat(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
-) -> Result<Json<Vec<db::ChatMessageRecord>>, AppError> {
-    let messages = db::get_chat_messages(&app_state.db, game_uuid)
+) -> Result<Json<Vec<ChatMessageRecord>>, AppError> {
+    let messages = state
+        .admin_service
+        .game_chat(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| {
+            tracing::error!(game_id = %game_uuid, error = %err, "Failed to load chat messages");
+            AppError::NoSuchGame(game_uuid)
+        })?;
 
     Ok(Json(messages))
 }
 
 pub async fn admin_delete_chat_message(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path((game_uuid, timestamp)): Path<(Uuid, u64)>,
 ) -> Result<StatusCode, AppError> {
-    let record_id = format!("{}:{}", game_uuid, timestamp);
-    app_state
-        .db
-        .delete::<Option<db::ChatMessageRecord>>(("chat_messages", record_id))
+    state
+        .admin_service
+        .delete_chat_message(game_uuid, timestamp)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| {
+            tracing::error!(game_id = %game_uuid, error = %err, "Failed to delete chat message");
+            AppError::NoSuchGame(game_uuid)
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -467,27 +423,35 @@ pub async fn admin_delete_chat_message(
 
 pub async fn admin_list_snapshots(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(game_uuid): Path<Uuid>,
-) -> Result<Json<Vec<db::SnapshotRecord>>, AppError> {
-    let snapshots = db::list_snapshots(&app_state.db, game_uuid)
+) -> Result<Json<Vec<SnapshotRecord>>, AppError> {
+    let snapshots = state
+        .admin_service
+        .list_snapshots(game_uuid)
         .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+        .map_err(|err| {
+            tracing::error!(game_id = %game_uuid, error = %err, "Failed to list snapshots");
+            AppError::NoSuchGame(game_uuid)
+        })?;
 
     Ok(Json(snapshots))
 }
 
 pub async fn admin_delete_snapshot(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path((game_uuid, index)): Path<(Uuid, usize)>,
 ) -> Result<StatusCode, AppError> {
-    let record_id = format!("{}:{}", game_uuid, index);
-    app_state
-        .db
-        .delete::<Option<db::SnapshotRecord>>(("snapshots", record_id))
+    state
+        .admin_service
+        .delete_snapshot(game_uuid, index)
         .await
-        .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?;
+        .map_err(|err| {
+            tracing::error!(game_id = %game_uuid, snapshot_index = index, error = %err,
+                "Failed to delete snapshot");
+            AppError::NoSuchSnapshot(game_uuid)
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -507,45 +471,53 @@ pub struct AdminMatchmakingInfo {
 
 pub async fn admin_list_matchmaking_queue(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Result<Json<Vec<AdminMatchmakingInfo>>, AppError> {
-    let queue = db::get_matchmaking_queue(&app_state.db)
-        .await
-        .map_err(|_| AppError::Unauthorized)?;
-
-    let now = crate::common::timestamp();
-    let mut queue_info = Vec::new();
-
-    for entry in queue {
-        let player_id = db::as_uuid(&entry.player_id);
-        if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
-            let prefs: JoinMatchmakingRequest = serde_json::from_str(&entry.game_preferences)
-                .unwrap_or(JoinMatchmakingRequest {
-                    player_count: 2,
-                    use_column_rule: false,
-                });
-
-            queue_info.push(AdminMatchmakingInfo {
+    let queue = state.admin_service.queue_entries().await.map_err(|err| {
+        tracing::error!(error = %err, "Failed to load matchmaking queue");
+        AppError::Unauthorized
+    })?;
+    let queue_info = queue
+        .into_iter()
+        .filter_map(|entry| {
+            let AdminQueueEntry {
                 player_id,
-                player_displayname: player.displayname,
-                queued_at: entry.queued_at,
-                wait_time_seconds: now.saturating_sub(entry.queued_at),
-                game_preferences: prefs,
-            });
-        }
-    }
+                player_displayname,
+                player_elo_rating,
+                queued_at,
+                wait_time_seconds,
+                game_preferences,
+            } = entry;
+
+            match (player_displayname, player_elo_rating) {
+                (Some(player_displayname), Some(_)) => Some(AdminMatchmakingInfo {
+                    player_id,
+                    player_displayname,
+                    queued_at,
+                    wait_time_seconds,
+                    game_preferences,
+                }),
+                _ => None,
+            }
+        })
+        .collect();
 
     Ok(Json(queue_info))
 }
 
 pub async fn admin_remove_from_matchmaking(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    db::leave_matchmaking_queue(&app_state.db, player_id)
+    state
+        .admin_service
+        .remove_from_queue(player_id)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
+        .map_err(|err| {
+            tracing::error!(player_id = %player_id, error = %err, "Failed to remove from queue");
+            AppError::NoSuchPlayer(player_id)
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -556,13 +528,18 @@ pub async fn admin_remove_from_matchmaking(
 
 pub async fn admin_get_player_stats(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
-) -> Result<Json<db::PlayerStatsRecord>, AppError> {
-    let stats = db::get_player_stats(&app_state.db, player_id)
+) -> Result<Json<PlayerStatsRecord>, AppError> {
+    let stats = state
+        .admin_service
+        .player_stats(player_id)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?
-        .unwrap_or(db::PlayerStatsRecord {
+        .map_err(|err| {
+            tracing::error!(player_id = %player_id, error = %err, "Failed to load player stats");
+            AppError::NoSuchPlayer(player_id)
+        })?
+        .unwrap_or(PlayerStatsRecord {
             player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
@@ -581,28 +558,23 @@ pub struct AdminUpdateStatsRequest {
 
 pub async fn admin_update_player_stats(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
     Path(player_id): Path<Uuid>,
     Json(req): Json<AdminUpdateStatsRequest>,
 ) -> Result<StatusCode, AppError> {
-    let mut updates = serde_json::json!({});
-
-    if let Some(games_played) = req.games_played {
-        updates["games_played"] = serde_json::json!(games_played);
-    }
-    if let Some(games_won) = req.games_won {
-        updates["games_won"] = serde_json::json!(games_won);
-    }
-    if let Some(total_playtime) = req.total_playtime {
-        updates["total_playtime"] = serde_json::json!(total_playtime);
-    }
-
-    let _: Option<db::PlayerStatsRecord> = app_state
-        .db
-        .update(("player_stats", player_id.to_string()))
-        .merge(updates)
+    state
+        .admin_service
+        .update_player_stats_fields(
+            player_id,
+            req.games_played,
+            req.games_won,
+            req.total_playtime,
+        )
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
+        .map_err(|err| {
+            tracing::error!(player_id = %player_id, error = %err, "Failed to update player stats");
+            AppError::NoSuchPlayer(player_id)
+        })?;
 
     Ok(StatusCode::OK)
 }
@@ -624,49 +596,21 @@ pub struct DatabaseStats {
 
 pub async fn admin_get_database_stats(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Result<Json<DatabaseStats>, AppError> {
-    let players: Vec<db::PlayerRecord> = app_state.db.select("players").await.unwrap_or_default();
-    let games: Vec<db::GameRecord> = app_state.db.select("games").await.unwrap_or_default();
-    let sessions: Vec<db::SessionRecord> =
-        app_state.db.select("sessions").await.unwrap_or_default();
-    let queue: Vec<db::MatchmakingQueueRecord> = app_state
-        .db
-        .select("matchmaking_queue")
-        .await
-        .unwrap_or_default();
-
-    let now = crate::common::timestamp();
-    let active_sessions = sessions.iter().filter(|s| s.expires_at > now).count();
-
-    // Count chat messages across all games
-    let mut total_chat_messages = 0;
-    for game in &games {
-        let game_id = as_uuid(&game.id);
-
-        if let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await {
-            total_chat_messages += messages.len();
-        }
-    }
-
-    // Count snapshots across all games
-    let mut total_snapshots = 0;
-    for game in &games {
-        let game_id = as_uuid(&game.id);
-
-        if let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await {
-            total_snapshots += snapshots.len();
-        }
-    }
+    let stats = state.admin_service.database_stats().await.map_err(|err| {
+        tracing::error!(error = %err, "Failed to load database stats");
+        AppError::Unauthorized
+    })?;
 
     Ok(Json(DatabaseStats {
-        total_players: players.len(),
-        total_games: games.len(),
-        total_sessions: sessions.len(),
-        active_sessions,
-        matchmaking_queue_size: queue.len(),
-        total_chat_messages,
-        total_snapshots,
+        total_players: stats.total_players,
+        total_games: stats.total_games,
+        total_sessions: stats.total_sessions,
+        active_sessions: stats.active_sessions,
+        matchmaking_queue_size: stats.queue_size,
+        total_chat_messages: stats.total_chat_messages,
+        total_snapshots: stats.total_snapshots,
     }))
 }
 
@@ -678,9 +622,9 @@ pub struct TableInfo {
 
 pub async fn admin_list_tables(
     _admin: AdminPlayer,
-    State(app_state): ServerState,
+    State(state): ServerState,
 ) -> Result<Json<Vec<TableInfo>>, AppError> {
-    let tables = vec![
+    let tables = [
         "players",
         "sessions",
         "games",
@@ -692,27 +636,81 @@ pub async fn admin_list_tables(
         "player_stats",
     ];
 
-    let mut table_info = Vec::new();
-    for table_name in tables {
-        #[derive(serde::Deserialize)]
-        struct CountResult {
-            count: i64,
+    let counts = state
+        .admin_service
+        .table_counts(&tables)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "Failed to list table counts");
+            AppError::Unauthorized
+        })?;
+
+    let info = counts
+        .into_iter()
+        .map(|(name, record_count)| TableInfo { name, record_count })
+        .collect();
+
+    Ok(Json(info))
+}
+
+// ============================================================================
+// Error Mapping Helpers
+// ============================================================================
+
+fn map_game_error(game_id: Option<Uuid>, err: ServiceError) -> AppError {
+    match err {
+        ServiceError::GameNotFound(id) => AppError::NoSuchGame(id),
+        ServiceError::GameNotInProgress => AppError::GameNotInProgress,
+        ServiceError::GameFull(id) => AppError::GameFull(id),
+        ServiceError::PlayerAlreadyInGame(id) => AppError::PlayerAlreadyExists(id),
+        ServiceError::PlayerNotFound(id) => AppError::NoSuchPlayer(id),
+        ServiceError::ValidationFailed(msg) => AppError::ValidationError(msg),
+        ServiceError::SnapshotNotFound(id, _) => AppError::NoSuchSnapshot(id),
+        ServiceError::DatabaseError(e) => {
+            tracing::error!(error = %e, ?game_id, "Game service operation failed");
+            if let Some(gid) = game_id {
+                AppError::NoSuchGame(gid)
+            } else {
+                AppError::ValidationError("Operation failed".to_string())
+            }
         }
-
-        let query = format!("SELECT count() as count FROM {} GROUP ALL", table_name);
-        let mut response = app_state
-            .db
-            .query(&query)
-            .await
-            .map_err(|_| AppError::Unauthorized)?;
-        let results: Vec<CountResult> = response.take(0).map_err(|_| AppError::Unauthorized)?;
-        let record_count = results.first().map(|r| r.count as usize).unwrap_or(0);
-
-        table_info.push(TableInfo {
-            name: table_name.to_string(),
-            record_count,
-        });
+        ServiceError::SerializationError(e) => {
+            tracing::error!(error = %e, ?game_id, "Game service serialization error");
+            if let Some(gid) = game_id {
+                AppError::NoSuchGame(gid)
+            } else {
+                AppError::ValidationError("Operation failed".to_string())
+            }
+        }
     }
+}
 
-    Ok(Json(table_info))
+fn map_admin_error_for_player(player_id: Uuid, err: AdminServiceError) -> AppError {
+    match err {
+        AdminServiceError::Player(PlayerServiceError::NotFound(id)) => AppError::NoSuchPlayer(id),
+        AdminServiceError::Player(PlayerServiceError::Validation(msg)) => {
+            AppError::ValidationError(msg)
+        }
+        AdminServiceError::Player(PlayerServiceError::Database(e))
+        | AdminServiceError::Database(e) => {
+            tracing::error!(player_id = %player_id, error = %e, "Admin player operation failed");
+            AppError::NoSuchPlayer(player_id)
+        }
+        AdminServiceError::Game(game_err) => map_game_error(None, game_err),
+    }
+}
+
+fn map_admin_error_for_game(game_id: Uuid, err: AdminServiceError) -> AppError {
+    match err {
+        AdminServiceError::Game(game_err) => map_game_error(Some(game_id), game_err),
+        AdminServiceError::Player(PlayerServiceError::NotFound(id)) => AppError::NoSuchPlayer(id),
+        AdminServiceError::Player(PlayerServiceError::Validation(msg)) => {
+            AppError::ValidationError(msg)
+        }
+        AdminServiceError::Player(PlayerServiceError::Database(e))
+        | AdminServiceError::Database(e) => {
+            tracing::error!(game_id = %game_id, error = %e, "Admin game operation failed");
+            AppError::NoSuchGame(game_id)
+        }
+    }
 }

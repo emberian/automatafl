@@ -111,11 +111,12 @@ fn GameEventItem(event: GameEvent) -> impl IntoView {
             "player-joined",
             format!("Player {} ({}) joined the game", displayname, player_pid.0),
         ),
-        GameEventData::GameStarted => ("game-started", "Game has started!".to_string()),
+        GameEventData::GameStarted { .. } => ("game-started", "Game has started!".to_string()),
         GameEventData::MoveAcknowledged {
             player_pid,
             from,
             to,
+            ..
         } => (
             "move-ack",
             format!(
@@ -146,7 +147,7 @@ fn GameEventItem(event: GameEvent) -> impl IntoView {
             "automaton-step",
             format!("Automaton moved to ({}, {})", location.x, location.y),
         ),
-        GameEventData::GameOver { winner } => {
+        GameEventData::GameOver { winner, .. } => {
             ("game-over", format!("Game Over! Player {} wins!", winner.0))
         }
         GameEventData::EloUpdate { changes } => {
@@ -157,7 +158,7 @@ fn GameEventItem(event: GameEvent) -> impl IntoView {
                 .join(", ");
             ("elo-update", format!("ELO updated: {}", details))
         }
-        GameEventData::RoundComplete => {
+        GameEventData::RoundComplete { .. } => {
             ("round-complete", "Round completed successfully".to_string())
         }
         GameEventData::Conflicts {

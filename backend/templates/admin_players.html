@@ -36,9 +36,9 @@
             </td>
             <td style="padding: 8px;">{{ player.created_at }}</td>
             <td style="padding: 8px;">
-                <a href="/admin/players/{{ player.id }}" style="color: #667eea; font-size: 12px;">Edit</a>
-                <form method="POST" action="/admin/players/{{ player.id }}/delete" style="display: inline; margin-left: 5px;">
-                    <button type="submit" onclick="return confirm('Delete {{ player.displayname }}?')" 
+                <a href="/admin/players/{{ player.id.key() }}" style="color: #667eea; font-size: 12px;">Edit</a>
+                <form method="POST" action="/admin/players/{{ player.id.key() }}/delete" style="display: inline; margin-left: 5px;">
+                    <button type="submit" onclick="return confirm('Delete {{ player.displayname }}?')"
                             style="padding: 2px 6px; font-size: 11px; background: #e74c3c;">Delete</button>
                 </form>
             </td>

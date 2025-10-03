@@ -5,7 +5,7 @@ use leptos_router::components::A;
 #[component]
 pub fn HomePage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let is_authenticated = move || app_state.is_authenticated();
+    let is_authenticated = move || app_state.is_authenticated.get();
 
     view! {
         <div class="home-page">
