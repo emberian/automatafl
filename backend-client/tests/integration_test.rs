@@ -70,8 +70,14 @@ async fn test_create_and_list_games() {
     let username = test_username();
 
     // Register and login
-    client.register(username.clone(), "testpass123".to_string()).await.unwrap();
-    client.login(username, "testpass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "testpass123".to_string())
+        .await
+        .unwrap();
+    client
+        .login(username, "testpass123".to_string())
+        .await
+        .unwrap();
 
     // Create a game
     let game_id = client
@@ -96,17 +102,32 @@ async fn test_join_game() {
     let username2 = test_username();
 
     // Register and login both clients
-    client1.register(username1.clone(), "pass123".to_string()).await.unwrap();
-    client1.login(username1, "pass123".to_string()).await.unwrap();
+    client1
+        .register(username1.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client1
+        .login(username1, "pass123".to_string())
+        .await
+        .unwrap();
 
-    client2.register(username2.clone(), "pass123".to_string()).await.unwrap();
-    client2.login(username2, "pass123".to_string()).await.unwrap();
+    client2
+        .register(username2.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client2
+        .login(username2, "pass123".to_string())
+        .await
+        .unwrap();
 
     // Client1 creates a game
     let game_id = client1.create_game(2, true).await.unwrap();
 
     // Client2 joins the game
-    let player_pid = client2.join_game(game_id).await.expect("Failed to join game");
+    let player_pid = client2
+        .join_game(game_id)
+        .await
+        .expect("Failed to join game");
     assert_eq!(player_pid.0, 1); // Second player should be PID 1
 
     // Get game state
@@ -119,12 +140,18 @@ async fn test_game_goals() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     let game_id = client.create_game(2, true).await.unwrap();
 
-    let goals = client.get_goals(game_id).await.expect("Failed to get goals");
+    let goals = client
+        .get_goals(game_id)
+        .await
+        .expect("Failed to get goals");
     assert!(!goals.is_empty());
 }
 
@@ -137,11 +164,23 @@ async fn test_perform_move() {
     let username2 = test_username();
 
     // Setup two players in a game
-    client1.register(username1.clone(), "pass123".to_string()).await.unwrap();
-    client1.login(username1, "pass123".to_string()).await.unwrap();
+    client1
+        .register(username1.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client1
+        .login(username1, "pass123".to_string())
+        .await
+        .unwrap();
 
-    client2.register(username2.clone(), "pass123".to_string()).await.unwrap();
-    client2.login(username2, "pass123".to_string()).await.unwrap();
+    client2
+        .register(username2.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client2
+        .login(username2, "pass123".to_string())
+        .await
+        .unwrap();
 
     let game_id = client1.create_game(2, true).await.unwrap();
     client2.join_game(game_id).await.unwrap();
@@ -167,7 +206,10 @@ async fn test_chat() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     let game_id = client.create_game(2, true).await.unwrap();
@@ -192,20 +234,38 @@ async fn test_game_history() {
     let username1 = test_username();
     let username2 = test_username();
 
-    client1.register(username1.clone(), "pass123".to_string()).await.unwrap();
-    client1.login(username1, "pass123".to_string()).await.unwrap();
+    client1
+        .register(username1.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client1
+        .login(username1, "pass123".to_string())
+        .await
+        .unwrap();
 
-    client2.register(username2.clone(), "pass123".to_string()).await.unwrap();
-    client2.login(username2, "pass123".to_string()).await.unwrap();
+    client2
+        .register(username2.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client2
+        .login(username2, "pass123".to_string())
+        .await
+        .unwrap();
 
     let game_id = client1.create_game(2, true).await.unwrap();
     client2.join_game(game_id).await.unwrap();
 
     // Get history
-    let history = client1.get_game_history(game_id).await.expect("Failed to get history");
+    let history = client1
+        .get_game_history(game_id)
+        .await
+        .expect("Failed to get history");
 
     // Should have PLAYER_JOINED events
-    assert!(history.iter().any(|e| matches!(e.data, automatafl_api_types::GameEventData::PlayerJoined { .. })));
+    assert!(history.iter().any(|e| matches!(
+        e.data,
+        automatafl_api_types::GameEventData::PlayerJoined { .. }
+    )));
 }
 
 #[tokio::test]
@@ -213,7 +273,10 @@ async fn test_game_history_filtered() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     let game_id = client.create_game(2, true).await.unwrap();
@@ -225,7 +288,10 @@ async fn test_game_history_filtered() {
         .expect("Failed to get filtered history");
 
     // All events should be PLAYER_JOINED
-    assert!(history.iter().all(|e| matches!(e.data, automatafl_api_types::GameEventData::PlayerJoined { .. })));
+    assert!(history.iter().all(|e| matches!(
+        e.data,
+        automatafl_api_types::GameEventData::PlayerJoined { .. }
+    )));
 }
 
 #[tokio::test]
@@ -236,25 +302,46 @@ async fn test_save_and_load_game() {
     let username1 = test_username();
     let username2 = test_username();
 
-    client1.register(username1.clone(), "pass123".to_string()).await.unwrap();
-    client1.login(username1, "pass123".to_string()).await.unwrap();
+    client1
+        .register(username1.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client1
+        .login(username1, "pass123".to_string())
+        .await
+        .unwrap();
 
-    client2.register(username2.clone(), "pass123".to_string()).await.unwrap();
-    client2.login(username2, "pass123".to_string()).await.unwrap();
+    client2
+        .register(username2.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client2
+        .login(username2, "pass123".to_string())
+        .await
+        .unwrap();
 
     let game_id = client1.create_game(2, true).await.unwrap();
     client2.join_game(game_id).await.unwrap();
 
     // Save game
-    let save_result = client1.save_game(game_id).await.expect("Failed to save game");
+    let save_result = client1
+        .save_game(game_id)
+        .await
+        .expect("Failed to save game");
     assert!(save_result.is_object());
 
     // List snapshots
-    let snapshots = client1.list_snapshots(game_id).await.expect("Failed to list snapshots");
+    let snapshots = client1
+        .list_snapshots(game_id)
+        .await
+        .expect("Failed to list snapshots");
     assert!(snapshots.is_object());
 
     // Load snapshot
-    client1.load_game(game_id, 0).await.expect("Failed to load game");
+    client1
+        .load_game(game_id, 0)
+        .await
+        .expect("Failed to load game");
 }
 
 #[tokio::test]
@@ -262,7 +349,10 @@ async fn test_player_profile() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    let register_response = client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    let register_response = client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     let player_id = register_response.player_id;
@@ -296,7 +386,10 @@ async fn test_player_stats() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    let register_response = client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    let register_response = client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     let player_id = register_response.player_id;
@@ -317,7 +410,10 @@ async fn test_leaderboards() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     // Get ELO leaderboard
@@ -346,7 +442,10 @@ async fn test_matchmaking() {
     let mut client = AutomataflClient::new(BASE_URL);
     let username = test_username();
 
-    client.register(username.clone(), "pass123".to_string()).await.unwrap();
+    client
+        .register(username.clone(), "pass123".to_string())
+        .await
+        .unwrap();
     client.login(username, "pass123".to_string()).await.unwrap();
 
     // Join matchmaking
@@ -383,18 +482,36 @@ async fn test_complete_round() {
     let username1 = test_username();
     let username2 = test_username();
 
-    client1.register(username1.clone(), "pass123".to_string()).await.unwrap();
-    client1.login(username1, "pass123".to_string()).await.unwrap();
+    client1
+        .register(username1.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client1
+        .login(username1, "pass123".to_string())
+        .await
+        .unwrap();
 
-    client2.register(username2.clone(), "pass123".to_string()).await.unwrap();
-    client2.login(username2, "pass123".to_string()).await.unwrap();
+    client2
+        .register(username2.clone(), "pass123".to_string())
+        .await
+        .unwrap();
+    client2
+        .login(username2, "pass123".to_string())
+        .await
+        .unwrap();
 
     let game_id = client1.create_game(2, true).await.unwrap();
     client2.join_game(game_id).await.unwrap();
 
     // Both players submit moves
-    client1.perform_move(game_id, Coord { x: 5, y: 5 }, Coord { x: 6, y: 5 }).await.unwrap();
-    client2.perform_move(game_id, Coord { x: 5, y: 6 }, Coord { x: 5, y: 7 }).await.unwrap();
+    client1
+        .perform_move(game_id, Coord { x: 5, y: 5 }, Coord { x: 6, y: 5 })
+        .await
+        .unwrap();
+    client2
+        .perform_move(game_id, Coord { x: 5, y: 6 }, Coord { x: 5, y: 7 })
+        .await
+        .unwrap();
 
     // Try to complete round (should auto-complete or be completable)
     let result = client1.complete_round(game_id).await;
