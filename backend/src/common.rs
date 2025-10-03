@@ -4,7 +4,6 @@ use std::{collections::HashMap, fmt, sync::Arc, time::SystemTime};
 
 use automatafl_api_types::*;
 use automatafl_logic::Pid;
-use dashmap::DashMap;
 use uuid::Uuid;
 
 use axum::{
@@ -18,9 +17,8 @@ use axum::{
 
 use futures::{SinkExt, stream::StreamExt};
 use std::time::Duration;
-use tokio::sync::broadcast;
 
-use crate::db;
+use crate::{db, services};
 
 // ============================================================================
 // Constants
@@ -50,18 +48,13 @@ pub struct GameSnapshot {
     pub timestamp: u64,
 }
 
-/// Per-game channels for broadcasting events
-pub struct GameChannels {
-    pub event_tx: broadcast::Sender<GameEvent>,
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub db: db::Db,
-    /// Map of game_id -> broadcast channel for real-time events
-    pub game_channels: Arc<DashMap<Uuid, Arc<GameChannels>>>,
     /// Application configuration
     pub config: Arc<crate::config::Config>,
+    /// Game service for business logic
+    pub game_service: Arc<services::GameService>,
 }
 
 pub type ServerState = axum::extract::State<Arc<AppState>>;
@@ -316,6 +309,8 @@ pub fn timestamp() -> u64 {
         .as_secs()
 }
 
+/// Persist an event to the database
+/// Live query subscribers will automatically receive the event
 pub async fn broadcast_event(
     state: &AppState,
     game_id: Uuid,
@@ -323,133 +318,10 @@ pub async fn broadcast_event(
 ) -> Result<(), AppError> {
     let ts = timestamp();
 
-    // Extract kind and data for database storage
-    let (kind, data) = match &event_data {
-        GameEventData::PlayerJoined {
-            player_id,
-            player_pid,
-            displayname,
-        } => (
-            "PLAYER_JOINED",
-            serde_json::json!({
-                "player_id": player_id,
-                "player_pid": player_pid,
-                "displayname": displayname,
-            }),
-        ),
-        GameEventData::GameStarted => ("GAME_STARTED", serde_json::json!({})),
-        GameEventData::MoveAcknowledged {
-            player_pid,
-            from,
-            to,
-        } => (
-            "MOVE_ACK",
-            serde_json::json!({
-                "player_pid": player_pid,
-                "from": from,
-                "to": to,
-            }),
-        ),
-        GameEventData::MoveInvalid {
-            player_pid,
-            feedback,
-        } => (
-            "MOVE_INVALID",
-            serde_json::json!({
-                "player_pid": player_pid,
-                "feedback": feedback,
-            }),
-        ),
-        GameEventData::Move {
-            player_pid,
-            from,
-            to,
-            result,
-        } => (
-            "MOVE",
-            serde_json::json!({
-                "player_pid": player_pid,
-                "from": from,
-                "to": to,
-                "result": result,
-            }),
-        ),
-        GameEventData::AutomatonStep { location } => (
-            "AUTOMATON_STEP",
-            serde_json::json!({
-                "location": location,
-            }),
-        ),
-        GameEventData::GameOver { winner } => (
-            "GAME_OVER",
-            serde_json::json!({
-                "winner": winner,
-            }),
-        ),
-        GameEventData::EloUpdate { changes } => (
-            "ELO_UPDATE",
-            serde_json::json!({
-                "changes": changes,
-            }),
-        ),
-        GameEventData::RoundComplete => ("ROUND_COMPLETE", serde_json::json!({})),
-        GameEventData::Conflicts {
-            locked_players,
-            conflict_coords,
-        } => (
-            "CONFLICTS",
-            serde_json::json!({
-                "locked_players": locked_players,
-                "conflict_coords": conflict_coords,
-            }),
-        ),
-        GameEventData::Chat {
-            timestamp,
-            player_id,
-            displayname,
-            message,
-        } => (
-            "CHAT",
-            serde_json::json!({
-                "timestamp": timestamp,
-                "player_id": player_id,
-                "displayname": displayname,
-                "message": message,
-            }),
-        ),
-        GameEventData::GameLoaded { snapshot_index } => (
-            "GAME_LOADED",
-            serde_json::json!({
-                "snapshot_index": snapshot_index,
-            }),
-        ),
-        GameEventData::State {
-            lifecycle,
-            game,
-            player_ids,
-        } => (
-            "STATE",
-            serde_json::json!({
-                "lifecycle": lifecycle,
-                "game": game,
-                "player_ids": player_ids,
-            }),
-        ),
-    };
-
-    // Store event in database
-    db::add_game_event(&state.db, game_id, ts, kind.to_string(), data)
+    // Store event in database - live query subscribers will receive it automatically
+    db::add_game_event(&state.db, game_id, ts, event_data)
         .await
         .map_err(|_| AppError::NoSuchGame(game_id))?;
-
-    // Broadcast via channel if exists
-    if let Some(channels) = state.game_channels.get(&game_id) {
-        let event = GameEvent {
-            data: event_data,
-            timestamp: Some(ts),
-        };
-        let _ = channels.event_tx.send(event);
-    }
 
     Ok(())
 }
@@ -459,13 +331,7 @@ pub async fn broadcast_event(
 // ============================================================================
 
 pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: Uuid) {
-    // Get or create game channel
-    let channels = state.game_channels.entry(game_uuid).or_insert_with(|| {
-        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
-        Arc::new(GameChannels { event_tx })
-    });
-
-    let mut rx = channels.event_tx.subscribe();
+    use futures::StreamExt;
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -500,21 +366,45 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
         }
     }
 
-    // Spawn task to receive events and forward to websocket with heartbeat
+    // Create live query stream from SurrealDB
+    let db_stream = match db::create_live_query(state.db.clone(), game_uuid).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            tracing::error!("Failed to create live query for game {}: {}", game_uuid, e);
+            return;
+        }
+    };
+
+    // Spawn task to receive database events and forward to websocket with heartbeat
     let mut send_task = tokio::spawn(async move {
         let mut heartbeat_interval = tokio::time::interval(WEBSOCKET_PING_INTERVAL);
+        let mut db_stream = Box::pin(db_stream);
+
         loop {
             tokio::select! {
-                event_result = rx.recv() => {
-                    match event_result {
-                        Ok(event) => {
+                notification_result = db_stream.next() => {
+                    match notification_result {
+                        Some(Ok(notification)) => {
+                            // Extract the event record from the notification
+                            // The notification contains the GameEventRecord data
+                            let event = GameEvent {
+                                data: notification.data.event,
+                                timestamp: Some(notification.data.timestamp),
+                            };
                             if let Ok(json) = serde_json::to_string(&event) {
                                 if sender.send(Message::Text(json.into())).await.is_err() {
                                     break;
                                 }
                             }
                         }
-                        Err(_) => break,
+                        Some(Err(e)) => {
+                            tracing::error!("Live query error for game {}: {}", game_uuid, e);
+                            break;
+                        }
+                        None => {
+                            tracing::info!("Live query stream ended for game {}", game_uuid);
+                            break;
+                        }
                     }
                 }
                 _ = heartbeat_interval.tick() => {
@@ -551,67 +441,4 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
         _ = (&mut send_task) => recv_task.abort(),
         _ = (&mut recv_task) => send_task.abort(),
     }
-}
-
-/// Spawn a background task to clean up stale game channels
-/// Removes channels for games that no longer exist or are finished
-pub fn spawn_game_channel_cleanup(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Every 5 minutes
-        loop {
-            interval.tick().await;
-
-            let channel_count_before = state.game_channels.len();
-            let mut removed = 0;
-
-            // Check each game channel
-            let game_ids: Vec<Uuid> = state
-                .game_channels
-                .iter()
-                .map(|entry| *entry.key())
-                .collect();
-
-            for game_id in game_ids {
-                // Check if game still exists and isn't finished
-                match db::get_game(&state.db, game_id).await {
-                    Ok(Some(game)) => {
-                        if let Ok(lifecycle) =
-                            serde_json::from_str::<GameLifecycle>(&game.lifecycle)
-                        {
-                            if lifecycle == GameLifecycle::Finished {
-                                state.game_channels.remove(&game_id);
-                                removed += 1;
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        // Game doesn't exist, remove channel
-                        state.game_channels.remove(&game_id);
-                        removed += 1;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to check game {} status during cleanup: {}",
-                            game_id,
-                            e
-                        );
-                    }
-                }
-            }
-
-            if removed > 0 {
-                tracing::info!(
-                    "Game channel cleanup: removed {} stale channels ({} -> {})",
-                    removed,
-                    channel_count_before,
-                    state.game_channels.len()
-                );
-            } else {
-                tracing::debug!(
-                    "Game channel cleanup: no stale channels found ({} active)",
-                    state.game_channels.len()
-                );
-            }
-        }
-    })
 }

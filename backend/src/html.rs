@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::common::{ServerState, broadcast_event, timestamp};
 use crate::db;
 use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem, GameStateResponse};
-use automatafl_logic::{Move, MoveFeedback, Pid};
+use automatafl_logic::Pid;
 
 // ============================================================================
 // Session Cookie Helpers
@@ -989,6 +989,7 @@ pub async fn html_join_game(
     Redirect::to(&format!("/game/{}", game_id)).into_response()
 }
 
+/// HTML form handler for submitting moves - REFACTORED to use service layer
 pub async fn html_submit_move(
     State(state): ServerState,
     headers: axum::http::HeaderMap,
@@ -1017,130 +1018,32 @@ pub async fn html_submit_move(
         None => return Redirect::to(&format!("/game/{}", game_id)).into_response(),
     };
 
-    // Load game state and perform move
-    if let Ok(Some((mut game_core, mut lifecycle, _player_ids))) =
-        db::load_game_state(&state.db, game_id).await
+    use automatafl_logic::Coord;
+    let from = Coord {
+        x: move_form.from_x,
+        y: move_form.from_y,
+    };
+    let to = Coord {
+        x: move_form.to_x,
+        y: move_form.to_y,
+    };
+
+    // Get game start time for potential completion stats
+    let game_start_time = db::get_game(&state.db, game_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|g| g.created_at);
+
+    // Call service - ALL business logic is there
+    if let Ok((_response, events)) = state
+        .game_service
+        .submit_move_and_maybe_complete(game_id, player_pid, from, to, game_start_time)
+        .await
     {
-        use automatafl_logic::Coord;
-        let from = Coord {
-            x: move_form.from_x,
-            y: move_form.from_y,
-        };
-        let to = Coord {
-            x: move_form.to_x,
-            y: move_form.to_y,
-        };
-
-        let move_to_make = Move {
-            who: player_pid,
-            from,
-            to,
-        };
-        let (feedback, ready_to_complete) = game_core.propose_move(move_to_make);
-
-        // Save game state
-        let _ = db::update_game_state(&state.db, game_id, &game_core, &lifecycle).await;
-
-        if feedback == MoveFeedback::Committed {
-            // Broadcast move acknowledgment
-            let _ = broadcast_event(
-                &state,
-                game_id,
-                GameEventData::MoveAcknowledged {
-                    player_pid,
-                    from,
-                    to,
-                },
-            )
-            .await;
-
-            // Auto-complete if all moves are in
-            if ready_to_complete {
-                match game_core.try_complete_round() {
-                    Ok(results) => {
-                        // Broadcast all move results
-                        for (mv, result) in &results {
-                            let _ = broadcast_event(
-                                &state,
-                                game_id,
-                                GameEventData::Move {
-                                    player_pid: mv.who,
-                                    from: mv.from,
-                                    to: mv.to,
-                                    result: *result,
-                                },
-                            )
-                            .await;
-                        }
-
-                        // Broadcast automaton move
-                        let _ = broadcast_event(
-                            &state,
-                            game_id,
-                            GameEventData::AutomatonStep {
-                                location: game_core.board.automaton_location,
-                            },
-                        )
-                        .await;
-
-                        // Check for winner
-                        if let Some(winner) = game_core.winner {
-                            lifecycle = GameLifecycle::Finished;
-
-                            // Get game creation time for playtime calculation
-                            if let Ok(Some(game_record)) = db::get_game(&state.db, game_id).await {
-                                // Update player stats and ELO ratings
-                                match crate::matchmaking::update_game_completion_stats(
-                                    &state.db,
-                                    game_id,
-                                    winner,
-                                    game_record.created_at,
-                                )
-                                .await
-                                {
-                                    Ok(elo_changes) if !elo_changes.is_empty() => {
-                                        let _ = broadcast_event(
-                                            &state,
-                                            game_id,
-                                            GameEventData::EloUpdate {
-                                                changes: elo_changes,
-                                            },
-                                        )
-                                        .await;
-                                    }
-                                    _ => {}
-                                }
-                            }
-
-                            let _ = broadcast_event(
-                                &state,
-                                game_id,
-                                GameEventData::GameOver { winner },
-                            )
-                            .await;
-                        } else {
-                            let _ = broadcast_event(&state, game_id, GameEventData::RoundComplete)
-                                .await;
-                        }
-
-                        // Save final state
-                        let _ =
-                            db::update_game_state(&state.db, game_id, &game_core, &lifecycle).await;
-                    }
-                    Err(_) => {
-                        // Conflicts - broadcast them
-                        let _ = broadcast_event(
-                            &state,
-                            game_id,
-                            GameEventData::Conflicts {
-                                locked_players: game_core.locked_players.iter().copied().collect(),
-                                conflict_coords: Vec::new(), // Would need to track conflicts
-                            },
-                        )
-                        .await;
-                    }
-                }
-            }
+        // Broadcast all events from service
+        for event in events {
+            let _ = broadcast_event(&state, game_id, event).await;
         }
     }
 
@@ -1784,26 +1687,41 @@ pub async fn html_admin_events(
         "SELECT * FROM game_events ORDER BY timestamp DESC LIMIT 100".to_string()
     };
 
-    let events_result: Result<Vec<serde_json::Value>, _> = state
+    let events_result: Result<Vec<crate::db::GameEventRecord>, _> = state
         .db
         .query(&query)
         .await
         .and_then(|mut resp| resp.take(0));
 
-    let events_json = match events_result {
+    let events_records = match events_result {
         Ok(events) => events,
         Err(_) => vec![],
     };
 
-    let events: Vec<GameEventInfo> = events_json
+    let events: Vec<GameEventInfo> = events_records
         .into_iter()
-        .filter_map(|ev| {
-            Some(GameEventInfo {
-                timestamp: ev.get("timestamp")?.as_u64()?,
-                game_id: ev.get("game_id")?.as_str()?.to_string(),
-                event_type: ev.get("event_type")?.as_str()?.to_string(),
-                details: serde_json::to_string_pretty(&ev).unwrap_or_else(|_| "{}".to_string()),
-            })
+        .map(|ev| {
+            let event_type = match &ev.event {
+                automatafl_api_types::GameEventData::PlayerJoined { .. } => "PLAYER_JOINED",
+                automatafl_api_types::GameEventData::GameStarted => "GAME_STARTED",
+                automatafl_api_types::GameEventData::MoveAcknowledged { .. } => "MOVE_ACK",
+                automatafl_api_types::GameEventData::MoveInvalid { .. } => "MOVE_INVALID",
+                automatafl_api_types::GameEventData::Move { .. } => "MOVE",
+                automatafl_api_types::GameEventData::AutomatonStep { .. } => "AUTOMATON_STEP",
+                automatafl_api_types::GameEventData::GameOver { .. } => "GAME_OVER",
+                automatafl_api_types::GameEventData::EloUpdate { .. } => "ELO_UPDATE",
+                automatafl_api_types::GameEventData::RoundComplete => "ROUND_COMPLETE",
+                automatafl_api_types::GameEventData::Conflicts { .. } => "CONFLICTS",
+                automatafl_api_types::GameEventData::Chat { .. } => "CHAT",
+                automatafl_api_types::GameEventData::GameLoaded { .. } => "GAME_LOADED",
+                automatafl_api_types::GameEventData::State { .. } => "STATE",
+            };
+            GameEventInfo {
+                timestamp: ev.timestamp,
+                game_id: ev.game_id,
+                event_type: event_type.to_string(),
+                details: serde_json::to_string_pretty(&ev.event).unwrap_or_else(|_| "{}".to_string()),
+            }
         })
         .collect();
 

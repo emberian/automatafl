@@ -7,9 +7,8 @@ use uuid::Uuid;
 
 use automatafl_api_types::*;
 use automatafl_logic::{Board, Coord, Pid};
-use tokio::sync::broadcast;
 
-use crate::common::{AppError, AuthPlayer, GameChannels, ServerState, timestamp};
+use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
 use crate::{db, middleware};
 
 // ============================================================================
@@ -479,12 +478,6 @@ pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
             if let Err(e) = db::remove_from_queue(&state.db, player_uuids.clone()).await {
                 tracing::error!("Failed to remove players from queue: {}", e);
             }
-
-            // Create broadcast channel for game
-            let (event_tx, _) = broadcast::channel(crate::common::EVENT_CHANNEL_SIZE);
-            state
-                .game_channels
-                .insert(game_id, Arc::new(GameChannels { event_tx }));
 
             // Broadcast match found event (would need WebSocket notification system)
             tracing::info!(

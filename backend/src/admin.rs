@@ -40,36 +40,59 @@ pub struct AdminGetPlayerQuery {
     pub include_stats: Option<bool>,
 }
 
+#[derive(serde::Serialize)]
+pub struct AdminGetPlayerResponse {
+    pub id: Uuid,
+    pub displayname: String,
+    pub is_admin: bool,
+    pub bio: Option<String>,
+    pub avatar_url: Option<String>,
+    pub created_at: u64,
+    pub elo_rating: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<PlayerStats>,
+}
+
 pub async fn admin_get_player(
     _admin: AdminPlayer,
     State(app_state): ServerState,
     Path(player_id): Path<Uuid>,
     Query(query): Query<AdminGetPlayerQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<AdminGetPlayerResponse>, AppError> {
     let player = db::get_player(&app_state.db, player_id)
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?
         .ok_or(AppError::NoSuchPlayer(player_id))?;
 
-    let mut result = serde_json::json!({
-        "id": player_id,
-        "displayname": player.displayname,
-        "is_admin": player.is_admin,
-        "bio": player.bio,
-        "avatar_url": player.avatar_url,
-        "created_at": player.created_at,
-        "elo_rating": player.elo_rating,
-    });
-
-    if query.include_stats.unwrap_or(false) {
-        let stats = db::get_player_stats(&app_state.db, player_id)
+    let stats = if query.include_stats.unwrap_or(false) {
+        db::get_player_stats(&app_state.db, player_id)
             .await
             .ok()
-            .flatten();
-        result["stats"] = serde_json::json!(stats);
-    }
+            .flatten()
+            .map(|s| PlayerStats {
+                games_played: s.games_played,
+                games_won: s.games_won,
+                total_playtime: s.total_playtime,
+                win_rate: if s.games_played > 0 {
+                    s.games_won as f64 / s.games_played as f64
+                } else {
+                    0.0
+                },
+            })
+    } else {
+        None
+    };
 
-    Ok(Json(result))
+    Ok(Json(AdminGetPlayerResponse {
+        id: player_id,
+        displayname: player.displayname,
+        is_admin: player.is_admin,
+        bio: player.bio,
+        avatar_url: player.avatar_url,
+        created_at: player.created_at,
+        elo_rating: player.elo_rating,
+        stats,
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -169,11 +192,22 @@ pub async fn admin_list_all_games(
     crate::game::list_games(State(app_state)).await
 }
 
+#[derive(serde::Serialize)]
+pub struct AdminGetGameResponse {
+    pub id: Uuid,
+    pub game_state: automatafl_logic::Game,
+    pub lifecycle: GameLifecycle,
+    pub player_ids: std::collections::HashMap<Uuid, automatafl_logic::Pid>,
+    pub created_at: u64,
+    pub created_by: String,
+    pub player_count: u8,
+}
+
 pub async fn admin_get_game(
     _admin: AdminPlayer,
     State(app_state): ServerState,
     Path(game_uuid): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<AdminGetGameResponse>, AppError> {
     let (game_core, lifecycle, player_ids) = db::load_game_state(&app_state.db, game_uuid)
         .await
         .map_err(|_| AppError::NoSuchGame(game_uuid))?
@@ -184,15 +218,15 @@ pub async fn admin_get_game(
         .map_err(|_| AppError::NoSuchGame(game_uuid))?
         .ok_or(AppError::NoSuchGame(game_uuid))?;
 
-    Ok(Json(serde_json::json!({
-        "id": game_uuid,
-        "game_state": game_core,
-        "lifecycle": lifecycle,
-        "player_ids": player_ids,
-        "created_at": game_record.created_at,
-        "created_by": game_record.created_by,
-        "player_count": game_record.player_count,
-    })))
+    Ok(Json(AdminGetGameResponse {
+        id: game_uuid,
+        game_state: game_core,
+        lifecycle,
+        player_ids,
+        created_at: game_record.created_at,
+        created_by: game_record.created_by,
+        player_count: game_record.player_count,
+    }))
 }
 
 pub async fn admin_delete_game(
@@ -203,9 +237,6 @@ pub async fn admin_delete_game(
     db::delete_game(&app_state.db, game_uuid)
         .await
         .map_err(|_| AppError::NoSuchGame(game_uuid))?;
-
-    // Remove from game channels
-    app_state.game_channels.remove(&game_uuid);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -254,13 +285,6 @@ pub async fn admin_force_complete_round(
                         _ => {}
                     }
                 }
-
-                // Clean up game channel after forced completion
-                app_state.game_channels.remove(&game_uuid);
-                tracing::info!(
-                    "Admin forced completion - cleaned up game channel: {}",
-                    game_uuid
-                );
             }
 
             // Save updated state
@@ -360,16 +384,21 @@ pub async fn admin_delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(serde::Serialize)]
+pub struct SessionCleanupResponse {
+    pub deleted_count: u64,
+}
+
 pub async fn admin_cleanup_expired_sessions(
     _admin: AdminPlayer,
     State(app_state): ServerState,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<SessionCleanupResponse>, AppError> {
     let now = crate::common::timestamp();
     let deleted = db::cleanup_expired_sessions(&app_state.db, now)
         .await
         .map_err(|_| AppError::Unauthorized)?;
 
-    Ok(Json(serde_json::json!({ "deleted_count": deleted })))
+    Ok(Json(SessionCleanupResponse { deleted_count: deleted }))
 }
 
 // ============================================================================
@@ -470,7 +499,7 @@ pub struct AdminMatchmakingInfo {
     pub player_displayname: String,
     pub queued_at: u64,
     pub wait_time_seconds: u64,
-    pub game_preferences: serde_json::Value,
+    pub game_preferences: JoinMatchmakingRequest,
 }
 
 pub async fn admin_list_matchmaking_queue(
@@ -488,8 +517,11 @@ pub async fn admin_list_matchmaking_queue(
         if let Ok(player_id) = Uuid::parse_str(&entry.player_id)
             && let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await
         {
-            let prefs: serde_json::Value =
-                serde_json::from_str(&entry.game_preferences).unwrap_or(serde_json::json!({}));
+            let prefs: JoinMatchmakingRequest = serde_json::from_str(&entry.game_preferences)
+                .unwrap_or(JoinMatchmakingRequest {
+                    player_count: 2,
+                    use_column_rule: false,
+                });
 
             queue_info.push(AdminMatchmakingInfo {
                 player_id,
@@ -660,8 +692,16 @@ pub async fn admin_list_tables(
 
     let mut table_info = Vec::new();
     for table_name in tables {
-        let count: Result<Vec<serde_json::Value>, _> = app_state.db.select(table_name).await;
-        let record_count = count.map(|v| v.len()).unwrap_or(0);
+        #[derive(serde::Deserialize)]
+        struct CountResult {
+            count: i64,
+        }
+
+        let query = format!("SELECT count() as count FROM {} GROUP ALL", table_name);
+        let mut response = app_state.db.query(&query).await.map_err(|_| AppError::Unauthorized)?;
+        let results: Vec<CountResult> = response.take(0).map_err(|_| AppError::Unauthorized)?;
+        let record_count = results.first().map(|r| r.count as usize).unwrap_or(0);
+
         table_info.push(TableInfo {
             name: table_name.to_string(),
             record_count,

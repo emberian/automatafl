@@ -290,6 +290,15 @@ impl AppState {
     }
 
     /// Increment history version (still fetched via HTTP)
+    ///
+    /// TODO: Remove this "pull" pattern once events include full state deltas.
+    /// Events should contain all necessary data to update state directly without HTTP refetch.
+    /// Required backend changes:
+    /// - GameStarted: include new lifecycle state
+    /// - PlayerJoined: include player info & updated player list
+    /// - MoveAcknowledged: include pending move data
+    /// - RoundComplete: include new lifecycle/round state
+    /// - GameOver: include final lifecycle state
     pub fn bump_history(&self, game_id: Uuid) {
         self.games.update(|games| {
             if let Some(game) = games.get_mut(&game_id) {

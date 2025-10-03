@@ -8,6 +8,7 @@ use surrealdb::{
     opt::auth::Root,
 };
 use uuid::Uuid;
+use futures::Stream;
 
 pub type Db = Arc<Surreal<Any>>;
 
@@ -110,8 +111,7 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         DEFINE TABLE IF NOT EXISTS game_events SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS game_id ON TABLE game_events TYPE string;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE game_events TYPE int;
-        DEFINE FIELD IF NOT EXISTS event_kind ON TABLE game_events TYPE string;
-        DEFINE FIELD IF NOT EXISTS event_data ON TABLE game_events TYPE string;
+        DEFINE FIELD IF NOT EXISTS event ON TABLE game_events TYPE object;
         DEFINE INDEX IF NOT EXISTS game_time_idx ON TABLE game_events COLUMNS game_id, timestamp;
     ",
     )
@@ -232,8 +232,7 @@ pub struct GamePlayerRecord {
 pub struct GameEventRecord {
     pub game_id: String,
     pub timestamp: u64,
-    pub event_kind: String,
-    pub event_data: String, // JSON-serialized data
+    pub event: automatafl_api_types::GameEventData,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,12 +420,20 @@ pub async fn update_game_state(
     game_state: &Game,
     lifecycle: &GameLifecycle,
 ) -> Result<(), surrealdb::Error> {
+    #[derive(Serialize)]
+    struct GameStateUpdate {
+        game_state: String,
+        lifecycle: String,
+    }
+
+    let update = GameStateUpdate {
+        game_state: serde_json::to_string(game_state).unwrap(),
+        lifecycle: serde_json::to_string(lifecycle).unwrap(),
+    };
+
     let _: Option<GameRecord> = db
         .update(("games", game_id.to_string()))
-        .merge(serde_json::json!({
-            "game_state": serde_json::to_string(game_state).unwrap(),
-            "lifecycle": serde_json::to_string(lifecycle).unwrap(),
-        }))
+        .merge(update)
         .await?;
 
     Ok(())
@@ -526,14 +533,12 @@ pub async fn add_game_event(
     db: &Surreal<Any>,
     game_id: Uuid,
     timestamp: u64,
-    event_kind: String,
-    event_data: serde_json::Value,
+    event: automatafl_api_types::GameEventData,
 ) -> Result<(), surrealdb::Error> {
     let record = GameEventRecord {
         game_id: game_id.to_string(),
         timestamp,
-        event_kind,
-        event_data: serde_json::to_string(&event_data).unwrap(),
+        event,
     };
 
     // Let SurrealDB generate unique ID automatically
@@ -561,7 +566,7 @@ pub async fn get_game_history(
         query.push_str(" AND timestamp <= $until");
     }
     if event_kind.is_some() {
-        query.push_str(" AND event_kind = $event_kind");
+        query.push_str(" AND event.kind = $event_kind");
     }
 
     query.push_str(" ORDER BY timestamp ASC");
@@ -726,12 +731,17 @@ pub async fn update_player_profile(
     bio: Option<String>,
     avatar_url: Option<String>,
 ) -> Result<(), surrealdb::Error> {
+    #[derive(Serialize)]
+    struct ProfileUpdate {
+        bio: Option<String>,
+        avatar_url: Option<String>,
+    }
+
+    let update = ProfileUpdate { bio, avatar_url };
+
     let _: Option<PlayerRecord> = db
         .update(("players", player_id.to_string()))
-        .merge(serde_json::json!({
-            "bio": bio,
-            "avatar_url": avatar_url,
-        }))
+        .merge(update)
         .await?;
 
     Ok(())
@@ -743,11 +753,16 @@ pub async fn update_player_elo(
     player_id: Uuid,
     new_elo: i32,
 ) -> Result<(), surrealdb::Error> {
+    #[derive(Serialize)]
+    struct EloUpdate {
+        elo_rating: i32,
+    }
+
+    let update = EloUpdate { elo_rating: new_elo };
+
     let _: Option<PlayerRecord> = db
         .update(("players", player_id.to_string()))
-        .merge(serde_json::json!({
-            "elo_rating": new_elo,
-        }))
+        .merge(update)
         .await?;
 
     Ok(())
@@ -899,4 +914,23 @@ pub async fn remove_from_queue(
             .await;
     }
     Ok(())
+}
+
+// ============================================================================
+// Live Queries for Real-Time Events
+// ============================================================================
+
+/// Create a live query stream for game events
+/// Returns a stream of new events as they're inserted into the database
+pub async fn create_live_query(
+    db: Db,
+    game_id: Uuid,
+) -> Result<impl Stream<Item = Result<surrealdb::Notification<GameEventRecord>, surrealdb::Error>>, surrealdb::Error> {
+    let mut result = db
+        .query("LIVE SELECT * FROM game_events WHERE game_id = $game_id ORDER BY timestamp")
+        .bind(("game_id", game_id.to_string()))
+        .await?;
+
+    let stream = result.stream::<surrealdb::Notification<GameEventRecord>>(0)?;
+    Ok(stream)
 }

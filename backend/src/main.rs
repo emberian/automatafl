@@ -8,6 +8,8 @@ mod game;
 mod html;
 mod matchmaking;
 mod middleware;
+mod repositories;
+mod services;
 mod transactions;
 mod validation;
 
@@ -34,7 +36,6 @@ use uuid::Uuid;
 
 use automatafl_api_types::HealthResponse;
 use common::{AppState, ServerState, timestamp};
-use dashmap::DashMap;
 
 const CARGO_PACKAGE_VERSION: Option<&str> = std::option_env!("CARGO_PACKAGE_VERSION");
 
@@ -194,11 +195,18 @@ async fn server_main() {
 
     tracing::info!("Database initialized");
 
+    // Create repositories
+    let game_repo = repositories::GameRepository::new(db.clone());
+    let player_repo = repositories::PlayerRepository::new(db.clone());
+
+    // Create services
+    let game_service = Arc::new(services::GameService::new(game_repo, player_repo));
+
     // Create application state
     let app_state = Arc::new(AppState {
         db,
-        game_channels: Arc::new(DashMap::new()),
         config: Arc::new(config.clone()),
+        game_service,
     });
 
     // Create the main router
@@ -483,9 +491,6 @@ async fn server_main() {
     // Spawn rate limiter cleanup task
     let rate_limiter_cleanup = middleware::spawn_rate_limiter_cleanup();
 
-    // Spawn game channel cleanup task
-    let game_channel_cleanup = common::spawn_game_channel_cleanup(app_state.clone());
-
     let addr = config.bind_address;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -503,7 +508,6 @@ async fn server_main() {
     // Cleanup
     matchmaking_handle.abort();
     rate_limiter_cleanup.abort();
-    game_channel_cleanup.abort();
     tracing::info!("Server shutdown complete");
 }
 

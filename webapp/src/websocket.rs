@@ -38,15 +38,7 @@ async fn handle_message_stream(
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                // Handle ping/pong
-                if text == "ping" {
-                    // Send pong response
-                    if let Some(sink) = sink_ref.borrow_mut().as_mut() {
-                        let _ = sink.send(Message::Text("pong".to_string())).await;
-                    }
-                    continue;
-                }
-
+                // WebSocket protocol handles ping/pong frames automatically
                 match serde_json::from_str::<GameEvent>(&text) {
                     Ok(event) => {
                         app_state.handle_game_event(game_id, event);
