@@ -161,14 +161,14 @@ async fn track_metrics(
 // Main
 // ============================================================================
 
-#[tokio::main]
-async fn main() {
-    tokio::runtime::Builder::new_multi_thread()
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(10 * 1024 * 1024) // 10MiB
         .build()
-        .unwrap()
-        .block_on(async { server_main().await })
+        .expect("failed to build tokio runtime");
+
+    runtime.block_on(async { server_main().await });
 }
 
 async fn server_main() {
