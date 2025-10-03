@@ -2,17 +2,20 @@
 
 use askama::Template;
 use axum::{
-    extract::{Path, Query, State},
-    http::{StatusCode, header::{SET_COOKIE, COOKIE}},
-    response::{IntoResponse, Redirect},
     Form,
+    extract::{Path, Query, State},
+    http::{
+        StatusCode,
+        header::{COOKIE, SET_COOKIE},
+    },
+    response::{IntoResponse, Redirect},
 };
 use uuid::Uuid;
 
-use crate::common::{ServerState, timestamp, broadcast_event};
+use crate::common::{ServerState, broadcast_event, timestamp};
 use crate::db;
-use automatafl_api_types::{GameListItem, GameLifecycle, GameStateResponse, GameEventData};
-use automatafl_logic::{Pid, Move, MoveFeedback};
+use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem, GameStateResponse};
+use automatafl_logic::{Move, MoveFeedback, Pid};
 
 // ============================================================================
 // Session Cookie Helpers
@@ -41,12 +44,12 @@ async fn get_player_from_session(
     session_id: Uuid,
 ) -> Option<(Uuid, db::PlayerRecord)> {
     let session = db::get_session(db, session_id).await.ok()??;
-    
+
     // Check expiration
     if session.expires_at < timestamp() {
         return None;
     }
-    
+
     let player_id = Uuid::parse_str(&session.player_id).ok()?;
     let player = db::get_player(db, player_id).await.ok()??;
     Some((player_id, player))
@@ -271,7 +274,8 @@ pub async fn html_index(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -285,7 +289,8 @@ pub async fn html_login_page() -> impl IntoResponse {
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -299,7 +304,8 @@ pub async fn html_register_page() -> impl IntoResponse {
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -312,8 +318,8 @@ pub async fn html_login_submit(
         Ok(Some(player)) => {
             // Verify password
             use argon2::{
-                password_hash::{PasswordHash, PasswordVerifier},
                 Argon2,
+                password_hash::{PasswordHash, PasswordVerifier},
             };
 
             if let Ok(parsed_hash) = PasswordHash::new(&player.password_hash) {
@@ -325,16 +331,15 @@ pub async fn html_login_submit(
                     let player_id = Uuid::parse_str(&player.id).unwrap();
                     let session_id = Uuid::new_v4();
                     let expires_at = timestamp() + state.config.session_duration;
-                    
+
                     if db::create_session(&state.db, session_id, player_id, expires_at)
                         .await
                         .is_ok()
                     {
                         let mut response = Redirect::to("/dashboard").into_response();
-                        response.headers_mut().insert(
-                            SET_COOKIE,
-                            set_session_cookie(session_id).parse().unwrap(),
-                        );
+                        response
+                            .headers_mut()
+                            .insert(SET_COOKIE, set_session_cookie(session_id).parse().unwrap());
                         return response;
                     }
                 }
@@ -353,7 +358,8 @@ pub async fn html_login_submit(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -372,7 +378,8 @@ pub async fn html_register_submit(
             Err(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Template error: {}", err),
-            ).into_response(),
+            )
+                .into_response(),
         };
     }
 
@@ -387,7 +394,8 @@ pub async fn html_register_submit(
             Err(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Template error: {}", err),
-            ).into_response(),
+            )
+                .into_response(),
         };
     }
 
@@ -403,7 +411,8 @@ pub async fn html_register_submit(
                 Err(err) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Template error: {}", err),
-                ).into_response(),
+                )
+                    .into_response(),
             };
         }
         _ => {}
@@ -411,8 +420,8 @@ pub async fn html_register_submit(
 
     // Hash password with argon2
     use argon2::{
-        password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
         Argon2,
+        password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
     };
 
     let salt = SaltString::generate(&mut OsRng);
@@ -429,7 +438,8 @@ pub async fn html_register_submit(
                 Err(err) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Template error: {}", err),
-                ).into_response(),
+                )
+                    .into_response(),
             };
         }
     };
@@ -448,7 +458,8 @@ pub async fn html_register_submit(
                 Err(err) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Template error: {}", err),
-                ).into_response(),
+                )
+                    .into_response(),
             }
         }
     }
@@ -461,12 +472,11 @@ pub async fn html_logout(
     if let Some(session_id) = get_session_from_cookies(&headers) {
         let _ = db::delete_session(&state.db, session_id).await;
     }
-    
+
     let mut response = Redirect::to("/").into_response();
-    response.headers_mut().insert(
-        SET_COOKIE,
-        clear_session_cookie().parse().unwrap(),
-    );
+    response
+        .headers_mut()
+        .insert(SET_COOKIE, clear_session_cookie().parse().unwrap());
     response
 }
 
@@ -485,7 +495,8 @@ pub async fn html_games_list(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -524,7 +535,10 @@ pub async fn html_dashboard(
     for game_record in all_games.into_iter().take(10) {
         if let Ok(game_id) = Uuid::parse_str(&game_record.id) {
             if let Ok(game_players) = db::get_game_players(&state.db, game_id).await {
-                if game_players.iter().any(|gp| gp.player_id == player_id.to_string()) {
+                if game_players
+                    .iter()
+                    .any(|gp| gp.player_id == player_id.to_string())
+                {
                     if let (Ok(lifecycle), Ok(created_by)) = (
                         serde_json::from_str(&game_record.lifecycle),
                         Uuid::parse_str(&game_record.created_by),
@@ -557,7 +571,8 @@ pub async fn html_dashboard(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -577,10 +592,7 @@ pub async fn html_profile(
     let player = match db::get_player(&state.db, player_id).await {
         Ok(Some(p)) => p,
         _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                "Player not found",
-            ).into_response();
+            return (StatusCode::NOT_FOUND, "Player not found").into_response();
         }
     };
 
@@ -611,7 +623,8 @@ pub async fn html_profile(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -657,10 +670,7 @@ pub async fn html_game_detail(
     let (game_core, lifecycle, player_ids) = match db::load_game_state(&state.db, game_id).await {
         Ok(Some(state)) => state,
         _ => {
-            return (
-                StatusCode::NOT_FOUND,
-                "Game not found",
-            ).into_response();
+            return (StatusCode::NOT_FOUND, "Game not found").into_response();
         }
     };
 
@@ -679,12 +689,18 @@ pub async fn html_game_detail(
     }
     player_names.sort_by_key(|(pid, _)| pid.0);
 
-    let is_player = session_player_id.map(|id| player_ids.contains_key(&id)).unwrap_or(false);
+    let is_player = session_player_id
+        .map(|id| player_ids.contains_key(&id))
+        .unwrap_or(false);
     let player_pid = session_player_id.and_then(|id| player_ids.get(&id).copied());
 
     // Get pending move if player is in game
     let pending_move = if let Some(pid) = player_pid {
-        game_core.pending_moves.iter().find(|m| m.who == pid).cloned()
+        game_core
+            .pending_moves
+            .iter()
+            .find(|m| m.who == pid)
+            .cloned()
     } else {
         None
     };
@@ -707,7 +723,8 @@ pub async fn html_game_detail(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -734,7 +751,8 @@ pub async fn html_create_game_page(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -770,9 +788,16 @@ pub async fn html_create_game_submit(
     let game_id = Uuid::new_v4();
     let lifecycle = GameLifecycle::Waiting;
 
-    if db::create_game(&state.db, game_id, &game_core, &lifecycle, player_id, form.player_count)
-        .await
-        .is_ok()
+    if db::create_game(
+        &state.db,
+        game_id,
+        &game_core,
+        &lifecycle,
+        player_id,
+        form.player_count,
+    )
+    .await
+    .is_ok()
     {
         // Auto-join the creator
         let _ = db::add_player_to_game(&state.db, game_id, player_id, Pid(0)).await;
@@ -812,7 +837,8 @@ pub async fn html_matchmaking_page(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -882,7 +908,8 @@ pub async fn html_leaderboard(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -914,11 +941,16 @@ pub async fn html_join_game(
     };
 
     // Get game and find next available PID
-    let game_players = db::get_game_players(&state.db, game_id).await.unwrap_or_default();
+    let game_players = db::get_game_players(&state.db, game_id)
+        .await
+        .unwrap_or_default();
     let next_pid = Pid(game_players.len() as u8);
 
     // Add player to game
-    if db::add_player_to_game(&state.db, game_id, player_id, next_pid).await.is_ok() {
+    if db::add_player_to_game(&state.db, game_id, player_id, next_pid)
+        .await
+        .is_ok()
+    {
         // Broadcast player joined event
         if let Ok(Some(player)) = db::get_player(&state.db, player_id).await {
             let _ = crate::common::broadcast_event(
@@ -929,7 +961,8 @@ pub async fn html_join_game(
                     player_pid: next_pid,
                     displayname: player.displayname,
                 },
-            ).await;
+            )
+            .await;
         }
 
         // Check if game should start
@@ -937,13 +970,17 @@ pub async fn html_join_game(
             let player_count = game_players.len() + 1;
             if player_count == game_record.player_count as usize {
                 // Start game - update lifecycle in game record
-                if let Ok(Some((game_core, _, _player_ids))) = db::load_game_state(&state.db, game_id).await {
-                    let _ = db::update_game_state(&state.db, game_id, &game_core, &GameLifecycle::InProgress).await;
-                    let _ = broadcast_event(
-                        &state,
+                if let Ok(Some((game_core, _, _player_ids))) =
+                    db::load_game_state(&state.db, game_id).await
+                {
+                    let _ = db::update_game_state(
+                        &state.db,
                         game_id,
-                        GameEventData::GameStarted,
-                    ).await;
+                        &game_core,
+                        &GameLifecycle::InProgress,
+                    )
+                    .await;
+                    let _ = broadcast_event(&state, game_id, GameEventData::GameStarted).await;
                 }
             }
         }
@@ -969,7 +1006,9 @@ pub async fn html_submit_move(
     };
 
     // Get player's PID in this game
-    let game_players = db::get_game_players(&state.db, game_id).await.unwrap_or_default();
+    let game_players = db::get_game_players(&state.db, game_id)
+        .await
+        .unwrap_or_default();
     let player_pid = match game_players
         .iter()
         .find(|gp| gp.player_id == player_id.to_string())
@@ -979,17 +1018,29 @@ pub async fn html_submit_move(
     };
 
     // Load game state and perform move
-    if let Ok(Some((mut game_core, mut lifecycle, _player_ids))) = db::load_game_state(&state.db, game_id).await {
+    if let Ok(Some((mut game_core, mut lifecycle, _player_ids))) =
+        db::load_game_state(&state.db, game_id).await
+    {
         use automatafl_logic::Coord;
-        let from = Coord { x: move_form.from_x, y: move_form.from_y };
-        let to = Coord { x: move_form.to_x, y: move_form.to_y };
+        let from = Coord {
+            x: move_form.from_x,
+            y: move_form.from_y,
+        };
+        let to = Coord {
+            x: move_form.to_x,
+            y: move_form.to_y,
+        };
 
-        let move_to_make = Move { who: player_pid, from, to };
+        let move_to_make = Move {
+            who: player_pid,
+            from,
+            to,
+        };
         let (feedback, ready_to_complete) = game_core.propose_move(move_to_make);
-        
+
         // Save game state
         let _ = db::update_game_state(&state.db, game_id, &game_core, &lifecycle).await;
-        
+
         if feedback == MoveFeedback::Committed {
             // Broadcast move acknowledgment
             let _ = broadcast_event(
@@ -1000,7 +1051,8 @@ pub async fn html_submit_move(
                     from,
                     to,
                 },
-            ).await;
+            )
+            .await;
 
             // Auto-complete if all moves are in
             if ready_to_complete {
@@ -1017,7 +1069,8 @@ pub async fn html_submit_move(
                                     to: mv.to,
                                     result: *result,
                                 },
-                            ).await;
+                            )
+                            .await;
                         }
 
                         // Broadcast automaton move
@@ -1027,12 +1080,13 @@ pub async fn html_submit_move(
                             GameEventData::AutomatonStep {
                                 location: game_core.board.automaton_location,
                             },
-                        ).await;
+                        )
+                        .await;
 
                         // Check for winner
                         if let Some(winner) = game_core.winner {
                             lifecycle = GameLifecycle::Finished;
-                            
+
                             // Get game creation time for playtime calculation
                             if let Ok(Some(game_record)) = db::get_game(&state.db, game_id).await {
                                 // Update player stats and ELO ratings
@@ -1041,33 +1095,37 @@ pub async fn html_submit_move(
                                     game_id,
                                     winner,
                                     game_record.created_at,
-                                ).await {
+                                )
+                                .await
+                                {
                                     Ok(elo_changes) if !elo_changes.is_empty() => {
                                         let _ = broadcast_event(
                                             &state,
                                             game_id,
-                                            GameEventData::EloUpdate { changes: elo_changes },
-                                        ).await;
+                                            GameEventData::EloUpdate {
+                                                changes: elo_changes,
+                                            },
+                                        )
+                                        .await;
                                     }
                                     _ => {}
                                 }
                             }
-                            
+
                             let _ = broadcast_event(
                                 &state,
                                 game_id,
                                 GameEventData::GameOver { winner },
-                            ).await;
+                            )
+                            .await;
                         } else {
-                            let _ = broadcast_event(
-                                &state,
-                                game_id,
-                                GameEventData::RoundComplete,
-                            ).await;
+                            let _ = broadcast_event(&state, game_id, GameEventData::RoundComplete)
+                                .await;
                         }
 
                         // Save final state
-                        let _ = db::update_game_state(&state.db, game_id, &game_core, &lifecycle).await;
+                        let _ =
+                            db::update_game_state(&state.db, game_id, &game_core, &lifecycle).await;
                     }
                     Err(_) => {
                         // Conflicts - broadcast them
@@ -1078,7 +1136,8 @@ pub async fn html_submit_move(
                                 locked_players: game_core.locked_players.iter().copied().collect(),
                                 conflict_coords: Vec::new(), // Would need to track conflicts
                             },
-                        ).await;
+                        )
+                        .await;
                     }
                 }
             }
@@ -1134,8 +1193,12 @@ pub async fn html_admin_panel(
     let players: Vec<db::PlayerRecord> = state.db.select("players").await.unwrap_or_default();
     let games: Vec<db::GameRecord> = state.db.select("games").await.unwrap_or_default();
     let sessions: Vec<db::SessionRecord> = state.db.select("sessions").await.unwrap_or_default();
-    let queue: Vec<db::MatchmakingQueueRecord> = state.db.select("matchmaking_queue").await.unwrap_or_default();
-    
+    let queue: Vec<db::MatchmakingQueueRecord> = state
+        .db
+        .select("matchmaking_queue")
+        .await
+        .unwrap_or_default();
+
     let now = timestamp();
     let active_sessions = sessions.iter().filter(|s| s.expires_at > now).count();
 
@@ -1153,7 +1216,8 @@ pub async fn html_admin_panel(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1183,7 +1247,8 @@ pub async fn html_admin_players(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1217,7 +1282,8 @@ pub async fn html_admin_query_page(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1246,15 +1312,17 @@ pub async fn html_admin_query_execute(
     }
 
     // Execute query
-    let query_result: Result<surrealdb::Response, surrealdb::Error> = state.db.query(&form.query).await;
-    
+    let query_result: Result<surrealdb::Response, surrealdb::Error> =
+        state.db.query(&form.query).await;
+
     let (result, error) = match query_result {
         Ok(mut response) => {
             // Try to extract results
             let results: Result<Vec<serde_json::Value>, _> = response.take(0);
             match results {
                 Ok(data) => {
-                    let json = serde_json::to_string_pretty(&data).unwrap_or_else(|_| "Failed to serialize".to_string());
+                    let json = serde_json::to_string_pretty(&data)
+                        .unwrap_or_else(|_| "Failed to serialize".to_string());
                     (Some(json), None)
                 }
                 Err(e) => (None, Some(format!("Query error: {}", e))),
@@ -1275,7 +1343,8 @@ pub async fn html_admin_query_execute(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1299,7 +1368,8 @@ pub async fn html_admin_cleanup_sessions(
 
     // Delete expired sessions
     let now = timestamp();
-    let _: Result<surrealdb::Response, _> = state.db
+    let _: Result<surrealdb::Response, _> = state
+        .db
         .query("DELETE FROM sessions WHERE expires_at < $expires_at")
         .bind(("expires_at", now))
         .await;
@@ -1335,7 +1405,8 @@ pub async fn html_admin_sessions(
     }
 
     // Get all sessions from database
-    let sessions_result: Result<Vec<db::SessionRecord>, _> = state.db
+    let sessions_result: Result<Vec<db::SessionRecord>, _> = state
+        .db
         .query("SELECT * FROM sessions ORDER BY created_at DESC")
         .await
         .and_then(|mut resp| resp.take(0));
@@ -1346,15 +1417,18 @@ pub async fn html_admin_sessions(
     };
 
     let now = timestamp();
-    let session_infos: Vec<SessionInfo> = sessions.into_iter().map(|s| {
-        SessionInfo {
-            session_id: s.id.clone(),
-            player_name: s.player_id.clone(),
-            created_at: 0, // Not available in current schema
-            expires_at: s.expires_at,
-            is_expired: s.expires_at < now,
-        }
-    }).collect();
+    let session_infos: Vec<SessionInfo> = sessions
+        .into_iter()
+        .map(|s| {
+            SessionInfo {
+                session_id: s.id.clone(),
+                player_name: s.player_id.clone(),
+                created_at: 0, // Not available in current schema
+                expires_at: s.expires_at,
+                is_expired: s.expires_at < now,
+            }
+        })
+        .collect();
 
     let template = AdminSessionsTemplate {
         sessions: session_infos,
@@ -1365,7 +1439,8 @@ pub async fn html_admin_sessions(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1388,9 +1463,8 @@ pub async fn html_admin_delete_session(
         return (StatusCode::FORBIDDEN, "Admin access required").into_response();
     }
 
-    let _: Result<Option<db::SessionRecord>, _> = state.db
-        .delete(("sessions", session_to_delete))
-        .await;
+    let _: Result<Option<db::SessionRecord>, _> =
+        state.db.delete(("sessions", session_to_delete)).await;
 
     Redirect::to("/admin/sessions").into_response()
 }
@@ -1427,7 +1501,8 @@ pub async fn html_admin_games(
     let filter = params.get("filter").map(|s| s.as_str()).unwrap_or("all");
 
     // Get all game states
-    let game_states_result: Result<Vec<db::GameRecord>, _> = state.db
+    let game_states_result: Result<Vec<db::GameRecord>, _> = state
+        .db
         .query("SELECT * FROM games ORDER BY created_at DESC")
         .await
         .and_then(|mut resp| resp.take(0));
@@ -1493,7 +1568,8 @@ pub async fn html_admin_games(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1516,9 +1592,7 @@ pub async fn html_admin_delete_game(
         return (StatusCode::FORBIDDEN, "Admin access required").into_response();
     }
 
-    let _: Result<Option<db::GameRecord>, _> = state.db
-        .delete(("games", game_id))
-        .await;
+    let _: Result<Option<db::GameRecord>, _> = state.db.delete(("games", game_id)).await;
 
     Redirect::to("/admin/games").into_response()
 }
@@ -1556,7 +1630,8 @@ pub async fn html_admin_force_complete(
             if let Ok(_) = game_core.try_complete_round() {
                 // Save updated game state
                 let game_json = serde_json::to_string(&game_core).unwrap_or_default();
-                let _: Result<Option<db::GameRecord>, _> = state.db
+                let _: Result<Option<db::GameRecord>, _> = state
+                    .db
                     .query("UPDATE games SET game_state = $state WHERE id = $id")
                     .bind(("id", game_uuid.to_string()))
                     .bind(("state", game_json))
@@ -1597,7 +1672,8 @@ pub async fn html_admin_queue(
     }
 
     // Get matchmaking queue entries
-    let queue_result: Result<Vec<db::MatchmakingQueueRecord>, _> = state.db
+    let queue_result: Result<Vec<db::MatchmakingQueueRecord>, _> = state
+        .db
         .query("SELECT * FROM matchmaking_queue ORDER BY queued_at ASC")
         .await
         .and_then(|mut resp| resp.take(0));
@@ -1611,7 +1687,8 @@ pub async fn html_admin_queue(
     let mut queue = vec![];
     for entry in queue_entries {
         // Get player info
-        let player: Option<db::PlayerRecord> = state.db
+        let player: Option<db::PlayerRecord> = state
+            .db
             .select(("players", entry.player_id.clone()))
             .await
             .ok()
@@ -1636,7 +1713,8 @@ pub async fn html_admin_queue(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1659,7 +1737,8 @@ pub async fn html_admin_remove_from_queue(
         return (StatusCode::FORBIDDEN, "Admin access required").into_response();
     }
 
-    let _: Result<surrealdb::Response, _> = state.db
+    let _: Result<surrealdb::Response, _> = state
+        .db
         .query("DELETE FROM matchmaking_queue WHERE player_id = $player_id")
         .bind(("player_id", player_id))
         .await;
@@ -1697,12 +1776,16 @@ pub async fn html_admin_events(
     let game_id_filter = params.get("game_id").map(|s| s.to_string());
 
     let query = if let Some(ref game_id) = game_id_filter {
-        format!("SELECT * FROM game_events WHERE game_id = '{}' ORDER BY timestamp DESC LIMIT 100", game_id)
+        format!(
+            "SELECT * FROM game_events WHERE game_id = '{}' ORDER BY timestamp DESC LIMIT 100",
+            game_id
+        )
     } else {
         "SELECT * FROM game_events ORDER BY timestamp DESC LIMIT 100".to_string()
     };
 
-    let events_result: Result<Vec<serde_json::Value>, _> = state.db
+    let events_result: Result<Vec<serde_json::Value>, _> = state
+        .db
         .query(&query)
         .await
         .and_then(|mut resp| resp.take(0));
@@ -1712,14 +1795,17 @@ pub async fn html_admin_events(
         Err(_) => vec![],
     };
 
-    let events: Vec<GameEventInfo> = events_json.into_iter().filter_map(|ev| {
-        Some(GameEventInfo {
-            timestamp: ev.get("timestamp")?.as_u64()?,
-            game_id: ev.get("game_id")?.as_str()?.to_string(),
-            event_type: ev.get("event_type")?.as_str()?.to_string(),
-            details: serde_json::to_string_pretty(&ev).unwrap_or_else(|_| "{}".to_string()),
+    let events: Vec<GameEventInfo> = events_json
+        .into_iter()
+        .filter_map(|ev| {
+            Some(GameEventInfo {
+                timestamp: ev.get("timestamp")?.as_u64()?,
+                game_id: ev.get("game_id")?.as_str()?.to_string(),
+                event_type: ev.get("event_type")?.as_str()?.to_string(),
+                details: serde_json::to_string_pretty(&ev).unwrap_or_else(|_| "{}".to_string()),
+            })
         })
-    }).collect();
+        .collect();
 
     let template = AdminEventsTemplate {
         events,
@@ -1731,7 +1817,8 @@ pub async fn html_admin_events(
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Template error: {}", err),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -1757,10 +1844,8 @@ pub async fn html_matchmaking_join(
         game_preferences: r#"{"player_count":2,"use_column_rule":false}"#.to_string(),
     };
 
-    let _: Result<Option<db::MatchmakingQueueRecord>, _> = state.db
-        .create("matchmaking_queue")
-        .content(entry)
-        .await;
+    let _: Result<Option<db::MatchmakingQueueRecord>, _> =
+        state.db.create("matchmaking_queue").content(entry).await;
 
     Redirect::to("/matchmaking").into_response()
 }
@@ -1780,7 +1865,8 @@ pub async fn html_matchmaking_leave(
     };
 
     // Remove from queue
-    let _: Result<surrealdb::Response, _> = state.db
+    let _: Result<surrealdb::Response, _> = state
+        .db
         .query("DELETE FROM matchmaking_queue WHERE player_id = $player_id")
         .bind(("player_id", player_id.to_string()))
         .await;

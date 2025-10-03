@@ -2,40 +2,36 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use uuid::Uuid;
 
-use automatafl_logic::{Board, Coord, Pid};
 use automatafl_api_types::*;
+use automatafl_logic::{Board, Coord, Pid};
 use tokio::sync::broadcast;
 
-use crate::common::{AppError, AuthPlayer, ServerState, GameChannels, timestamp};
-use crate::db;
+use crate::common::{AppError, AuthPlayer, GameChannels, ServerState, timestamp};
+use crate::{db, middleware};
 
 // ============================================================================
 // ELO Rating System
 // ============================================================================
 
 /// Calculate new ELO ratings after a game
-/// Uses standard ELO formula with K-factor of 32
+/// Uses standard ELO formula with K-factor from constants
 fn calculate_elo_change(winner_elo: i32, loser_elo: i32) -> (i32, i32) {
-    const K_FACTOR: f64 = 32.0;
-    
+    use crate::common::ELO_K_FACTOR;
+
     // Expected scores
     let expected_winner = 1.0 / (1.0 + 10_f64.powf((loser_elo - winner_elo) as f64 / 400.0));
     let expected_loser = 1.0 / (1.0 + 10_f64.powf((winner_elo - loser_elo) as f64 / 400.0));
-    
+
     // Actual scores (1 for win, 0 for loss)
-    let winner_change = (K_FACTOR * (1.0 - expected_winner)).round() as i32;
-    let loser_change = (K_FACTOR * (0.0 - expected_loser)).round() as i32;
-    
+    let winner_change = (ELO_K_FACTOR * (1.0 - expected_winner)).round() as i32;
+    let loser_change = (ELO_K_FACTOR * (0.0 - expected_loser)).round() as i32;
+
     let new_winner_elo = winner_elo + winner_change;
     let new_loser_elo = loser_elo + loser_change;
-    
+
     (new_winner_elo, new_loser_elo)
 }
 
@@ -49,34 +45,33 @@ pub async fn update_game_completion_stats(
     let game_players = db::get_game_players(db, game_id).await?;
     let game_end_time = timestamp();
     let playtime = game_end_time.saturating_sub(game_start_time);
-    
+
     // Get all player IDs and their PIDs
     let mut players_info: Vec<(Uuid, u8, i32)> = Vec::new();
     for gp in &game_players {
         let player_uuid = Uuid::parse_str(&gp.player_id)?;
-        let player = db::get_player(db, player_uuid).await?.ok_or("Player not found")?;
+        let player = db::get_player(db, player_uuid)
+            .await?
+            .ok_or("Player not found")?;
         players_info.push((player_uuid, gp.player_pid, player.elo_rating));
     }
-    
+
     let mut elo_changes = Vec::new();
-    
+
     // For 2-player games, update ELO
     if players_info.len() == 2 {
         let (p1_uuid, p1_pid, p1_elo) = players_info[0];
         let (p2_uuid, _p2_pid, p2_elo) = players_info[1];
-        
+
         let (new_winner_elo, new_loser_elo) = if winner_pid.0 == p1_pid {
             calculate_elo_change(p1_elo, p2_elo)
         } else {
             let (new_p2, new_p1) = calculate_elo_change(p2_elo, p1_elo);
             (new_p1, new_p2)
         };
-        
-        // Update ELO ratings and track changes
+
+        // Track ELO changes
         if winner_pid.0 == p1_pid {
-            db::update_player_elo(db, p1_uuid, new_winner_elo).await?;
-            db::update_player_elo(db, p2_uuid, new_loser_elo).await?;
-            
             elo_changes.push(EloChange {
                 player_id: p1_uuid,
                 old_elo: p1_elo,
@@ -90,9 +85,6 @@ pub async fn update_game_completion_stats(
                 change: new_loser_elo - p2_elo,
             });
         } else {
-            db::update_player_elo(db, p1_uuid, new_loser_elo).await?;
-            db::update_player_elo(db, p2_uuid, new_winner_elo).await?;
-            
             elo_changes.push(EloChange {
                 player_id: p1_uuid,
                 old_elo: p1_elo,
@@ -106,19 +98,30 @@ pub async fn update_game_completion_stats(
                 change: new_winner_elo - p2_elo,
             });
         }
-        
+
         tracing::info!(
             "ELO updated for game {}: {} changes recorded",
-            game_id, elo_changes.len()
+            game_id,
+            elo_changes.len()
         );
     }
-    
-    // Update stats for all players
-    for (player_uuid, player_pid, _) in players_info {
+
+    // Update stats for all players atomically (including ELO if applicable)
+    for (player_uuid, player_pid, _player_elo) in players_info {
         let won = player_pid == winner_pid.0;
-        db::update_player_stats(db, player_uuid, won, playtime).await?;
+
+        // Find new ELO for this player if it was updated
+        let new_elo = elo_changes
+            .iter()
+            .find(|ec| ec.player_id == player_uuid)
+            .map(|ec| ec.new_elo);
+
+        // Use atomic update to prevent race conditions
+        crate::transactions::update_player_stats_atomic(db, player_uuid, won, playtime, new_elo)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
     }
-    
+
     Ok(elo_changes)
 }
 
@@ -140,7 +143,10 @@ pub async fn get_leaderboard_elo(
     let mut entries: Vec<LeaderboardEntry> = Vec::new();
     for (player, rank) in ranked {
         if let Ok(player_id) = Uuid::parse_str(&player.id) {
-            let stats = db::get_player_stats(&app_state.db, player_id).await.ok().flatten();
+            let stats = db::get_player_stats(&app_state.db, player_id)
+                .await
+                .ok()
+                .flatten();
             entries.push(LeaderboardEntry {
                 rank,
                 player_id,
@@ -231,12 +237,30 @@ pub async fn join_matchmaking(
     State(app_state): ServerState,
     Json(req): Json<JoinMatchmakingRequest>,
 ) -> Result<StatusCode, AppError> {
+    // Rate limit matchmaking joins - 5 joins per minute per player
+    middleware::check_rate_limit_expensive(
+        &format!("matchmaking:{}", auth.player_id),
+        5.0,
+        5.0 / 60.0,
+    )
+    .map_err(|_| {
+        AppError::ValidationError("Too many matchmaking requests, please wait".to_string())
+    })?;
+
     let preferences = serde_json::to_string(&req).unwrap();
 
     db::join_matchmaking_queue(&app_state.db, auth.player_id, timestamp(), preferences)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to join matchmaking queue for player {}: {}",
+                auth.player_id,
+                e
+            );
+            AppError::Unauthorized
+        })?;
 
+    tracing::info!("Player {} joined matchmaking queue", auth.player_id);
     Ok(StatusCode::OK)
 }
 
@@ -285,7 +309,8 @@ pub async fn get_matchmaking_status(
 // ============================================================================
 
 pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(state.config.matchmaking_interval));
+    let mut interval =
+        tokio::time::interval(Duration::from_secs(state.config.matchmaking_interval));
 
     loop {
         interval.tick().await;
@@ -379,15 +404,15 @@ pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
                 continue;
             }
 
-            let matched_players: Vec<_> = matched_indices.iter().map(|&i| &players_with_elo[i].0).collect();
+            let matched_players: Vec<_> = matched_indices
+                .iter()
+                .map(|&i| &players_with_elo[i].0)
+                .collect();
 
             // Create game for matched players
             let board = Board::stock_two_player();
-            let mut game_core = automatafl_logic::Game::new(
-                board,
-                prefs.player_count,
-                prefs.use_column_rule,
-            );
+            let mut game_core =
+                automatafl_logic::Game::new(board, prefs.player_count, prefs.use_column_rule);
 
             // Set up goals for two-player game
             if prefs.player_count == 2 {
@@ -404,35 +429,59 @@ pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
                 Err(_) => continue,
             };
 
-            // Create game in database
-            if db::create_game(
+            // Parse player UUIDs first
+            let mut player_uuids = Vec::new();
+            for player in &matched_players {
+                if let Ok(player_uuid) = Uuid::parse_str(&player.player_id) {
+                    player_uuids.push(player_uuid);
+                } else {
+                    tracing::error!("Failed to parse player UUID: {}", player.player_id);
+                }
+            }
+
+            if player_uuids.len() != matched_players.len() {
+                tracing::error!("Failed to parse all player UUIDs, skipping match");
+                continue;
+            }
+
+            // Create game and add players atomically using transaction
+            let player_pids: Vec<(Uuid, u8)> = player_uuids
+                .iter()
+                .enumerate()
+                .map(|(i, &uuid)| (uuid, i as u8))
+                .collect();
+
+            match crate::transactions::create_game_with_players(
                 &state.db,
                 game_id,
                 &game_core,
                 &lifecycle,
                 first_player_id,
                 prefs.player_count,
+                player_pids,
             )
             .await
-            .is_err()
             {
-                continue;
-            }
-
-            // Add players to game
-            let mut player_uuids = Vec::new();
-            for (i, player) in matched_players.iter().enumerate() {
-                if let Ok(player_uuid) = Uuid::parse_str(&player.player_id) {
-                    player_uuids.push(player_uuid);
-                    let _ = db::add_player_to_game(&state.db, game_id, player_uuid, Pid(i as u8)).await;
+                Ok(_) => {
+                    tracing::info!(
+                        "Created game {} with {} players atomically",
+                        game_id,
+                        player_uuids.len()
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create game atomically: {}", e);
+                    continue;
                 }
             }
 
-            // Remove matched players from queue
-            let _ = db::remove_from_queue(&state.db, player_uuids.clone()).await;
+            // Remove matched players from queue (separate operation, logs errors but continues)
+            if let Err(e) = db::remove_from_queue(&state.db, player_uuids.clone()).await {
+                tracing::error!("Failed to remove players from queue: {}", e);
+            }
 
             // Create broadcast channel for game
-            let (event_tx, _) = broadcast::channel(100);
+            let (event_tx, _) = broadcast::channel(crate::common::EVENT_CHANNEL_SIZE);
             state
                 .game_channels
                 .insert(game_id, Arc::new(GameChannels { event_tx }));

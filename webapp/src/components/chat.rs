@@ -1,5 +1,8 @@
 // ChatPanel component - displays game chat
-use crate::{api::ApiClient, state::AppState, components::use_toast, utils::RateLimiter};
+use crate::{
+    components::use_toast, helpers::create_api_client, state::AppState, utils::RateLimiter,
+};
+use leptos::html;
 use leptos::prelude::*;
 use uuid::Uuid;
 
@@ -7,33 +10,25 @@ use uuid::Uuid;
 pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
-    
+
     // Rate limiter: 5 messages per 10 seconds
     let rate_limiter = RateLimiter::new(5, 10000);
-    
+
     let (message_input, set_message_input) = signal(String::new());
-    
-    let api_base_url = app_state.api_base_url.clone();
-    let app_state_for_resource = app_state.clone();
-    let messages_resource = LocalResource::new(
-        move || {
-            // Track game refresh trigger to make resource reactive to WebSocket events
-            let _trigger = app_state_for_resource.get_game_refresh_trigger(game_id);
-            let api_base_url = api_base_url.clone();
-            async move {
-                let client = ApiClient::new(api_base_url);
-                client.get_chat(game_id).await
-            }
-        }
-    );
-    
-    let api_base_url_for_action = app_state.api_base_url.clone();
+
+    // Use NodeRef for DOM access instead of StoredValue
+    let chat_messages_ref = NodeRef::<html::Div>::new();
+
+    // Get reactive chat signal - updates automatically from WebSocket!
+    let chat_signal = app_state.get_chat_signal(game_id);
+
+    let messages_memo = Memo::new(move |_| chat_signal.and_then(|sig| Some(sig.get())));
+
     let send_message_action = Action::new_local(move |(gid, msg): &(Uuid, String)| {
         let gid = *gid;
         let msg = msg.clone();
-        let base_url = api_base_url_for_action.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.send_chat(gid, msg).await
         }
     });
@@ -50,7 +45,10 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
         // Check rate limit
         if !rate_limiter.allow() {
             let remaining = rate_limiter.remaining();
-            toast_clone.warning(format!("Slow down! You can send {} more messages in a few seconds.", remaining));
+            toast_clone.warning(format!(
+                "Slow down! You can send {} more messages in a few seconds.",
+                remaining
+            ));
             return;
         }
 
@@ -64,6 +62,10 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
                 Ok(_) => {
                     set_message_input.set(String::new());
                     // Chat will refresh via WebSocket CHAT event triggering game refresh
+                    // Scroll to bottom after sending
+                    if let Some(elem) = chat_messages_ref.get() {
+                        let _ = elem.set_scroll_top(elem.scroll_height());
+                    }
                 }
                 Err(e) => {
                     toast_clone2.error(format!("Failed to send message: {}", e));
@@ -71,54 +73,61 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
             }
         }
     });
-    
+
+    // Auto-scroll to bottom when new messages arrive
+    Effect::new(move |_| {
+        if messages_memo.get().is_some() {
+            gloo_timers::callback::Timeout::new(100, move || {
+                if let Some(elem) = chat_messages_ref.get() {
+                    let _ = elem.set_scroll_top(elem.scroll_height());
+                }
+            })
+            .forget();
+        }
+    });
+
     view! {
         <div class="chat-panel">
             <h3>"Chat"</h3>
-            
-            <div class="chat-messages">
-                <Suspense fallback=move || view! {
-                    <div class="loading">Loading messages...</div>
-                }>
-                    {move || {
-                        messages_resource.get().map(|result| {
-                            match result {
-                                Ok(messages) => {
-                                    if messages.is_empty() {
-                                        view! {
-                                            <div class="chat-empty">
-                                                <p>"No messages yet"</p>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        messages.into_iter().map(|message| {
-                                            view! {
-                                                <div class="chat-message">
-                                                    <div class="message-header">
-                                                        <span class="message-author">{message.displayname.clone()}</span>
-                                                        <span class="message-time">
-                                                            {chrono::DateTime::from_timestamp(message.timestamp as i64, 0)
-                                                                .map(|dt| dt.format("%H:%M:%S").to_string())
-                                                                .unwrap_or_else(|| "".to_string())}
-                                                        </span>
-                                                    </div>
-                                                    <div class="message-content">{message.message.clone()}</div>
-                                                </div>
-                                            }
-                                        }).collect_view().into_any()
-                                    }
-                                }
-                                Err(e) => view! {
-                                    <div class="chat-error">
-                                        <p>"Error loading messages: " {format!("{}", e)}</p>
+
+            <div
+                class="chat-messages"
+                node_ref=chat_messages_ref
+            >
+                {move || {
+                    match messages_memo.get() {
+                        Some(messages) => {
+                            if messages.is_empty() {
+                                view! {
+                                    <div class="chat-empty">
+                                        <p>"No messages yet"</p>
                                     </div>
                                 }.into_any()
+                            } else {
+                                messages.into_iter().map(|message| {
+                                    view! {
+                                        <div class="chat-message">
+                                            <div class="message-header">
+                                                <span class="message-author">{message.displayname.clone()}</span>
+                                                <span class="message-time">
+                                                    {chrono::DateTime::from_timestamp(message.timestamp as i64, 0)
+                                                        .map(|dt| dt.format("%H:%M:%S").to_string())
+                                                        .unwrap_or_else(|| "".to_string())}
+                                                </span>
+                                            </div>
+                                            <div class="message-content">{message.message.clone()}</div>
+                                        </div>
+                                    }
+                                }).collect_view().into_any()
                             }
-                        })
-                    }}
-                </Suspense>
+                        }
+                        None => view! {
+                            <div class="loading">Loading messages...</div>
+                        }.into_any()
+                    }
+                }}
             </div>
-            
+
             <form on:submit=send_message class="chat-input-form">
                 <input
                     type="text"

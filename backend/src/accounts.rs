@@ -1,15 +1,15 @@
 //! Player profile and stats endpoints
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use uuid::Uuid;
 
-use automatafl_api_types::*;
 use crate::common::{AppError, AuthPlayer, ServerState};
 use crate::db;
+use automatafl_api_types::*;
 
 pub async fn get_player_profile(
     State(app_state): ServerState,
@@ -17,8 +17,14 @@ pub async fn get_player_profile(
 ) -> Result<Json<PlayerProfile>, AppError> {
     let player = db::get_player(&app_state.db, player_id)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?
-        .ok_or(AppError::NoSuchPlayer(player_id))?;
+        .map_err(|e| {
+            tracing::error!("Database error getting player {}: {}", player_id, e);
+            AppError::NoSuchPlayer(player_id)
+        })?
+        .ok_or_else(|| {
+            tracing::debug!("Player {} not found", player_id);
+            AppError::NoSuchPlayer(player_id)
+        })?;
 
     Ok(Json(PlayerProfile {
         id: player_id,
@@ -41,9 +47,20 @@ pub async fn update_player_profile(
         return Err(AppError::Forbidden);
     }
 
+    // Validate inputs
+    if let Some(ref bio) = req.bio {
+        crate::validation::validate_bio(bio)?;
+    }
+    if let Some(ref avatar_url) = req.avatar_url {
+        crate::validation::validate_avatar_url(avatar_url)?;
+    }
+
     db::update_player_profile(&app_state.db, player_id, req.bio, req.avatar_url)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?;
+        .map_err(|e| {
+            tracing::error!("Failed to update profile for player {}: {}", player_id, e);
+            AppError::NoSuchPlayer(player_id)
+        })?;
 
     Ok(StatusCode::OK)
 }
@@ -54,7 +71,10 @@ pub async fn get_player_stats(
 ) -> Result<Json<PlayerStats>, AppError> {
     let stats = db::get_player_stats(&app_state.db, player_id)
         .await
-        .map_err(|_| AppError::NoSuchPlayer(player_id))?
+        .map_err(|e| {
+            tracing::error!("Failed to get player stats for {}: {}", player_id, e);
+            AppError::NoSuchPlayer(player_id)
+        })?
         .unwrap_or(db::PlayerStatsRecord {
             player_id: player_id.to_string(),
             games_played: 0,

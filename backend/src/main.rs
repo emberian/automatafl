@@ -8,26 +8,28 @@ mod game;
 mod html;
 mod matchmaking;
 mod middleware;
+mod transactions;
+mod validation;
 
 use std::sync::Arc;
 
 use std::time::Duration;
 
 use axum::{
+    Json, Router,
     extract::{DefaultBodyLimit, Path, State, ws::WebSocketUpgrade},
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use tower_http::{
+    LatencyUnit,
     compression::CompressionLayer,
     cors::CorsLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
-    LatencyUnit,
 };
-use tracing_subscriber;
 use uuid::Uuid;
 
 use automatafl_api_types::HealthResponse;
@@ -40,13 +42,22 @@ const CARGO_PACKAGE_VERSION: Option<&str> = std::option_env!("CARGO_PACKAGE_VERS
 // Health Check
 // ============================================================================
 
-async fn health_check() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "healthy".to_string(),
-        api_version: "v1".to_string(),
-        cargo_package_version: CARGO_PACKAGE_VERSION.map(|s| s.to_string()),
-        timestamp: timestamp(),
-    })
+/// Health check endpoint
+/// Returns OK if the server and database are healthy
+async fn health_check(State(state): ServerState) -> Result<Json<HealthResponse>, StatusCode> {
+    // Check database connectivity by running a simple query
+    match state.db.health().await {
+        Ok(_) => Ok(Json(HealthResponse {
+            status: "healthy".to_string(),
+            api_version: "v1".to_string(),
+            cargo_package_version: CARGO_PACKAGE_VERSION.map(|s| s.to_string()),
+            timestamp: timestamp(),
+        })),
+        Err(e) => {
+            tracing::error!("Health check failed - database unhealthy: {}", e);
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
 }
 
 // ============================================================================
@@ -123,17 +134,25 @@ async fn track_metrics(
     let latency = start.elapsed().as_secs_f64();
     let status = response.status().as_u16().to_string();
 
-    metrics::counter!("http_requests_total", &[
-        ("method", method.to_string()),
-        ("path", path.clone()),
-        ("status", status.clone()),
-    ]).increment(1);
-    
-    metrics::histogram!("http_requests_duration_seconds", &[
-        ("method", method.to_string()),
-        ("path", path),
-        ("status", status),
-    ]).record(latency);
+    metrics::counter!(
+        "http_requests_total",
+        &[
+            ("method", method.to_string()),
+            ("path", path.clone()),
+            ("status", status.clone()),
+        ]
+    )
+    .increment(1);
+
+    metrics::histogram!(
+        "http_requests_duration_seconds",
+        &[
+            ("method", method.to_string()),
+            ("path", path),
+            ("status", status),
+        ]
+    )
+    .record(latency);
 
     response
 }
@@ -216,15 +235,33 @@ async fn server_main() {
         .route("/admin", get(html::html_admin_panel))
         .route("/admin/players", get(html::html_admin_players))
         .route("/admin/games", get(html::html_admin_games))
-        .route("/admin/games/:id/delete", post(html::html_admin_delete_game))
-        .route("/admin/games/:id/force-complete", post(html::html_admin_force_complete))
+        .route(
+            "/admin/games/:id/delete",
+            post(html::html_admin_delete_game),
+        )
+        .route(
+            "/admin/games/:id/force-complete",
+            post(html::html_admin_force_complete),
+        )
         .route("/admin/sessions", get(html::html_admin_sessions))
-        .route("/admin/sessions/:id/delete", post(html::html_admin_delete_session))
-        .route("/admin/sessions/cleanup", post(html::html_admin_cleanup_sessions))
+        .route(
+            "/admin/sessions/:id/delete",
+            post(html::html_admin_delete_session),
+        )
+        .route(
+            "/admin/sessions/cleanup",
+            post(html::html_admin_cleanup_sessions),
+        )
         .route("/admin/queue", get(html::html_admin_queue))
-        .route("/admin/queue/:id/remove", post(html::html_admin_remove_from_queue))
+        .route(
+            "/admin/queue/:id/remove",
+            post(html::html_admin_remove_from_queue),
+        )
         .route("/admin/events", get(html::html_admin_events))
-        .route("/admin/query", get(html::html_admin_query_page).post(html::html_admin_query_execute))
+        .route(
+            "/admin/query",
+            get(html::html_admin_query_page).post(html::html_admin_query_execute),
+        )
         // Health check (no auth required)
         .route("/api/health", get(health_check))
         // Auth endpoints
@@ -386,12 +423,14 @@ async fn server_main() {
 
     // Apply middleware layers (outer layers execute first)
     let app = app
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB max request body
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB max request body
         .layer(axum::middleware::from_fn(middleware::csrf_protection))
         .layer(axum::middleware::from_fn(middleware::validate_content_type))
         .layer(axum::middleware::from_fn(middleware::security_headers))
         .layer(axum::middleware::from_fn(middleware::track_slow_requests))
-        .layer(axum::middleware::from_fn(middleware::enhance_error_response))
+        .layer(axum::middleware::from_fn(
+            middleware::enhance_error_response,
+        ))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
@@ -403,15 +442,49 @@ async fn server_main() {
         )
         .layer(CompressionLayer::new())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        .layer(
-            CorsLayer::permissive() // TODO: Restrict in production
-        )
+        .layer({
+            use axum::http::{HeaderValue, Method};
+            use tower_http::cors::{AllowOrigin, Any};
+
+            // Configure CORS based on environment
+            let cors = if cfg!(debug_assertions) {
+                // Development: Allow localhost origins
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                        origin.as_bytes().starts_with(b"http://localhost:")
+                            || origin.as_bytes().starts_with(b"http://127.0.0.1:")
+                    }))
+                    .allow_methods([
+                        Method::GET,
+                        Method::POST,
+                        Method::PUT,
+                        Method::DELETE,
+                        Method::PATCH,
+                    ])
+                    .allow_headers(Any)
+                    .allow_credentials(true)
+            } else {
+                // Production: Restrict to specific origins from config
+                // For now, allow same-origin only in production
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::predicate(|_origin, _| false))
+                    .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                    .allow_credentials(true)
+            };
+            cors
+        })
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(PropagateRequestIdLayer::x_request_id())
         .with_state(app_state.clone());
 
     // Spawn background matchmaking task
     let matchmaking_handle = tokio::spawn(matchmaking::matchmaking_task(app_state.clone()));
+
+    // Spawn rate limiter cleanup task
+    let rate_limiter_cleanup = middleware::spawn_rate_limiter_cleanup();
+
+    // Spawn game channel cleanup task
+    let game_channel_cleanup = common::spawn_game_channel_cleanup(app_state.clone());
 
     let addr = config.bind_address;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -429,6 +502,8 @@ async fn server_main() {
 
     // Cleanup
     matchmaking_handle.abort();
+    rate_limiter_cleanup.abort();
+    game_channel_cleanup.abort();
     tracing::info!("Server shutdown complete");
 }
 

@@ -1,4 +1,7 @@
 // Utility functions for the webapp
+
+#![allow(dead_code)] // Utility methods are part of the public API
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -7,6 +10,8 @@ use wasm_bindgen::prelude::*;
 pub struct Debouncer {
     timeout_id: Rc<RefCell<Option<i32>>>,
     delay_ms: u32,
+    // Store the callback to prevent it from being dropped
+    _callback: Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
 }
 
 impl Debouncer {
@@ -14,6 +19,7 @@ impl Debouncer {
         Self {
             timeout_id: Rc::new(RefCell::new(None)),
             delay_ms,
+            _callback: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -30,11 +36,12 @@ impl Debouncer {
         // Set new timeout
         let window = web_sys::window().expect("window should exist");
         let timeout_id_clone = self.timeout_id.clone();
-        
-        let callback = Closure::once(Box::new(move || {
+
+        // Use Closure<dyn FnMut()> instead of Closure::once to keep it alive
+        let callback = Closure::wrap(Box::new(move || {
             f();
             *timeout_id_clone.borrow_mut() = None;
-        }) as Box<dyn FnOnce()>);
+        }) as Box<dyn FnMut()>);
 
         let id = window
             .set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -44,7 +51,20 @@ impl Debouncer {
             .expect("set_timeout should work");
 
         *self.timeout_id.borrow_mut() = Some(id);
-        callback.forget();
+
+        // Store the callback to keep it alive (replaces the old one, dropping it)
+        *self._callback.borrow_mut() = Some(callback);
+    }
+}
+
+impl Drop for Debouncer {
+    fn drop(&mut self) {
+        // Clear any pending timeout when the debouncer is dropped
+        if let Some(id) = self.timeout_id.borrow_mut().take() {
+            if let Some(window) = web_sys::window() {
+                window.clear_timeout_with_handle(id);
+            }
+        }
     }
 }
 
@@ -147,4 +167,3 @@ mod tests {
         assert_eq!(limiter.remaining(), 0);
     }
 }
-

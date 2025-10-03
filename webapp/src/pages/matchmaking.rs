@@ -1,62 +1,52 @@
-use crate::{api::ApiClient, state::AppState};
+use crate::helpers::create_api_client;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
 pub fn MatchmakingPage() -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
     let (player_count, set_player_count) = signal(2u8);
     let (use_column_rule, set_use_column_rule) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
-    
+
     // Poll matchmaking status
-    let api_base_url = app_state.api_base_url.clone();
     let (poll_trigger, set_poll_trigger) = signal(0u32);
-    
+
     let status_resource = LocalResource::new(move || {
         let _ = poll_trigger.get();
-        let api_base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(api_base_url);
+            let client = create_api_client();
             client.get_matchmaking_status().await
         }
     });
-    
+
     // Set up polling interval when in queue
     Effect::new(move |_| {
         if let Some(Ok(status)) = status_resource.get() {
             if status.in_queue {
                 set_timeout(
                     move || set_poll_trigger.update(|n| *n += 1),
-                    std::time::Duration::from_secs(2)
+                    std::time::Duration::from_secs(2),
                 );
             }
         }
     });
-    
+
     // Join matchmaking action
-    let api_base_url_for_join = app_state.api_base_url.clone();
     let join_action = Action::new_local(move |(pc, ucr): &(u8, bool)| {
         let pc = *pc;
         let ucr = *ucr;
-        let base_url = api_base_url_for_join.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.join_matchmaking(pc, ucr).await
         }
     });
-    
+
     // Leave matchmaking action
-    let api_base_url_for_leave = app_state.api_base_url.clone();
-    let leave_action = Action::new_local(move |_: &()| {
-        let base_url = api_base_url_for_leave.clone();
-        async move {
-            let client = ApiClient::new(base_url);
-            client.leave_matchmaking().await
-        }
+    let leave_action = Action::new_local(move |_: &()| async move {
+        let client = create_api_client();
+        client.leave_matchmaking().await
     });
-    
+
     // Handle join result
     Effect::new(move |_| {
         if let Some(result) = join_action.value().get() {
@@ -71,7 +61,7 @@ pub fn MatchmakingPage() -> impl IntoView {
             }
         }
     });
-    
+
     // Handle leave result
     Effect::new(move |_| {
         if let Some(result) = leave_action.value().get() {
@@ -86,11 +76,11 @@ pub fn MatchmakingPage() -> impl IntoView {
             }
         }
     });
-    
+
     let on_join = move |_| {
         join_action.dispatch((player_count.get(), use_column_rule.get()));
     };
-    
+
     let on_leave = move |_| {
         leave_action.dispatch(());
     };
@@ -100,11 +90,11 @@ pub fn MatchmakingPage() -> impl IntoView {
             <div class="page-header">
                 <h1>"Quick Match"</h1>
             </div>
-            
+
             {move || error_message.get().map(|msg| view! {
                 <div class="error-message">{msg}</div>
             })}
-            
+
             <Suspense fallback=move || view! {
                 <div class="loading-state">
                     <div class="spinner"></div>
@@ -120,7 +110,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                         <div class="matchmaking-join-form">
                                             <div class="card">
                                                 <h2>"Join Matchmaking Queue"</h2>
-                                                
+
                                                 <div class="form-group">
                                                     <label>"Number of Players"</label>
                                                     <div class="radio-group">
@@ -144,7 +134,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                                         </label>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <div class="form-group">
                                                     <label class="checkbox-option">
                                                         <input
@@ -155,8 +145,8 @@ pub fn MatchmakingPage() -> impl IntoView {
                                                         <span>"Use Column Rule"</span>
                                                     </label>
                                                 </div>
-                                                
-                                                <button 
+
+                                                <button
                                                     class="button button-primary button-large"
                                                     on:click=on_join
                                                     disabled=move || join_action.pending().get()
@@ -175,7 +165,7 @@ pub fn MatchmakingPage() -> impl IntoView {
                                                     <div class="spinner"></div>
                                                     <p>"Looking for players..."</p>
                                                 </div>
-                                                
+
                                                 <div class="queue-info">
                                                     {if let Some(queued_at) = status.queued_at {
                                                         view! {
@@ -196,8 +186,8 @@ pub fn MatchmakingPage() -> impl IntoView {
                                                         view! {}.into_any()
                                                     }}
                                                 </div>
-                                                
-                                                <button 
+
+                                                <button
                                                     class="button button-danger"
                                                     on:click=on_leave
                                                     disabled=move || leave_action.pending().get()

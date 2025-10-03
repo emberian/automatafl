@@ -1,24 +1,18 @@
 // Modal/Dialog system for confirmations and custom dialogs
 use leptos::prelude::*;
-use leptos::prelude::AnyView;
 use wasm_bindgen::JsCast;
 
 // Global modal state
 #[derive(Clone)]
 pub struct ModalContext {
     is_open: RwSignal<bool>,
-    content: RwSignal<Option<ModalContent>>,
-}
-
-#[derive(Clone)]
-pub struct ModalContent {
-    pub title: String,
-    pub body: AnyView,
-    pub on_confirm: Option<Callback<()>>,
-    pub on_cancel: Option<Callback<()>>,
-    pub confirm_text: String,
-    pub cancel_text: String,
-    pub variant: ModalVariant,
+    title: RwSignal<String>,
+    body: RwSignal<String>,
+    on_confirm: RwSignal<Option<Callback<()>>>,
+    on_cancel: RwSignal<Option<Callback<()>>>,
+    confirm_text: RwSignal<String>,
+    cancel_text: RwSignal<String>,
+    variant: RwSignal<ModalVariant>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -33,14 +27,20 @@ impl ModalContext {
     pub fn new() -> Self {
         Self {
             is_open: RwSignal::new(false),
-            content: RwSignal::new(None),
+            title: RwSignal::new(String::new()),
+            body: RwSignal::new(String::new()),
+            on_confirm: RwSignal::new(None),
+            on_cancel: RwSignal::new(None),
+            confirm_text: RwSignal::new("Confirm".to_string()),
+            cancel_text: RwSignal::new("Cancel".to_string()),
+            variant: RwSignal::new(ModalVariant::Default),
         }
     }
 
     pub fn show(
         &self,
         title: impl Into<String>,
-        body: AnyView,
+        body: impl Into<String>,
         on_confirm: impl Fn() + 'static + Send + Sync,
         on_cancel: Option<impl Fn() + 'static + Send + Sync>,
     ) {
@@ -58,24 +58,22 @@ impl ModalContext {
     pub fn show_with_options(
         &self,
         title: impl Into<String>,
-        body: AnyView,
+        body: impl Into<String>,
         on_confirm: impl Fn() + 'static + Send + Sync,
         on_cancel: Option<impl Fn() + 'static + Send + Sync>,
         confirm_text: impl Into<String>,
         cancel_text: impl Into<String>,
         variant: ModalVariant,
     ) {
-        let content = ModalContent {
-            title: title.into(),
-            body: body.clone(),
-            on_confirm: Some(Callback::new(move |_| on_confirm())),
-            on_cancel: on_cancel.map(|f| Callback::new(move |_| f())),
-            confirm_text: confirm_text.into(),
-            cancel_text: cancel_text.into(),
-            variant,
-        };
-
-        self.content.set(Some(content));
+        self.title.set(title.into());
+        self.body.set(body.into());
+        self.on_confirm
+            .set(Some(Callback::new(move |_| on_confirm())));
+        self.on_cancel
+            .set(on_cancel.map(|f| Callback::new(move |_| f())));
+        self.confirm_text.set(confirm_text.into());
+        self.cancel_text.set(cancel_text.into());
+        self.variant.set(variant);
         self.is_open.set(true);
     }
 
@@ -85,8 +83,7 @@ impl ModalContext {
         message: impl Into<String>,
         on_confirm: impl Fn() + 'static + Send + Sync,
     ) {
-        let body = view! { <p>{message.into()}</p> }.into_any();
-        self.show(title, body, on_confirm, None::<fn()>);
+        self.show(title, message, on_confirm, None::<fn()>);
     }
 
     pub fn confirm_danger(
@@ -95,10 +92,9 @@ impl ModalContext {
         message: impl Into<String>,
         on_confirm: impl Fn() + 'static + Send + Sync,
     ) {
-        let body = view! { <p>{message.into()}</p> };
         self.show_with_options(
             title,
-            body,
+            message,
             on_confirm,
             None::<fn()>,
             "Delete",
@@ -108,28 +104,30 @@ impl ModalContext {
     }
 
     pub fn alert(&self, title: impl Into<String>, message: impl Into<String>) {
-        let body = view! { <p>{message.into()}</p> }.into_any();
-        let content = ModalContent {
-            title: title.into(),
-            body: body,
-            on_confirm: Some(Callback::new(move |_| {})),
-            on_cancel: None,
-            confirm_text: "OK".to_string(),
-            cancel_text: "".to_string(),
-            variant: ModalVariant::Default,
-        };
-
-        self.content.set(Some(content));
+        self.title.set(title.into());
+        self.body.set(message.into());
+        self.on_confirm.set(Some(Callback::new(move |_| {})));
+        self.on_cancel.set(None);
+        self.confirm_text.set("OK".to_string());
+        self.cancel_text.set("".to_string());
+        self.variant.set(ModalVariant::Default);
         self.is_open.set(true);
     }
 
     pub fn close(&self) {
         self.is_open.set(false);
         // Clear content after animation
-        let content = self.content.clone();
+        let title = self.title.clone();
+        let body = self.body.clone();
+        let on_confirm = self.on_confirm.clone();
+        let on_cancel = self.on_cancel.clone();
         gloo_timers::callback::Timeout::new(300, move || {
-            content.set(None);
-        }).forget();
+            title.set(String::new());
+            body.set(String::new());
+            on_confirm.set(None);
+            on_cancel.set(None);
+        })
+        .forget();
     }
 }
 
@@ -138,32 +136,38 @@ impl ModalContext {
 pub fn ModalContainer() -> impl IntoView {
     let modal_ctx = use_context::<ModalContext>().expect("ModalContext should be provided");
 
-    // Handle Escape key
+    // Handle Escape key with proper cleanup
     let modal_ctx_clone = modal_ctx.clone();
     Effect::new(move |_| {
         let modal_ctx = modal_ctx_clone.clone();
         if !modal_ctx.is_open.get() {
-            return;
+            return None; // No cleanup needed when modal is closed
         }
 
         let window = web_sys::window().expect("window should exist");
         let document = window.document().expect("document should exist");
 
+        use std::rc::Rc;
         use wasm_bindgen::prelude::*;
 
-        let callback = Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
+        let modal_ctx_for_callback = modal_ctx.clone();
+        let callback = Rc::new(Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
             if e.key() == "Escape" {
-                modal_ctx.close();
+                modal_ctx_for_callback.close();
             }
-        }) as Box<dyn Fn(_)>);
+        }) as Box<dyn Fn(_)>));
 
-        let _ = document.add_event_listener_with_callback(
-            "keydown",
-            callback.as_ref().unchecked_ref(),
-        );
+        let _ = document
+            .add_event_listener_with_callback("keydown", (*callback).as_ref().unchecked_ref());
 
-        // Cleanup
-        callback.forget();
+        // Return cleanup function that removes the event listener
+        let callback_for_cleanup = callback.clone();
+        Some(move || {
+            let _ = document.remove_event_listener_with_callback(
+                "keydown",
+                (*callback_for_cleanup).as_ref().unchecked_ref(),
+            );
+        })
     });
 
     view! {
@@ -177,88 +181,96 @@ pub fn ModalContainer() -> impl IntoView {
 fn ModalDialog() -> impl IntoView {
     let modal_ctx = use_context::<ModalContext>().expect("ModalContext should be provided");
 
+    let modal_ctx_for_backdrop = modal_ctx.clone();
+    let modal_ctx_for_class = modal_ctx.clone();
+    let modal_ctx_for_title = modal_ctx.clone();
+    let modal_ctx_for_body = modal_ctx.clone();
+    let modal_ctx_for_button_class = modal_ctx.clone();
+    let modal_ctx_for_confirm_text = modal_ctx.clone();
+    let modal_ctx_for_has_cancel = modal_ctx.clone();
+    let modal_ctx_close = modal_ctx.clone();
+    let modal_ctx_confirm = modal_ctx.clone();
+    let modal_ctx_cancel = modal_ctx.clone();
+
     let handle_backdrop_click = move |e: leptos::ev::MouseEvent| {
         // Only close if clicking directly on the backdrop, not its children
         if let Some(target) = e.target() {
             if let Some(element) = target.dyn_ref::<web_sys::HtmlElement>() {
                 if element.class_list().contains("modal-backdrop") {
-                    modal_ctx.close();
+                    modal_ctx_for_backdrop.close();
                 }
             }
         }
     };
 
-    let handle_confirm = move |_| {
-        if let Some(content) = modal_ctx.content.get() {
-            if let Some(on_confirm) = content.on_confirm {
-                on_confirm.run(());
-            }
+    let handle_confirm = move |_: leptos::ev::MouseEvent| {
+        if let Some(cb) = modal_ctx_confirm.on_confirm.get() {
+            cb.run(());
         }
-        modal_ctx.close();
+        modal_ctx_confirm.close();
     };
 
-    let handle_cancel = move |_| {
-        if let Some(content) = modal_ctx.content.get() {
-            if let Some(on_cancel) = content.on_cancel {
-                on_cancel.run(());
-            }
-        }
-        modal_ctx.close();
-    };
+    let has_cancel = Signal::derive(move || modal_ctx_for_has_cancel.on_cancel.get().is_some());
 
     view! {
         <div class="modal-backdrop" on:click=handle_backdrop_click>
-            {move || {
-                modal_ctx.content.get().map(|content| {
-                    let variant_class = match content.variant {
-                        ModalVariant::Default => "modal-default",
-                        ModalVariant::Danger => "modal-danger",
-                        ModalVariant::Warning => "modal-warning",
-                        ModalVariant::Success => "modal-success",
-                    };
-
-                    let confirm_button_class = match content.variant {
-                        ModalVariant::Danger => "button-danger",
-                        ModalVariant::Warning => "button-warning",
-                        ModalVariant::Success => "button-success",
-                        _ => "button-primary",
-                    };
-
-                    view! {
-                        <div class=format!("modal-dialog {}", variant_class)>
-                            <div class="modal-header">
-                                <h2 class="modal-title">{content.title.clone()}</h2>
-                                <button
-                                    class="modal-close"
-                                    on:click=move |_| modal_ctx.close()
-                                    aria-label="Close"
-                                >
-                                    "×"
-                                </button>
-                            </div>
-                            <div class="modal-body">
-                                {content.body.clone()}
-                            </div>
-                            <div class="modal-footer">
-                                <Show when=move || content.on_cancel.is_some()>
-                                    <button
-                                        class="button button-secondary"
-                                        on:click=handle_cancel
-                                    >
-                                        {content.cancel_text.clone()}
-                                    </button>
-                                </Show>
-                                <button
-                                    class=format!("button {}", confirm_button_class)
-                                    on:click=handle_confirm
-                                >
-                                    {content.confirm_text.clone()}
-                                </button>
-                            </div>
-                        </div>
-                    }
-                })
-            }}
+            <div class=move || {
+                let variant = modal_ctx_for_class.variant.get();
+                let variant_class = match variant {
+                    ModalVariant::Default => "modal-default",
+                    ModalVariant::Danger => "modal-danger",
+                    ModalVariant::Warning => "modal-warning",
+                    ModalVariant::Success => "modal-success",
+                };
+                format!("modal-dialog {}", variant_class)
+            }>
+                <div class="modal-header">
+                    <h2 class="modal-title">{move || modal_ctx_for_title.title.get()}</h2>
+                    <button
+                        class="modal-close"
+                        on:click=move |_| modal_ctx_close.close()
+                        aria-label="Close"
+                    >
+                        "×"
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p>{move || modal_ctx_for_body.body.get()}</p>
+                </div>
+                <div class="modal-footer">
+                    {move || {
+                        let modal_ctx_cancel_btn = modal_ctx_cancel.clone();
+                        has_cancel.get().then(|| view! {
+                            <button
+                                class="button button-secondary"
+                                on:click=move |_| {
+                                    if let Some(cb) = modal_ctx_cancel_btn.on_cancel.get() {
+                                        cb.run(());
+                                    }
+                                    modal_ctx_cancel_btn.close();
+                                }
+                            >
+                                {move || modal_ctx_cancel_btn.cancel_text.get()}
+                            </button>
+                        })
+                    }}
+                    <button
+                        class=move || {
+                            let variant = modal_ctx_for_button_class.variant.get();
+                            let confirm_button_class = match variant {
+                                ModalVariant::Danger => "button-danger",
+                                ModalVariant::Warning => "button-warning",
+                                ModalVariant::Success => "button-success",
+                                _ => "button-primary",
+                            };
+                            format!("button {}", confirm_button_class)
+                        }
+                        on:click=handle_confirm
+                    >
+                        {move || modal_ctx_for_confirm_text.confirm_text.get()}
+                    </button>
+                </div>
+            </div>
         </div>
     }
 }
@@ -267,4 +279,3 @@ fn ModalDialog() -> impl IntoView {
 pub fn use_modal() -> ModalContext {
     use_context::<ModalContext>().expect("ModalContext should be provided")
 }
-

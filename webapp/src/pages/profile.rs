@@ -1,4 +1,4 @@
-use crate::{api::ApiClient, state::AppState};
+use crate::{helpers::create_api_client, state::AppState};
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_params_map};
 use uuid::Uuid;
@@ -7,47 +7,49 @@ use uuid::Uuid;
 pub fn UserProfilePage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let params = use_params_map();
-    
+
     let user_id = Memo::new(move |_| {
-        params.get()
+        params
+            .get()
             .get("id")
             .and_then(|id| Uuid::parse_str(&id).ok())
     });
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let profile_resource = LocalResource::new(move || {
         let uid = user_id.get();
-        let api_base_url = api_base_url.clone();
         async move {
             match uid {
                 Some(uid) => {
-                    let client = ApiClient::new(api_base_url);
+                    let client = create_api_client();
                     client.get_player_profile(uid).await
                 }
-                None => Err(automatafl_backend_client::ClientError::Api("Invalid user ID".to_string()))
+                None => Err(automatafl_backend_client::ClientError::Api(
+                    "Invalid user ID".to_string(),
+                )),
             }
         }
     });
-    
-    let api_base_url_for_stats = app_state.api_base_url.clone();
+
     let stats_resource = LocalResource::new(move || {
         let uid = user_id.get();
-        let api_base_url = api_base_url_for_stats.clone();
         async move {
             match uid {
                 Some(uid) => {
-                    let client = ApiClient::new(api_base_url);
+                    let client = create_api_client();
                     client.get_player_stats(uid).await
                 }
-                None => Err(automatafl_backend_client::ClientError::Api("Invalid user ID".to_string()))
+                None => Err(automatafl_backend_client::ClientError::Api(
+                    "Invalid user ID".to_string(),
+                )),
             }
         }
     });
-    
+
     let is_own_profile = move || {
-        user_id.get().and_then(|uid| {
-            app_state.current_player_id.get().map(|pid| uid == pid)
-        }).unwrap_or(false)
+        user_id
+            .get()
+            .and_then(|uid| app_state.current_player_id.get().map(|pid| uid == pid))
+            .unwrap_or(false)
     };
 
     view! {
@@ -77,7 +79,7 @@ pub fn UserProfilePage() -> impl IntoView {
                                                 }.into_any()
                                             }}
                                         </div>
-                                        
+
                                         <div class="profile-info">
                                             <h1>{profile.displayname.clone()}</h1>
                                             <div class="profile-elo">
@@ -100,7 +102,7 @@ pub fn UserProfilePage() -> impl IntoView {
                                             </p>
                                         </div>
                                     </div>
-                                    
+
                                     {if is_own_profile() {
                                         let profile_id = profile.id;
                                         view! {
@@ -109,7 +111,7 @@ pub fn UserProfilePage() -> impl IntoView {
                                     } else {
                                         view! {}.into_any()
                                     }}
-                                    
+
                                     <Suspense fallback=move || view! {
                                         <div class="loading">Loading stats...</div>
                                     }>
@@ -182,7 +184,8 @@ pub fn UserProfilePage() -> impl IntoView {
 pub fn UserGamesPage() -> impl IntoView {
     let params = use_params_map();
     let user_id = move || {
-        params.get()
+        params
+            .get()
             .get("id")
             .and_then(|id| Uuid::parse_str(&id).ok())
     };
@@ -195,13 +198,13 @@ pub fn UserGamesPage() -> impl IntoView {
                     <p class="subtitle">"Player ID: " {id.to_string()}</p>
                 })}
             </div>
-            
+
             <div class="stub-notice">
                 <div class="stub-content">
                     <h2>"🚧 Coming Soon"</h2>
                     <p>"Player game history is not yet implemented in the backend."</p>
                     <p>"This feature will show all past and ongoing games for a player."</p>
-                    
+
                     <div class="stub-actions">
                         <A href="/games" attr:class="button button-primary">
                             "View All Games"
@@ -223,29 +226,25 @@ fn ProfileEditSection(
     initial_bio: Option<String>,
     initial_avatar: Option<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
     let (is_editing, set_is_editing) = signal(false);
     let (bio, set_bio) = signal(initial_bio.clone().unwrap_or_default());
     let (avatar_url, set_avatar_url) = signal(initial_avatar.clone().unwrap_or_default());
     let (status, set_status) = signal(String::new());
-    
+
     // Store initial values as signals so they're Copy
     let (initial_bio_signal, _) = signal(initial_bio.clone().unwrap_or_default());
     let (initial_avatar_signal, _) = signal(initial_avatar.clone().unwrap_or_default());
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let update_action = Action::new_local(move |(pid, b, a): &(Uuid, String, String)| {
         let pid = *pid;
         let bio = if b.is_empty() { None } else { Some(b.clone()) };
         let avatar = if a.is_empty() { None } else { Some(a.clone()) };
-        let base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.update_player_profile(pid, bio, avatar).await
         }
     });
-    
+
     let _ = Effect::new(move |_| {
         if let Some(result) = update_action.value().get() {
             match result {
@@ -259,7 +258,7 @@ fn ProfileEditSection(
                                 let _ = window.location().reload();
                             }
                         },
-                        std::time::Duration::from_secs(1)
+                        std::time::Duration::from_secs(1),
                     );
                 }
                 Err(e) => {
@@ -268,7 +267,7 @@ fn ProfileEditSection(
             }
         }
     });
-    
+
     view! {
         <div class="profile-edit-section">
             <Show
@@ -286,7 +285,7 @@ fn ProfileEditSection(
             >
                 <div class="edit-form">
                     <h3>"Edit Profile"</h3>
-                    
+
                     <div class="form-group">
                         <label for="bio">"Bio"</label>
                         <textarea
@@ -298,7 +297,7 @@ fn ProfileEditSection(
                             prop:value=bio
                         />
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="avatar_url">"Avatar URL"</label>
                         <input
@@ -311,7 +310,7 @@ fn ProfileEditSection(
                         />
                         <small class="form-hint">"Link to your avatar image"</small>
                     </div>
-                    
+
                     {move || {
                         let s = status.get();
                         if !s.is_empty() {
@@ -322,7 +321,7 @@ fn ProfileEditSection(
                             view! {}.into_any()
                         }
                     }}
-                    
+
                     <div class="form-actions">
                         <button
                             class="button button-primary"

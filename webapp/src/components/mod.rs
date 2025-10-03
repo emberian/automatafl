@@ -17,7 +17,7 @@ pub use chat::ChatPanel;
 pub use common::*;
 pub use game_history::GameHistory;
 pub use game_info::GameInfo;
-pub use keyboard::{KeyboardContext, KeyboardShortcutsHelp};
+pub use keyboard::{KeyboardContext, KeyboardShortcutsHelp, use_keyboard_shortcut};
 pub use modal::{ModalContainer, ModalContext, use_modal};
 pub use move_controls::MoveControls;
 pub use round_controls::RoundControls;

@@ -1,5 +1,7 @@
 // Common UI components used across the webapp
 
+#![allow(dead_code)] // Many props are part of the component API but not always used
+
 use leptos::prelude::*;
 
 /// Standard loading indicator
@@ -19,9 +21,7 @@ pub fn LoadingSpinner(#[prop(optional)] message: Option<&'static str>) -> impl I
 
 /// Skeleton loader for list items
 #[component]
-pub fn SkeletonList(
-    #[prop(default = 3)] count: usize,
-) -> impl IntoView {
+pub fn SkeletonList(#[prop(default = 3)] count: usize) -> impl IntoView {
     view! {
         <div class="skeleton-list">
             {(0..count).map(|_| {
@@ -107,7 +107,7 @@ pub fn ErrorDisplay(
             <p class="error-message">{message}</p>
             {if let Some(retry_callback) = retry {
                 view! {
-                    <button 
+                    <button
                         class="button button-primary"
                         on:click=move |_| retry_callback.run(())
                     >
@@ -136,7 +136,7 @@ pub fn EmptyState(
             <p>{message}</p>
             {if let Some((label, callback)) = action {
                 view! {
-                    <button 
+                    <button
                         class="button button-primary"
                         on:click=move |_| callback.run(())
                     >
@@ -152,10 +152,7 @@ pub fn EmptyState(
 
 /// Status badge component
 #[component]
-pub fn StatusBadge(
-    status: &'static str,
-    variant: StatusVariant,
-) -> impl IntoView {
+pub fn StatusBadge(status: &'static str, variant: StatusVariant) -> impl IntoView {
     let class = match variant {
         StatusVariant::Success => "status-badge status-success",
         StatusVariant::Warning => "status-badge status-warning",
@@ -163,7 +160,7 @@ pub fn StatusBadge(
         StatusVariant::Info => "status-badge status-info",
         StatusVariant::Neutral => "status-badge status-neutral",
     };
-    
+
     view! {
         <span class=class>{status}</span>
     }
@@ -190,7 +187,7 @@ pub fn ProgressBar(
     } else {
         0.0
     };
-    
+
     view! {
         <div class="progress-bar-component">
             {if let Some(label_text) = label {
@@ -201,7 +198,7 @@ pub fn ProgressBar(
                 view! {}.into_any()
             }}
             <div class="progress-bar-container">
-                <div 
+                <div
                     class="progress-bar-fill"
                     style=format!("width: {}%", percentage)
                 />
@@ -220,33 +217,60 @@ pub fn confirm_action(message: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Connection status indicator
+/// Connection status indicator (shows active game's connection status)
 #[component]
 pub fn ConnectionStatus() -> impl IntoView {
     use crate::state::AppState;
-    
+
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
+
     view! {
         <div class="connection-status">
             {move || {
-                let connected = app_state.websocket_connected.get();
-                if connected {
-                    view! {
-                        <div class="status-indicator status-connected" title="Connected to server">
-                            <span class="status-dot"></span>
-                            <span class="status-text">"Live"</span>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! {
-                        <div class="status-indicator status-disconnected" title="Reconnecting...">
-                            <span class="status-dot pulsing"></span>
-                            <span class="status-text">"Reconnecting..."</span>
-                        </div>
-                    }.into_any()
-                }
+                // Show connection status for the active game, if any
+                let active_game_id = app_state.active_game_id.get();
+                let connected = active_game_id
+                    .and_then(|game_id| app_state.get_websocket_connected_signal(game_id))
+                    .map(|sig| sig.get())
+                    .unwrap_or(false);
+
+                // Only show if there's an active game
+                active_game_id.map(|_| {
+                    if connected {
+                        view! {
+                            <div class="status-indicator status-connected" title="Connected to server">
+                                <span class="status-dot"></span>
+                                <span class="status-text">"Live"</span>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="status-indicator status-disconnected" title="Reconnecting...">
+                                <span class="status-dot pulsing"></span>
+                                <span class="status-text">"Reconnecting..."</span>
+                            </div>
+                        }.into_any()
+                    }
+                })
             }}
+        </div>
+    }
+}
+
+/// Simple error display component with retry
+#[component]
+pub fn ErrorWithRetry(message: String, on_retry: Callback<()>) -> impl IntoView {
+    view! {
+        <div class="error-state">
+            <div class="error-icon">"⚠️"</div>
+            <h3>"Something went wrong"</h3>
+            <p class="error-message">{message}</p>
+            <button
+                class="button button-primary"
+                on:click=move |_| on_retry.run(())
+            >
+                "Retry"
+            </button>
         </div>
     }
 }
@@ -255,43 +279,37 @@ pub fn ConnectionStatus() -> impl IntoView {
 #[component]
 pub fn NetworkStatus() -> impl IntoView {
     let (is_online, set_is_online) = signal(true);
-    
+
     Effect::new(move |_| {
-        let window = web_sys::window().expect("window should exist");
-        
-        // Check initial online status
-        // Note: navigator() method might need web-sys feature flag
-        // For now, assume online
-        set_is_online.set(true);
-        
-        // Listen for online/offline events
-        use wasm_bindgen::prelude::*;
         use wasm_bindgen::JsCast;
-        
+        use wasm_bindgen::prelude::*;
+
+        // Check initial online status using document.hasFocus or a simple flag
+        // Note: navigator.onLine is not available in all web_sys versions
+        // For now, assume online by default and rely on online/offline events
+
+        let window = web_sys::window().expect("window should exist");
+
         let online_callback = Closure::wrap(Box::new(move || {
             set_is_online.set(true);
             web_sys::console::log_1(&"📡 Network connection restored".into());
         }) as Box<dyn Fn()>);
-        
+
         let offline_callback = Closure::wrap(Box::new(move || {
             set_is_online.set(false);
             web_sys::console::warn_1(&"📡 Network connection lost".into());
         }) as Box<dyn Fn()>);
-        
-        let _ = window.add_event_listener_with_callback(
-            "online",
-            online_callback.as_ref().unchecked_ref()
-        );
-        let _ = window.add_event_listener_with_callback(
-            "offline",
-            offline_callback.as_ref().unchecked_ref()
-        );
-        
+
+        let _ = window
+            .add_event_listener_with_callback("online", online_callback.as_ref().unchecked_ref());
+        let _ = window
+            .add_event_listener_with_callback("offline", offline_callback.as_ref().unchecked_ref());
+
         // Leak closures to keep them alive
         online_callback.forget();
         offline_callback.forget();
     });
-    
+
     view! {
         <Show when=move || !is_online.get()>
             <div class="network-status-banner">
@@ -303,4 +321,3 @@ pub fn NetworkStatus() -> impl IntoView {
         </Show>
     }
 }
-

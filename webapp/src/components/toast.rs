@@ -116,12 +116,13 @@ fn ToastItem(toast: Toast) -> impl IntoView {
     let id = toast.id;
 
     let (is_visible, set_is_visible) = signal(false);
-    
+
     // Trigger entrance animation
     Effect::new(move |_| {
         gloo_timers::callback::Timeout::new(10, move || {
             set_is_visible.set(true);
-        }).forget();
+        })
+        .forget();
     });
 
     let variant_class = match toast.variant {
@@ -163,4 +164,3 @@ fn ToastItem(toast: Toast) -> impl IntoView {
 pub fn use_toast() -> ToastContext {
     use_context::<ToastContext>().expect("ToastContext should be provided")
 }
-

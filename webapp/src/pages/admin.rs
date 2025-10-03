@@ -5,10 +5,10 @@ use leptos_router::components::A;
 #[component]
 pub fn AdminPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
+
     // Check if user is authenticated (basic check)
     let is_authenticated = app_state.is_authenticated();
-    
+
     view! {
         <div class="admin-page">
             <Show
@@ -28,4 +28,3 @@ pub fn AdminPage() -> impl IntoView {
         </div>
     }
 }
-

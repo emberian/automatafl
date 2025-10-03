@@ -1,15 +1,15 @@
 //! Admin-only endpoints for managing players and games
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use uuid::Uuid;
 
-use automatafl_api_types::*;
-use crate::common::{AppError, AdminPlayer, ServerState};
+use crate::common::{AdminPlayer, AppError, ServerState};
 use crate::db;
+use automatafl_api_types::*;
 
 // ============================================================================
 // Player Management
@@ -89,7 +89,7 @@ pub async fn admin_update_player(
 ) -> Result<StatusCode, AppError> {
     // Build update JSON
     let mut updates = serde_json::json!({});
-    
+
     if let Some(displayname) = req.displayname {
         updates["displayname"] = serde_json::json!(displayname);
     }
@@ -107,7 +107,9 @@ pub async fn admin_update_player(
     }
 
     // Apply updates using SurrealDB's merge functionality
-    let _: Option<db::PlayerRecord> = app_state.db.update(("players", player_id.to_string()))
+    let _: Option<db::PlayerRecord> = app_state
+        .db
+        .update(("players", player_id.to_string()))
         .merge(updates)
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
@@ -121,19 +123,25 @@ pub async fn admin_delete_player(
     Path(player_id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     // Delete player sessions
-    app_state.db.query("DELETE sessions WHERE player_id = $player_id")
+    app_state
+        .db
+        .query("DELETE sessions WHERE player_id = $player_id")
         .bind(("player_id", player_id.to_string()))
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
 
     // Delete player from game_players
-    app_state.db.query("DELETE game_players WHERE player_id = $player_id")
+    app_state
+        .db
+        .query("DELETE game_players WHERE player_id = $player_id")
         .bind(("player_id", player_id.to_string()))
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
 
     // Delete player stats
-    app_state.db.delete::<Option<db::PlayerStatsRecord>>(("player_stats", player_id.to_string()))
+    app_state
+        .db
+        .delete::<Option<db::PlayerStatsRecord>>(("player_stats", player_id.to_string()))
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
 
@@ -141,7 +149,9 @@ pub async fn admin_delete_player(
     let _ = db::leave_matchmaking_queue(&app_state.db, player_id).await;
 
     // Delete player record
-    app_state.db.delete::<Option<db::PlayerRecord>>(("players", player_id.to_string()))
+    app_state
+        .db
+        .delete::<Option<db::PlayerRecord>>(("players", player_id.to_string()))
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
 
@@ -215,7 +225,7 @@ pub async fn admin_force_complete_round(
         Ok(_results) => {
             if let Some(winner) = game_core.winner {
                 lifecycle = GameLifecycle::Finished;
-                
+
                 // Get game creation time for playtime calculation
                 if let Ok(Some(game_record)) = db::get_game(&app_state.db, game_uuid).await {
                     // Update player stats and ELO ratings
@@ -224,14 +234,19 @@ pub async fn admin_force_complete_round(
                         game_uuid,
                         winner,
                         game_record.created_at,
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(elo_changes) if !elo_changes.is_empty() => {
                             // Broadcast ELO changes
                             let _ = crate::common::broadcast_event(
                                 &app_state,
                                 game_uuid,
-                                automatafl_api_types::GameEventData::EloUpdate { changes: elo_changes },
-                            ).await;
+                                automatafl_api_types::GameEventData::EloUpdate {
+                                    changes: elo_changes,
+                                },
+                            )
+                            .await;
                         }
                         Err(e) => {
                             tracing::error!("Failed to update game completion stats: {}", e);
@@ -239,6 +254,13 @@ pub async fn admin_force_complete_round(
                         _ => {}
                     }
                 }
+
+                // Clean up game channel after forced completion
+                app_state.game_channels.remove(&game_uuid);
+                tracing::info!(
+                    "Admin forced completion - cleaned up game channel: {}",
+                    game_uuid
+                );
             }
 
             // Save updated state
@@ -299,7 +321,9 @@ pub async fn admin_list_sessions(
     _admin: AdminPlayer,
     State(app_state): ServerState,
 ) -> Result<Json<Vec<AdminSessionInfo>>, AppError> {
-    let sessions: Vec<db::SessionRecord> = app_state.db.select("sessions")
+    let sessions: Vec<db::SessionRecord> = app_state
+        .db
+        .select("sessions")
         .await
         .map_err(|_| AppError::Unauthorized)?;
 
@@ -396,7 +420,9 @@ pub async fn admin_delete_chat_message(
     Path((game_uuid, timestamp)): Path<(Uuid, u64)>,
 ) -> Result<StatusCode, AppError> {
     let record_id = format!("{}:{}", game_uuid, timestamp);
-    app_state.db.delete::<Option<db::ChatMessageRecord>>(("chat_messages", record_id))
+    app_state
+        .db
+        .delete::<Option<db::ChatMessageRecord>>(("chat_messages", record_id))
         .await
         .map_err(|_| AppError::NoSuchGame(game_uuid))?;
 
@@ -425,7 +451,9 @@ pub async fn admin_delete_snapshot(
     Path((game_uuid, index)): Path<(Uuid, usize)>,
 ) -> Result<StatusCode, AppError> {
     let record_id = format!("{}:{}", game_uuid, index);
-    app_state.db.delete::<Option<db::SnapshotRecord>>(("snapshots", record_id))
+    app_state
+        .db
+        .delete::<Option<db::SnapshotRecord>>(("snapshots", record_id))
         .await
         .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?;
 
@@ -457,19 +485,19 @@ pub async fn admin_list_matchmaking_queue(
     let mut queue_info = Vec::new();
 
     for entry in queue {
-        if let Ok(player_id) = Uuid::parse_str(&entry.player_id) {
-            if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
-                let prefs: serde_json::Value = serde_json::from_str(&entry.game_preferences)
-                    .unwrap_or(serde_json::json!({}));
+        if let Ok(player_id) = Uuid::parse_str(&entry.player_id)
+            && let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await
+        {
+            let prefs: serde_json::Value =
+                serde_json::from_str(&entry.game_preferences).unwrap_or(serde_json::json!({}));
 
-                queue_info.push(AdminMatchmakingInfo {
-                    player_id,
-                    player_displayname: player.displayname,
-                    queued_at: entry.queued_at,
-                    wait_time_seconds: now.saturating_sub(entry.queued_at),
-                    game_preferences: prefs,
-                });
-            }
+            queue_info.push(AdminMatchmakingInfo {
+                player_id,
+                player_displayname: player.displayname,
+                queued_at: entry.queued_at,
+                wait_time_seconds: now.saturating_sub(entry.queued_at),
+                game_preferences: prefs,
+            });
         }
     }
 
@@ -524,7 +552,7 @@ pub async fn admin_update_player_stats(
     Json(req): Json<AdminUpdateStatsRequest>,
 ) -> Result<StatusCode, AppError> {
     let mut updates = serde_json::json!({});
-    
+
     if let Some(games_played) = req.games_played {
         updates["games_played"] = serde_json::json!(games_played);
     }
@@ -535,7 +563,9 @@ pub async fn admin_update_player_stats(
         updates["total_playtime"] = serde_json::json!(total_playtime);
     }
 
-    let _: Option<db::PlayerStatsRecord> = app_state.db.update(("player_stats", player_id.to_string()))
+    let _: Option<db::PlayerStatsRecord> = app_state
+        .db
+        .update(("player_stats", player_id.to_string()))
         .merge(updates)
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?;
@@ -564,29 +594,34 @@ pub async fn admin_get_database_stats(
 ) -> Result<Json<DatabaseStats>, AppError> {
     let players: Vec<db::PlayerRecord> = app_state.db.select("players").await.unwrap_or_default();
     let games: Vec<db::GameRecord> = app_state.db.select("games").await.unwrap_or_default();
-    let sessions: Vec<db::SessionRecord> = app_state.db.select("sessions").await.unwrap_or_default();
-    let queue: Vec<db::MatchmakingQueueRecord> = app_state.db.select("matchmaking_queue").await.unwrap_or_default();
-    
+    let sessions: Vec<db::SessionRecord> =
+        app_state.db.select("sessions").await.unwrap_or_default();
+    let queue: Vec<db::MatchmakingQueueRecord> = app_state
+        .db
+        .select("matchmaking_queue")
+        .await
+        .unwrap_or_default();
+
     let now = crate::common::timestamp();
     let active_sessions = sessions.iter().filter(|s| s.expires_at > now).count();
 
     // Count chat messages across all games
     let mut total_chat_messages = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id) {
-            if let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await {
-                total_chat_messages += messages.len();
-            }
+        if let Ok(game_id) = Uuid::parse_str(&game.id)
+            && let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await
+        {
+            total_chat_messages += messages.len();
         }
     }
 
     // Count snapshots across all games
     let mut total_snapshots = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id) {
-            if let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await {
-                total_snapshots += snapshots.len();
-            }
+        if let Ok(game_id) = Uuid::parse_str(&game.id)
+            && let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await
+        {
+            total_snapshots += snapshots.len();
         }
     }
 

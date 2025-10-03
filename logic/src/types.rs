@@ -1,7 +1,7 @@
 use crate::*;
 
-use serde::{Serialize, Deserialize};
 use displaydoc::Display;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 /// "x, y {}"

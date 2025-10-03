@@ -1,5 +1,5 @@
 // RoundControls component - manual round completion and game flow controls
-use crate::{api::ApiClient, state::AppState};
+use crate::{helpers::create_api_client, state::AppState};
 use automatafl_api_types::GameStateResponse;
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -7,24 +7,22 @@ use uuid::Uuid;
 #[component]
 pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
+
     let (status, set_status) = signal(String::new());
-    
+
     // Check if current player can control rounds (admin or player in game)
     let current_player_id = app_state.current_player_id.get();
     let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
     let is_player = my_pid.is_some();
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let complete_round_action = Action::new_local(move |gid: &Uuid| {
         let gid = *gid;
-        let base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.complete_round(gid).await
         }
     });
-    
+
     Effect::new(move |_| {
         if let Some(result) = complete_round_action.value().get() {
             match result {
@@ -37,26 +35,29 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
             }
         }
     });
-    
+
     // Check game state for round completion readiness
     let pending_moves_count = game_state.game.pending_moves.len();
     let total_players = game_state.player_ids.len();
     let all_moves_submitted = pending_moves_count == total_players;
-    
+
     // Check if current player has submitted a move
     let my_move = my_pid.and_then(|pid| {
-        game_state.game.pending_moves.iter()
+        game_state
+            .game
+            .pending_moves
+            .iter()
             .find(|mv| mv.who == pid)
             .cloned()
     });
-    
+
     view! {
         <div class="round-controls">
             <h3>"Round " {format!("{:?}", game_state.game.round)}</h3>
-            
+
             <div class="round-progress">
                 <div class="progress-bar-container">
-                    <div 
+                    <div
                         class="progress-bar-fill"
                         style=format!("width: {}%", (pending_moves_count as f32 / total_players as f32 * 100.0))
                     />
@@ -65,7 +66,7 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
                     {pending_moves_count}" / "{total_players}" moves submitted"
                 </div>
             </div>
-            
+
             {if is_player {
                 if let Some(mv) = my_move {
                     view! {
@@ -87,7 +88,7 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
             } else {
                 view! {}.into_any()
             }}
-            
+
             {if is_player && all_moves_submitted {
                 view! {
                     <div class="round-complete-section">
@@ -96,10 +97,10 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
                             on:click=move |_| { let _ = complete_round_action.dispatch(game_id); }
                             disabled=move || complete_round_action.pending().get()
                         >
-                            {move || if complete_round_action.pending().get() { 
-                                "⏳ Processing..." 
-                            } else { 
-                                "▶️ Complete Round" 
+                            {move || if complete_round_action.pending().get() {
+                                "⏳ Processing..."
+                            } else {
+                                "▶️ Complete Round"
                             }}
                         </button>
                         <p class="round-hint">"All moves ready! Execute the round."</p>
@@ -114,7 +115,7 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
             } else {
                 view! {}.into_any()
             }}
-            
+
             {move || {
                 let s = status.get();
                 if !s.is_empty() {
@@ -128,4 +129,3 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
         </div>
     }
 }
-

@@ -1,36 +1,21 @@
 // Wrapper around automatafl-backend-client for webapp usage
 // Re-exports the client with web_sys::window local storage integration
 
-use automatafl_backend_client::{AutomataflClient, ClientError, Result};
+#![allow(dead_code)] // Many methods are part of the public API but not yet used
+
 use automatafl_api_types::*;
+use automatafl_backend_client::{AutomataflClient, ClientError, Result};
 use automatafl_logic::{Coord, Pid};
 use uuid::Uuid;
 
 /// Webapp-specific wrapper around the backend client with localStorage integration
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct ApiClient {
     inner: AutomataflClient,
 }
 
-#[allow(dead_code)]
 impl ApiClient {
-    pub fn new(base_url: String) -> Self {
-        // Try to load session from localStorage
-        let session_token = if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                storage
-                    .get_item("session_token")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| Uuid::parse_str(&s).ok())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
+    pub fn new(base_url: String, session_token: Option<Uuid>) -> Self {
         let inner = if let Some(token) = session_token {
             AutomataflClient::with_session(base_url, token)
         } else {
@@ -41,9 +26,7 @@ impl ApiClient {
     }
 
     pub fn with_session(base_url: String, session_token: Uuid) -> Self {
-        Self {
-            inner: AutomataflClient::with_session(base_url, session_token),
-        }
+        Self::new(base_url, Some(session_token))
     }
 
     pub fn session_token(&self) -> Option<Uuid> {
@@ -52,17 +35,6 @@ impl ApiClient {
 
     pub fn set_session_token(&mut self, token: Option<Uuid>) {
         self.inner.set_session_token(token);
-        
-        // Persist to localStorage
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                if let Some(t) = token {
-                    let _ = storage.set_item("session_token", &t.to_string());
-                } else {
-                    let _ = storage.remove_item("session_token");
-                }
-            }
-        }
     }
 
     // === Health Check ===
@@ -71,33 +43,26 @@ impl ApiClient {
     }
 
     // === Auth ===
-    pub async fn register(&self, displayname: String, password: String) -> Result<RegisterResponse> {
+    pub async fn register(
+        &self,
+        displayname: String,
+        password: String,
+    ) -> Result<RegisterResponse> {
         self.inner.register(displayname, password).await
     }
 
-    pub async fn login(&mut self, displayname: String, password: String) -> Result<LoginResponse> {
-        let response = self.inner.login(displayname, password).await?;
-        // Session token is automatically set in the inner client
-        // Persist to localStorage
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let _ = storage.set_item("session_token", &response.session_id.to_string());
-                let _ = storage.set_item("player_id", &response.player_id.to_string());
-            }
-        }
-        Ok(response)
+    /// Login and return response - caller should create a new client with session token
+    pub async fn login(&self, displayname: String, password: String) -> Result<LoginResponse> {
+        // Use a temporary mutable client for the login call
+        let mut temp_client = self.inner.clone();
+        temp_client.login(displayname, password).await
     }
 
-    pub async fn logout(&mut self) -> Result<()> {
-        let result = self.inner.logout().await;
-        // Clear localStorage regardless of result
-        if let Some(window) = web_sys::window() {
-            if let Ok(Some(storage)) = window.local_storage() {
-                let _ = storage.remove_item("session_token");
-                let _ = storage.remove_item("player_id");
-            }
-        }
-        result
+    /// Logout - caller should create a new client without session token after
+    pub async fn logout(&self) -> Result<()> {
+        // Use a temporary mutable client for the logout call
+        let mut temp_client = self.inner.clone();
+        temp_client.logout().await
     }
 
     // === Games ===
@@ -131,7 +96,12 @@ impl ApiClient {
         self.inner.get_pending_move(game_id).await
     }
 
-    pub async fn perform_move(&self, game_id: Uuid, from: Coord, to: Coord) -> Result<MoveResultResponse> {
+    pub async fn perform_move(
+        &self,
+        game_id: Uuid,
+        from: Coord,
+        to: Coord,
+    ) -> Result<MoveResultResponse> {
         self.inner.perform_move(game_id, from, to).await
     }
 
@@ -175,7 +145,11 @@ impl ApiClient {
         self.inner.admin_get_player(player_id).await
     }
 
-    pub async fn admin_update_player(&self, player_id: Uuid, data: serde_json::Value) -> Result<()> {
+    pub async fn admin_update_player(
+        &self,
+        player_id: Uuid,
+        data: serde_json::Value,
+    ) -> Result<()> {
         self.inner.admin_update_player(player_id, data).await
     }
 
@@ -187,7 +161,11 @@ impl ApiClient {
         self.inner.admin_get_player_stats(player_id).await
     }
 
-    pub async fn admin_update_player_stats(&self, player_id: Uuid, data: serde_json::Value) -> Result<()> {
+    pub async fn admin_update_player_stats(
+        &self,
+        player_id: Uuid,
+        data: serde_json::Value,
+    ) -> Result<()> {
         self.inner.admin_update_player_stats(player_id, data).await
     }
 
@@ -210,8 +188,14 @@ impl ApiClient {
         serde_json::from_value(value).map_err(ClientError::Json)
     }
 
-    pub async fn admin_set_game_lifecycle(&self, game_id: Uuid, lifecycle: serde_json::Value) -> Result<()> {
-        self.inner.admin_set_game_lifecycle(game_id, lifecycle).await
+    pub async fn admin_set_game_lifecycle(
+        &self,
+        game_id: Uuid,
+        lifecycle: serde_json::Value,
+    ) -> Result<()> {
+        self.inner
+            .admin_set_game_lifecycle(game_id, lifecycle)
+            .await
     }
 
     pub async fn admin_get_game_events(&self, game_id: Uuid) -> Result<Vec<GameEvent>> {
@@ -223,7 +207,9 @@ impl ApiClient {
     }
 
     pub async fn admin_delete_chat_message(&self, game_id: Uuid, timestamp: u64) -> Result<()> {
-        self.inner.admin_delete_chat_message(game_id, timestamp).await
+        self.inner
+            .admin_delete_chat_message(game_id, timestamp)
+            .await
     }
 
     // === Admin - Snapshots ===
@@ -232,7 +218,9 @@ impl ApiClient {
     }
 
     pub async fn admin_delete_snapshot(&self, game_id: Uuid, snapshot_index: usize) -> Result<()> {
-        self.inner.admin_delete_snapshot(game_id, snapshot_index).await
+        self.inner
+            .admin_delete_snapshot(game_id, snapshot_index)
+            .await
     }
 
     // === Admin - Session Management ===
@@ -268,7 +256,9 @@ impl ApiClient {
 
     // === Matchmaking ===
     pub async fn join_matchmaking(&self, player_count: u8, use_column_rule: bool) -> Result<()> {
-        self.inner.join_matchmaking(player_count, use_column_rule).await
+        self.inner
+            .join_matchmaking(player_count, use_column_rule)
+            .await
     }
 
     pub async fn leave_matchmaking(&self) -> Result<()> {
@@ -297,8 +287,15 @@ impl ApiClient {
         self.inner.get_player_profile(player_id).await
     }
 
-    pub async fn update_player_profile(&self, player_id: Uuid, bio: Option<String>, avatar_url: Option<String>) -> Result<()> {
-        self.inner.update_player_profile(player_id, bio, avatar_url).await
+    pub async fn update_player_profile(
+        &self,
+        player_id: Uuid,
+        bio: Option<String>,
+        avatar_url: Option<String>,
+    ) -> Result<()> {
+        self.inner
+            .update_player_profile(player_id, bio, avatar_url)
+            .await
     }
 
     pub async fn get_player_stats(&self, player_id: Uuid) -> Result<PlayerStats> {
@@ -317,6 +314,8 @@ impl ApiClient {
         until: Option<u64>,
         event_kind: Option<String>,
     ) -> Result<Vec<GameEvent>> {
-        self.inner.get_game_history_filtered(game_id, since, until, event_kind).await
+        self.inner
+            .get_game_history_filtered(game_id, since, until, event_kind)
+            .await
     }
 }

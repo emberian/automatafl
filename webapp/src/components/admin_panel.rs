@@ -1,18 +1,22 @@
 // AdminPanel component - comprehensive admin functionality
-use crate::{api::ApiClient, state::AppState, components::{use_modal, use_toast}};
+use crate::{
+    components::{use_modal, use_toast},
+    helpers::create_api_client,
+    state::AppState,
+};
+use automatafl_api_types::{GameListItem, PlayerListItem};
 use leptos::prelude::*;
 use uuid::Uuid;
-use automatafl_api_types::{PlayerListItem, GameListItem};
 
 #[component]
 pub fn AdminPanel() -> impl IntoView {
     let (active_tab, set_active_tab) = signal("players".to_string());
     let (status, set_status) = signal(String::new());
-    
+
     view! {
         <div class="admin-panel">
             <h2>"🔧 Admin Panel"</h2>
-            
+
             <div class="admin-tabs">
                 <button
                     class=move || format!("tab {}", if active_tab.get() == "players" { "active" } else { "" })
@@ -45,7 +49,7 @@ pub fn AdminPanel() -> impl IntoView {
                     "💾 Database"
                 </button>
             </div>
-            
+
             {move || {
                 let s = status.get();
                 if !s.is_empty() {
@@ -56,23 +60,23 @@ pub fn AdminPanel() -> impl IntoView {
                     view! {}.into_any()
                 }
             }}
-            
+
             <Show when=move || active_tab.get() == "players">
                 <AdminPlayersTab status=status _set_status=set_status />
             </Show>
-            
+
             <Show when=move || active_tab.get() == "games">
                 <AdminGamesTab status=status _set_status=set_status />
             </Show>
-            
+
             <Show when=move || active_tab.get() == "sessions">
                 <AdminSessionsTab status=status _set_status=set_status />
             </Show>
-            
+
             <Show when=move || active_tab.get() == "matchmaking">
                 <AdminMatchmakingTab status=status _set_status=set_status />
             </Show>
-            
+
             <Show when=move || active_tab.get() == "database">
                 <AdminDatabaseTab status=status _set_status=set_status />
             </Show>
@@ -87,39 +91,36 @@ pub fn AdminPanel() -> impl IntoView {
 #[component]
 fn AdminPlayersTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
-    _set_status: WriteSignal<String>
+    _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let _app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
     let toast = use_toast();
-    
+
     let (players, set_players) = signal(Vec::<PlayerListItem>::new());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
-    let load_players_action = Action::new_local(move |_: &()| {
-        let base_url = api_base_url.clone();
-        async move {
-            let client = ApiClient::new(base_url);
-            client.admin_list_players().await.map_err(|e| e.to_string())
-        }
+
+    let load_players_action = Action::new_local(move |_: &()| async move {
+        let client = create_api_client();
+        client.admin_list_players().await.map_err(|e| e.to_string())
     });
-    
-    let api_base_url_for_delete = app_state.api_base_url.clone();
+
     let delete_player_action = Action::new_local(move |pid: &Uuid| {
         let pid = *pid;
-        let base_url = api_base_url_for_delete.clone();
         async move {
-            let client = ApiClient::new(base_url);
-            client.admin_delete_player(pid).await.map_err(|e| e.to_string())
+            let client = create_api_client();
+            client
+                .admin_delete_player(pid)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
-    
+
     let _ = Effect::new(move |_| {
         let _ = refresh_trigger.get();
         load_players_action.dispatch(());
     });
-    
+
     let toast_clone = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = load_players_action.value().get() {
@@ -129,7 +130,7 @@ fn AdminPlayersTab(
             }
         }
     });
-    
+
     let toast_clone2 = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = delete_player_action.value().get() {
@@ -142,7 +143,7 @@ fn AdminPlayersTab(
             }
         }
     });
-    
+
     view! {
         <div class="admin-section">
             <div class="section-header">
@@ -154,7 +155,7 @@ fn AdminPlayersTab(
                     "🔄 Refresh"
                 </button>
             </div>
-            
+
             <div class="players-table-container">
                 <Suspense fallback=move || view! {
                     <div class="loading">"Loading players..."</div>
@@ -232,49 +233,48 @@ fn AdminPlayersTab(
 #[component]
 fn AdminGamesTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
-    _set_status: WriteSignal<String>
+    _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let _app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
     let toast = use_toast();
-    
+
     let (games, set_games) = signal(Vec::<GameListItem>::new());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
-    let load_games_action = Action::new_local(move |_: &()| {
-        let base_url = api_base_url.clone();
-        async move {
-            let client = ApiClient::new(base_url);
-            client.admin_list_games().await.map_err(|e| e.to_string())
-        }
+
+    let load_games_action = Action::new_local(move |_: &()| async move {
+        let client = create_api_client();
+        client.admin_list_games().await.map_err(|e| e.to_string())
     });
-    
-    let api_base_url_for_delete = app_state.api_base_url.clone();
+
     let delete_game_action = Action::new_local(move |gid: &Uuid| {
         let gid = *gid;
-        let base_url = api_base_url_for_delete.clone();
         async move {
-            let client = ApiClient::new(base_url);
-            client.admin_delete_game(gid).await.map_err(|e| e.to_string())
+            let client = create_api_client();
+            client
+                .admin_delete_game(gid)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
-    
-    let api_base_url_for_force = app_state.api_base_url.clone();
+
     let force_complete_action = Action::new_local(move |gid: &Uuid| {
         let gid = *gid;
-        let base_url = api_base_url_for_force.clone();
         async move {
-            let client = ApiClient::new(base_url);
-            client.admin_force_complete_round(gid).await.map(|_| ()).map_err(|e| e.to_string())
+            let client = create_api_client();
+            client
+                .admin_force_complete_round(gid)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         }
     });
-    
+
     let _ = Effect::new(move |_| {
         let _ = refresh_trigger.get();
         load_games_action.dispatch(());
     });
-    
+
     let toast_clone = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = load_games_action.value().get() {
@@ -284,7 +284,7 @@ fn AdminGamesTab(
             }
         }
     });
-    
+
     let toast_clone2 = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = delete_game_action.value().get() {
@@ -297,7 +297,7 @@ fn AdminGamesTab(
             }
         }
     });
-    
+
     let toast_clone3 = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = force_complete_action.value().get() {
@@ -310,7 +310,7 @@ fn AdminGamesTab(
             }
         }
     });
-    
+
     view! {
         <div class="admin-section">
             <div class="section-header">
@@ -322,7 +322,7 @@ fn AdminGamesTab(
                     "🔄 Refresh"
                 </button>
             </div>
-            
+
             <div class="games-table-container">
                 <Suspense fallback=move || view! {
                     <div class="loading">"Loading games..."</div>
@@ -407,42 +407,40 @@ fn AdminGamesTab(
 #[component]
 fn AdminSessionsTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
-    _set_status: WriteSignal<String>
+    _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let _app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
-    
+
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let sessions_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
-        let base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.admin_list_sessions().await
         }
     });
-    
-    let api_base_url_for_delete = app_state.api_base_url.clone();
+
     let delete_session_action = Action::new_local(move |sid: &Uuid| {
         let sid = *sid;
-        let base_url = api_base_url_for_delete.clone();
         async move {
-            let client = ApiClient::new(base_url);
-            client.admin_delete_session(sid).await.map_err(|e| e.to_string())
+            let client = create_api_client();
+            client
+                .admin_delete_session(sid)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
-    
-    let api_base_url_for_cleanup = app_state.api_base_url.clone();
-    let cleanup_action = Action::new_local(move |_: &()| {
-        let base_url = api_base_url_for_cleanup.clone();
-        async move {
-            let client = ApiClient::new(base_url);
-            client.admin_cleanup_expired_sessions().await.map_err(|e| e.to_string())
-        }
+
+    let cleanup_action = Action::new_local(move |_: &()| async move {
+        let client = create_api_client();
+        client
+            .admin_cleanup_expired_sessions()
+            .await
+            .map_err(|e| e.to_string())
     });
-    
+
     let toast_clone = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = delete_session_action.value().get() {
@@ -468,7 +466,7 @@ fn AdminSessionsTab(
             }
         }
     });
-    
+
     view! {
         <div class="admin-section">
             <div class="section-header">
@@ -489,7 +487,7 @@ fn AdminSessionsTab(
                     </button>
                 </div>
             </div>
-            
+
             <Suspense fallback=move || view! {
                 <div class="loading">"Loading sessions..."</div>
             }>
@@ -521,7 +519,7 @@ fn AdminSessionsTab(
                                                         let session_id = session.get("id")?.as_str().and_then(|s| Uuid::parse_str(s).ok())?;
                                                         let player_name = session.get("player_displayname")?.as_str()?.to_string();
                                                         let expires_at = session.get("expires_at")?.as_u64()?;
-                                                        
+
                                                         Some(view! {
                                                             <tr>
                                                                 <td class="monospace">{session_id.to_string().chars().take(8).collect::<String>()}"..."</td>
@@ -569,33 +567,32 @@ fn AdminSessionsTab(
 #[component]
 fn AdminMatchmakingTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
-    _set_status: WriteSignal<String>
+    _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let _app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
-    
+
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let queue_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
-        let base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.admin_list_matchmaking_queue().await
         }
     });
-    
-    let api_base_url_for_remove = app_state.api_base_url.clone();
+
     let remove_action = Action::new_local(move |pid: &Uuid| {
         let pid = *pid;
-        let base_url = api_base_url_for_remove.clone();
         async move {
-            let client = ApiClient::new(base_url);
-            client.admin_remove_from_matchmaking(pid).await.map_err(|e| e.to_string())
+            let client = create_api_client();
+            client
+                .admin_remove_from_matchmaking(pid)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
-    
+
     let toast_clone = toast.clone();
     let _ = Effect::new(move |_| {
         if let Some(result) = remove_action.value().get() {
@@ -608,7 +605,7 @@ fn AdminMatchmakingTab(
             }
         }
     });
-    
+
     view! {
         <div class="admin-section">
             <div class="section-header">
@@ -620,7 +617,7 @@ fn AdminMatchmakingTab(
                     "🔄 Refresh"
                 </button>
             </div>
-            
+
             <Suspense fallback=move || view! {
                 <div class="loading">"Loading matchmaking queue..."</div>
             }>
@@ -654,7 +651,7 @@ fn AdminMatchmakingTab(
                                                         let queued_at = entry.get("queued_at")?.as_u64()?;
                                                         let wait_time = entry.get("wait_time_seconds")?.as_u64()?;
                                                         let prefs = entry.get("game_preferences")?.clone();
-                                                        
+
                                                         Some(view! {
                                                             <tr>
                                                                 <td>{player_name}</td>
@@ -703,32 +700,28 @@ fn AdminMatchmakingTab(
 #[component]
 fn AdminDatabaseTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
-    #[allow(unused_variables)] _set_status: WriteSignal<String>
+    #[allow(unused_variables)] _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
+    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url_stats = app_state.api_base_url.clone();
+
     let stats_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
-        let base_url = api_base_url_stats.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.admin_get_database_stats().await
         }
     });
-    
-    let api_base_url_tables = app_state.api_base_url.clone();
+
     let tables_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
-        let base_url = api_base_url_tables.clone();
         async move {
-            let client = ApiClient::new(base_url);
+            let client = create_api_client();
             client.admin_list_tables().await
         }
     });
-    
+
     view! {
         <div class="admin-section">
             <div class="section-header">
@@ -740,7 +733,7 @@ fn AdminDatabaseTab(
                     "🔄 Refresh"
                 </button>
             </div>
-            
+
             <div class="database-stats">
                 <h4>"📊 Statistics"</h4>
                 <Suspense fallback=move || view! {
@@ -775,7 +768,7 @@ fn AdminDatabaseTab(
                     }}
                 </Suspense>
             </div>
-            
+
             <div class="database-tables">
                 <h4>"📋 Tables"</h4>
                 <Suspense fallback=move || view! {
@@ -798,7 +791,7 @@ fn AdminDatabaseTab(
                                                     {tables.into_iter().filter_map(|table| {
                                                         let name = table.get("name")?.as_str()?.to_string();
                                                         let count = table.get("record_count")?.as_u64()?;
-                                                        
+
                                                         Some(view! {
                                                             <tr>
                                                                 <td class="monospace">{name}</td>

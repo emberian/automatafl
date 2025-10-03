@@ -1,22 +1,18 @@
-use crate::{api::ApiClient, state::AppState};
+use crate::helpers::create_api_client;
 use automatafl_api_types::LeaderboardEntry;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
 pub fn LeaderboardPage() -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
     let (active_tab, set_active_tab) = signal("elo".to_string());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
+
     let leaderboard_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
         let tab = active_tab.get();
-        let api_base_url = api_base_url.clone();
         async move {
-            let client = ApiClient::new(api_base_url);
+            let client = create_api_client();
             match tab.as_str() {
                 "elo" => client.get_leaderboard_elo().await,
                 "wins" => client.get_leaderboard_wins().await,
@@ -25,7 +21,7 @@ pub fn LeaderboardPage() -> impl IntoView {
             }
         }
     });
-    
+
     let on_tab_change = move |tab: &str| {
         set_active_tab.set(tab.to_string());
         set_refresh_trigger.update(|n| *n += 1);
@@ -35,14 +31,14 @@ pub fn LeaderboardPage() -> impl IntoView {
         <div class="leaderboard-page">
             <div class="page-header">
                 <h1>"🏆 Leaderboard"</h1>
-                <button 
+                <button
                     class="button button-small"
                     on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
                 >
                     "Refresh"
                 </button>
             </div>
-            
+
             <div class="leaderboard-tabs">
                 <button
                     class=move || format!("tab {}", if active_tab.get() == "elo" { "active" } else { "" })
@@ -63,7 +59,7 @@ pub fn LeaderboardPage() -> impl IntoView {
                     "Most Games"
                 </button>
             </div>
-            
+
             <Suspense fallback=move || view! {
                 <div class="loading-state">
                     <div class="spinner"></div>
@@ -120,7 +116,7 @@ pub fn LeaderboardPage() -> impl IntoView {
                                 <div class="error-state">
                                     <h3>"Error loading leaderboard"</h3>
                                     <p>{format!("{}", e)}</p>
-                                    <button 
+                                    <button
                                         class="button"
                                         on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
                                     >
@@ -141,25 +137,25 @@ fn LeaderboardRow(rank: usize, entry: LeaderboardEntry) -> impl IntoView {
     let games_played = entry.games_played.unwrap_or(0);
     let games_won = entry.games_won.unwrap_or(0);
     let games_lost = games_played.saturating_sub(games_won);
-    
+
     let win_rate = if games_played > 0 {
         (games_won as f64 / games_played as f64 * 100.0).round()
     } else {
         0.0
     };
-    
+
     let rank_class = match rank {
         1 => "rank-gold",
         2 => "rank-silver",
         3 => "rank-bronze",
-        _ => "rank-normal"
+        _ => "rank-normal",
     };
-    
+
     let rank_emoji = match rank {
         1 => "🥇",
         2 => "🥈",
         3 => "🥉",
-        _ => ""
+        _ => "",
     };
 
     view! {

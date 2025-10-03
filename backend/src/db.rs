@@ -1,9 +1,13 @@
-use std::sync::Arc;
-use surrealdb::{Surreal, engine::any::{Any, connect}, opt::auth::Root};
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
-use automatafl_logic::{Game, Pid};
 use automatafl_api_types::GameLifecycle;
+use automatafl_logic::{Game, Pid};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use surrealdb::{
+    Surreal,
+    engine::any::{Any, connect},
+    opt::auth::Root,
+};
+use uuid::Uuid;
 
 pub type Db = Arc<Surreal<Any>>;
 
@@ -19,7 +23,8 @@ pub async fn init_db(uri: Option<String>) -> Result<Db, surrealdb::Error> {
         db.signin(Root {
             username: "root",
             password: "root",
-        }).await?;
+        })
+        .await?;
     }
 
     // Use namespace and database
@@ -33,10 +38,22 @@ pub async fn init_db(uri: Option<String>) -> Result<Db, surrealdb::Error> {
 
 /// Database schema and migrations
 async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
+    // Check if migrations already applied
+    let applied: Result<Vec<MigrationRecord>, _> = db.select("migrations").await;
+    if let Ok(migrations) = applied {
+        if migrations.iter().any(|m| m.version == "v1") {
+            tracing::info!("Migrations already applied, skipping");
+            return Ok(());
+        }
+    }
+
+    tracing::info!("Running database migrations...");
+
     // Define tables and indexes
 
     // Players table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS players SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS id ON TABLE players TYPE string;
         DEFINE FIELD IF NOT EXISTS displayname ON TABLE players TYPE string;
@@ -48,19 +65,25 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         DEFINE FIELD IF NOT EXISTS elo_rating ON TABLE players TYPE int DEFAULT 1200;
         DEFINE INDEX IF NOT EXISTS displayname_idx ON TABLE players COLUMNS displayname UNIQUE;
         DEFINE INDEX IF NOT EXISTS elo_idx ON TABLE players COLUMNS elo_rating;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Sessions table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS sessions SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS id ON TABLE sessions TYPE string;
         DEFINE FIELD IF NOT EXISTS player_id ON TABLE sessions TYPE string;
         DEFINE FIELD IF NOT EXISTS expires_at ON TABLE sessions TYPE int;
         DEFINE INDEX IF NOT EXISTS player_idx ON TABLE sessions COLUMNS player_id;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Games table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS games SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS id ON TABLE games TYPE string;
         DEFINE FIELD IF NOT EXISTS game_state ON TABLE games TYPE string;
@@ -68,7 +91,9 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         DEFINE FIELD IF NOT EXISTS created_at ON TABLE games TYPE int;
         DEFINE FIELD IF NOT EXISTS created_by ON TABLE games TYPE string;
         DEFINE FIELD IF NOT EXISTS player_count ON TABLE games TYPE int;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Game players join table
     db.query("
@@ -80,17 +105,21 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
     ").await?;
 
     // Game events table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS game_events SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS game_id ON TABLE game_events TYPE string;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE game_events TYPE int;
         DEFINE FIELD IF NOT EXISTS event_kind ON TABLE game_events TYPE string;
         DEFINE FIELD IF NOT EXISTS event_data ON TABLE game_events TYPE string;
         DEFINE INDEX IF NOT EXISTS game_time_idx ON TABLE game_events COLUMNS game_id, timestamp;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Chat messages table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS chat_messages SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS game_id ON TABLE chat_messages TYPE string;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE chat_messages TYPE int;
@@ -98,17 +127,22 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         DEFINE FIELD IF NOT EXISTS displayname ON TABLE chat_messages TYPE string;
         DEFINE FIELD IF NOT EXISTS message ON TABLE chat_messages TYPE string;
         DEFINE INDEX IF NOT EXISTS chat_game_idx ON TABLE chat_messages COLUMNS game_id, timestamp;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Snapshots table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS snapshots SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS game_id ON TABLE snapshots TYPE string;
         DEFINE FIELD IF NOT EXISTS index ON TABLE snapshots TYPE int;
         DEFINE FIELD IF NOT EXISTS timestamp ON TABLE snapshots TYPE int;
         DEFINE FIELD IF NOT EXISTS snapshot_data ON TABLE snapshots TYPE string;
         DEFINE INDEX IF NOT EXISTS snapshot_idx ON TABLE snapshots COLUMNS game_id, index UNIQUE;
-    ").await?;
+    ",
+    )
+    .await?;
 
     // Matchmaking queue table
     db.query("
@@ -120,7 +154,8 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
     ").await?;
 
     // Player stats table
-    db.query("
+    db.query(
+        "
         DEFINE TABLE IF NOT EXISTS player_stats SCHEMAFULL;
         DEFINE FIELD IF NOT EXISTS player_id ON TABLE player_stats TYPE string;
         DEFINE FIELD IF NOT EXISTS games_played ON TABLE player_stats TYPE int DEFAULT 0;
@@ -129,7 +164,19 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         DEFINE INDEX IF NOT EXISTS stats_player_idx ON TABLE player_stats COLUMNS player_id UNIQUE;
         DEFINE INDEX IF NOT EXISTS wins_idx ON TABLE player_stats COLUMNS games_won;
         DEFINE INDEX IF NOT EXISTS games_idx ON TABLE player_stats COLUMNS games_played;
-    ").await?;
+    ",
+    )
+    .await?;
+
+    // Mark migrations as applied
+    let migration = MigrationRecord {
+        version: "v1".to_string(),
+        applied_at: crate::common::timestamp(),
+    };
+
+    db.create::<Option<MigrationRecord>>("migrations")
+        .content(migration)
+        .await?;
 
     tracing::info!("Database migration completed");
     Ok(())
@@ -138,6 +185,12 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
 // ============================================================================
 // Database record types
 // ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MigrationRecord {
+    version: String,
+    applied_at: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerRecord {
@@ -161,8 +214,8 @@ pub struct SessionRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameRecord {
     pub id: String,
-    pub game_state: String,  // JSON-serialized Game
-    pub lifecycle: String,   // Serialized GameLifecycle
+    pub game_state: String, // JSON-serialized Game
+    pub lifecycle: String,  // Serialized GameLifecycle
     pub created_at: u64,
     pub created_by: String,
     pub player_count: u8,
@@ -180,7 +233,7 @@ pub struct GameEventRecord {
     pub game_id: String,
     pub timestamp: u64,
     pub event_kind: String,
-    pub event_data: String,  // JSON-serialized data
+    pub event_data: String, // JSON-serialized data
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,14 +250,14 @@ pub struct SnapshotRecord {
     pub game_id: String,
     pub index: usize,
     pub timestamp: u64,
-    pub snapshot_data: String,  // JSON-serialized GameSnapshot
+    pub snapshot_data: String, // JSON-serialized GameSnapshot
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchmakingQueueRecord {
     pub player_id: String,
     pub queued_at: u64,
-    pub game_preferences: String,  // JSON-serialized preferences
+    pub game_preferences: String, // JSON-serialized preferences
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,8 +287,8 @@ pub async fn create_player(
         is_admin,
         bio: None,
         avatar_url: None,
-        created_at: crate::timestamp(),
-        elo_rating: 1200,
+        created_at: crate::common::timestamp(),
+        elo_rating: crate::common::DEFAULT_ELO,
     };
 
     db.create::<Option<PlayerRecord>>(("players", id.to_string()))
@@ -262,7 +315,8 @@ pub async fn find_player_by_displayname(
     db: &Surreal<Any>,
     displayname: String,
 ) -> Result<Option<PlayerRecord>, surrealdb::Error> {
-    let mut result = db.query("SELECT * FROM players WHERE displayname = $displayname")
+    let mut result = db
+        .query("SELECT * FROM players WHERE displayname = $displayname")
         .bind(("displayname", displayname))
         .await?;
 
@@ -307,17 +361,19 @@ pub async fn get_session(
 }
 
 /// Delete session
-pub async fn delete_session(
-    db: &Surreal<Any>,
-    session_id: Uuid,
-) -> Result<(), surrealdb::Error> {
-    db.delete::<Option<SessionRecord>>(("sessions", session_id.to_string())).await?;
+pub async fn delete_session(db: &Surreal<Any>, session_id: Uuid) -> Result<(), surrealdb::Error> {
+    db.delete::<Option<SessionRecord>>(("sessions", session_id.to_string()))
+        .await?;
     Ok(())
 }
 
 /// Clean up expired sessions
-pub async fn cleanup_expired_sessions(db: &Surreal<Any>, now: u64) -> Result<u64, surrealdb::Error> {
-    let mut result = db.query("DELETE sessions WHERE expires_at < $now RETURN BEFORE")
+pub async fn cleanup_expired_sessions(
+    db: &Surreal<Any>,
+    now: u64,
+) -> Result<u64, surrealdb::Error> {
+    let mut result = db
+        .query("DELETE sessions WHERE expires_at < $now RETURN BEFORE")
         .bind(("now", now))
         .await?;
 
@@ -365,7 +421,8 @@ pub async fn update_game_state(
     game_state: &Game,
     lifecycle: &GameLifecycle,
 ) -> Result<(), surrealdb::Error> {
-    let _: Option<GameRecord> = db.update(("games", game_id.to_string()))
+    let _: Option<GameRecord> = db
+        .update(("games", game_id.to_string()))
         .merge(serde_json::json!({
             "game_state": serde_json::to_string(game_state).unwrap(),
             "lifecycle": serde_json::to_string(lifecycle).unwrap(),
@@ -376,34 +433,49 @@ pub async fn update_game_state(
 }
 
 /// Delete game
-pub async fn delete_game(
-    db: &Surreal<Any>,
-    game_id: Uuid,
-) -> Result<(), surrealdb::Error> {
+pub async fn delete_game(db: &Surreal<Any>, game_id: Uuid) -> Result<(), surrealdb::Error> {
+    // Wrap all deletes in a transaction for atomicity
+    db.query("BEGIN TRANSACTION;").await?;
+
     // Delete game and related data
-    db.delete::<Option<GameRecord>>(("games", game_id.to_string())).await?;
+    let result = async {
+        db.delete::<Option<GameRecord>>(("games", game_id.to_string()))
+            .await?;
 
-    // Delete game players
-    db.query("DELETE game_players WHERE game_id = $game_id")
-        .bind(("game_id", game_id.to_string()))
-        .await?;
+        // Delete game players
+        db.query("DELETE game_players WHERE game_id = $game_id")
+            .bind(("game_id", game_id.to_string()))
+            .await?;
 
-    // Delete game events
-    db.query("DELETE game_events WHERE game_id = $game_id")
-        .bind(("game_id", game_id.to_string()))
-        .await?;
+        // Delete game events
+        db.query("DELETE game_events WHERE game_id = $game_id")
+            .bind(("game_id", game_id.to_string()))
+            .await?;
 
-    // Delete chat messages
-    db.query("DELETE chat_messages WHERE game_id = $game_id")
-        .bind(("game_id", game_id.to_string()))
-        .await?;
+        // Delete chat messages
+        db.query("DELETE chat_messages WHERE game_id = $game_id")
+            .bind(("game_id", game_id.to_string()))
+            .await?;
 
-    // Delete snapshots
-    db.query("DELETE snapshots WHERE game_id = $game_id")
-        .bind(("game_id", game_id.to_string()))
-        .await?;
+        // Delete snapshots
+        db.query("DELETE snapshots WHERE game_id = $game_id")
+            .bind(("game_id", game_id.to_string()))
+            .await?;
 
-    Ok(())
+        Ok::<(), surrealdb::Error>(())
+    }
+    .await;
+
+    match result {
+        Ok(_) => {
+            db.query("COMMIT TRANSACTION;").await?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = db.query("ROLLBACK TRANSACTION;").await;
+            Err(e)
+        }
+    }
 }
 
 /// List all games
@@ -440,7 +512,8 @@ pub async fn get_game_players(
     db: &Surreal<Any>,
     game_id: Uuid,
 ) -> Result<Vec<GamePlayerRecord>, surrealdb::Error> {
-    let mut result = db.query("SELECT * FROM game_players WHERE game_id = $game_id")
+    let mut result = db
+        .query("SELECT * FROM game_players WHERE game_id = $game_id")
         .bind(("game_id", game_id.to_string()))
         .await?;
 
@@ -463,10 +536,8 @@ pub async fn add_game_event(
         event_data: serde_json::to_string(&event_data).unwrap(),
     };
 
-    // Use timestamp-based ID for ordering
-    let record_id = format!("{}:{}", game_id, timestamp);
-
-    db.create::<Option<GameEventRecord>>(("game_events", record_id))
+    // Let SurrealDB generate unique ID automatically
+    db.create::<Option<GameEventRecord>>("game_events")
         .content(record)
         .await?;
 
@@ -495,7 +566,8 @@ pub async fn get_game_history(
 
     query.push_str(" ORDER BY timestamp ASC");
 
-    let mut result = db.query(&query)
+    let mut result = db
+        .query(&query)
         .bind(("game_id", game_id.to_string()))
         .bind(("since", since))
         .bind(("until", until))
@@ -523,9 +595,8 @@ pub async fn add_chat_message(
         message,
     };
 
-    let record_id = format!("{}:{}", game_id, timestamp);
-
-    db.create::<Option<ChatMessageRecord>>(("chat_messages", record_id))
+    // Let SurrealDB generate unique ID automatically
+    db.create::<Option<ChatMessageRecord>>("chat_messages")
         .content(record)
         .await?;
 
@@ -537,7 +608,8 @@ pub async fn get_chat_messages(
     db: &Surreal<Any>,
     game_id: Uuid,
 ) -> Result<Vec<ChatMessageRecord>, surrealdb::Error> {
-    let mut result = db.query("SELECT * FROM chat_messages WHERE game_id = $game_id ORDER BY timestamp ASC")
+    let mut result = db
+        .query("SELECT * FROM chat_messages WHERE game_id = $game_id ORDER BY timestamp ASC")
         .bind(("game_id", game_id.to_string()))
         .await?;
 
@@ -574,7 +646,8 @@ pub async fn list_snapshots(
     db: &Surreal<Any>,
     game_id: Uuid,
 ) -> Result<Vec<SnapshotRecord>, surrealdb::Error> {
-    let mut result = db.query("SELECT * FROM snapshots WHERE game_id = $game_id ORDER BY index ASC")
+    let mut result = db
+        .query("SELECT * FROM snapshots WHERE game_id = $game_id ORDER BY index ASC")
         .bind(("game_id", game_id.to_string()))
         .await?;
 
@@ -601,34 +674,6 @@ pub async fn get_player_stats(
 }
 
 /// Update player stats after a game
-pub async fn update_player_stats(
-    db: &Surreal<Any>,
-    player_id: Uuid,
-    won: bool,
-    playtime: u64,
-) -> Result<(), surrealdb::Error> {
-    // Get current stats or create default
-    let mut stats = get_player_stats(db, player_id).await?
-        .unwrap_or(PlayerStatsRecord {
-            player_id: player_id.to_string(),
-            games_played: 0,
-            games_won: 0,
-            total_playtime: 0,
-        });
-
-    stats.games_played += 1;
-    if won {
-        stats.games_won += 1;
-    }
-    stats.total_playtime += playtime;
-
-    let _: Option<PlayerStatsRecord> = db.update(("player_stats", player_id.to_string()))
-        .content(stats)
-        .await?;
-
-    Ok(())
-}
-
 /// Get all players (for admin)
 pub async fn get_all_players(db: &Surreal<Any>) -> Result<Vec<PlayerRecord>, surrealdb::Error> {
     let players: Vec<PlayerRecord> = db.select("players").await?;
@@ -639,9 +684,16 @@ pub async fn get_all_players(db: &Surreal<Any>) -> Result<Vec<PlayerRecord>, sur
 pub async fn load_game_state(
     db: &Surreal<Any>,
     game_id: Uuid,
-) -> Result<Option<(Game, GameLifecycle, std::collections::HashMap<Uuid, automatafl_logic::Pid>)>, surrealdb::Error> {
-    use std::collections::HashMap;
+) -> Result<
+    Option<(
+        Game,
+        GameLifecycle,
+        std::collections::HashMap<Uuid, automatafl_logic::Pid>,
+    )>,
+    surrealdb::Error,
+> {
     use automatafl_logic::Pid;
+    use std::collections::HashMap;
 
     let game_record = match get_game(db, game_id).await? {
         Some(g) => g,
@@ -674,7 +726,8 @@ pub async fn update_player_profile(
     bio: Option<String>,
     avatar_url: Option<String>,
 ) -> Result<(), surrealdb::Error> {
-    let _: Option<PlayerRecord> = db.update(("players", player_id.to_string()))
+    let _: Option<PlayerRecord> = db
+        .update(("players", player_id.to_string()))
         .merge(serde_json::json!({
             "bio": bio,
             "avatar_url": avatar_url,
@@ -690,7 +743,8 @@ pub async fn update_player_elo(
     player_id: Uuid,
     new_elo: i32,
 ) -> Result<(), surrealdb::Error> {
-    let _: Option<PlayerRecord> = db.update(("players", player_id.to_string()))
+    let _: Option<PlayerRecord> = db
+        .update(("players", player_id.to_string()))
         .merge(serde_json::json!({
             "elo_rating": new_elo,
         }))
@@ -704,11 +758,10 @@ pub async fn get_leaderboard_by_elo(
     db: &Surreal<Any>,
     limit: usize,
 ) -> Result<Vec<(PlayerRecord, usize)>, surrealdb::Error> {
-    let mut result = db.query(
-        "SELECT * FROM players ORDER BY elo_rating DESC LIMIT $limit"
-    )
-    .bind(("limit", limit))
-    .await?;
+    let mut result = db
+        .query("SELECT * FROM players ORDER BY elo_rating DESC LIMIT $limit")
+        .bind(("limit", limit))
+        .await?;
 
     let players: Vec<PlayerRecord> = result.take(0)?;
     let ranked: Vec<(PlayerRecord, usize)> = players
@@ -725,13 +778,14 @@ pub async fn get_leaderboard_by_wins(
     db: &Surreal<Any>,
     limit: usize,
 ) -> Result<Vec<(PlayerRecord, PlayerStatsRecord, usize)>, surrealdb::Error> {
-    let mut result = db.query(
-        "SELECT players.*, player_stats.* FROM players
+    let mut result = db
+        .query(
+            "SELECT players.*, player_stats.* FROM players
          INNER JOIN player_stats ON players.id = player_stats.player_id
-         ORDER BY player_stats.games_won DESC LIMIT $limit"
-    )
-    .bind(("limit", limit))
-    .await?;
+         ORDER BY player_stats.games_won DESC LIMIT $limit",
+        )
+        .bind(("limit", limit))
+        .await?;
 
     #[derive(serde::Deserialize)]
     struct JoinResult {
@@ -756,13 +810,14 @@ pub async fn get_leaderboard_by_games(
     db: &Surreal<Any>,
     limit: usize,
 ) -> Result<Vec<(PlayerRecord, PlayerStatsRecord, usize)>, surrealdb::Error> {
-    let mut result = db.query(
-        "SELECT players.*, player_stats.* FROM players
+    let mut result = db
+        .query(
+            "SELECT players.*, player_stats.* FROM players
          INNER JOIN player_stats ON players.id = player_stats.player_id
-         ORDER BY player_stats.games_played DESC LIMIT $limit"
-    )
-    .bind(("limit", limit))
-    .await?;
+         ORDER BY player_stats.games_played DESC LIMIT $limit",
+        )
+        .bind(("limit", limit))
+        .await?;
 
     #[derive(serde::Deserialize)]
     struct JoinResult {
@@ -811,7 +866,8 @@ pub async fn leave_matchmaking_queue(
     db: &Surreal<Any>,
     player_id: Uuid,
 ) -> Result<(), surrealdb::Error> {
-    db.delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string())).await?;
+    db.delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string()))
+        .await?;
     Ok(())
 }
 
@@ -820,7 +876,8 @@ pub async fn get_matchmaking_status(
     db: &Surreal<Any>,
     player_id: Uuid,
 ) -> Result<Option<MatchmakingQueueRecord>, surrealdb::Error> {
-    db.select(("matchmaking_queue", player_id.to_string())).await
+    db.select(("matchmaking_queue", player_id.to_string()))
+        .await
 }
 
 /// Get all players in matchmaking queue
@@ -837,7 +894,9 @@ pub async fn remove_from_queue(
     player_ids: Vec<Uuid>,
 ) -> Result<(), surrealdb::Error> {
     for player_id in player_ids {
-        let _ = db.delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string())).await;
+        let _ = db
+            .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", player_id.to_string()))
+            .await;
     }
     Ok(())
 }

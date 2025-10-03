@@ -83,7 +83,10 @@ impl Config {
             if let Ok(val) = tolerance.parse() {
                 config.matchmaking_elo_tolerance = val;
             } else {
-                tracing::warn!("Invalid MATCHMAKING_ELO_TOLERANCE: {}, using default", tolerance);
+                tracing::warn!(
+                    "Invalid MATCHMAKING_ELO_TOLERANCE: {}, using default",
+                    tolerance
+                );
             }
         }
 
@@ -101,6 +104,9 @@ impl Config {
             tracing::info!("  Metrics address: {}", self.metrics_bind_address);
         }
         tracing::info!("  Matchmaking interval: {}s", self.matchmaking_interval);
-        tracing::info!("  Matchmaking ELO tolerance: {}", self.matchmaking_elo_tolerance);
+        tracing::info!(
+            "  Matchmaking ELO tolerance: {}",
+            self.matchmaking_elo_tolerance
+        );
     }
 }

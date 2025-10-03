@@ -1,5 +1,5 @@
 use crate::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Game {
@@ -161,7 +161,7 @@ impl Game {
 
                 for m in &moves_to_apply {
                     self.board.mark_passable(m.from);
-                    self.board.mark_passable(m.to);  // Align with Python: mark destination too
+                    self.board.mark_passable(m.to); // Align with Python: mark destination too
                 }
 
                 let mut results = SmallVec::with_capacity(moves_to_apply.len());
@@ -201,7 +201,7 @@ impl Game {
                     }
                     None => {
                         self.board.clear_marks();
-                        self.locked_players.clear();  // Clear locked players for next round
+                        self.locked_players.clear(); // Clear locked players for next round
                         self.round = RoundState::Fresh;
                     }
                 }
@@ -305,7 +305,7 @@ impl Game {
         } else {
             // Equal priority: apply column rule if enabled
             if self.use_column_rule {
-                x_decision.delta(Delta::XP)  // Column rule: prefer X axis
+                x_decision.delta(Delta::XP) // Column rule: prefer X axis
             } else {
                 info!("avoided applying the column rule - no move");
                 Delta::ZERO

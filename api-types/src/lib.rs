@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use automatafl_logic::{MoveFeedback, MoveResult, Coord, Pid};
-use serde::{Serialize, Deserialize};
+use automatafl_logic::{Coord, MoveFeedback, MoveResult, Pid};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub enum GameLifecycle {
     Finished,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub timestamp: u64,
     pub player_id: Uuid,
@@ -42,11 +42,11 @@ pub enum GameEventData {
         player_pid: Pid,
         displayname: String,
     },
-    
+
     /// Game has started
     #[serde(rename = "GAME_STARTED")]
     GameStarted,
-    
+
     /// Player's move was acknowledged
     #[serde(rename = "MOVE_ACK")]
     MoveAcknowledged {
@@ -54,14 +54,14 @@ pub enum GameEventData {
         from: Coord,
         to: Coord,
     },
-    
+
     /// Player's move was invalid
     #[serde(rename = "MOVE_INVALID")]
     MoveInvalid {
         player_pid: Pid,
         feedback: MoveFeedback,
     },
-    
+
     /// Move was executed
     #[serde(rename = "MOVE")]
     Move {
@@ -70,36 +70,30 @@ pub enum GameEventData {
         to: Coord,
         result: MoveResult,
     },
-    
+
     /// Automaton stepped to new location
     #[serde(rename = "AUTOMATON_STEP")]
-    AutomatonStep {
-        location: Coord,
-    },
-    
+    AutomatonStep { location: Coord },
+
     /// Game has ended
     #[serde(rename = "GAME_OVER")]
-    GameOver {
-        winner: Pid,
-    },
-    
+    GameOver { winner: Pid },
+
     /// ELO ratings updated
     #[serde(rename = "ELO_UPDATE")]
-    EloUpdate {
-        changes: Vec<EloChange>,
-    },
-    
+    EloUpdate { changes: Vec<EloChange> },
+
     /// Round completed successfully
     #[serde(rename = "ROUND_COMPLETE")]
     RoundComplete,
-    
+
     /// Conflicts occurred during round
     #[serde(rename = "CONFLICTS")]
     Conflicts {
         locked_players: Vec<Pid>,
         conflict_coords: Vec<Coord>,
     },
-    
+
     /// Chat message
     #[serde(rename = "CHAT")]
     Chat {
@@ -108,18 +102,16 @@ pub enum GameEventData {
         displayname: String,
         message: String,
     },
-    
+
     /// Game loaded from snapshot
     #[serde(rename = "GAME_LOADED")]
-    GameLoaded {
-        snapshot_index: usize,
-    },
-    
+    GameLoaded { snapshot_index: usize },
+
     /// Full game state (WebSocket initial message)
     #[serde(rename = "STATE")]
     State {
         lifecycle: GameLifecycle,
-        game: automatafl_logic::Game,
+        game: Box<automatafl_logic::Game>,
         player_ids: HashMap<Uuid, Pid>,
     },
 }
@@ -173,7 +165,7 @@ pub struct LoginResponse {
     pub player_id: Uuid,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameListItem {
     pub id: Uuid,
     pub lifecycle: GameLifecycle,
@@ -183,33 +175,33 @@ pub struct GameListItem {
     pub created_by: Uuid,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateGameRequest {
     pub player_count: u8,
     pub use_column_rule: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameStateResponse {
     pub lifecycle: GameLifecycle,
     pub game: automatafl_logic::Game,
     pub player_ids: HashMap<Uuid, automatafl_logic::Pid>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PerformMove {
     pub from: automatafl_logic::Coord,
     pub to: automatafl_logic::Coord,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoveResultResponse {
     pub feedback: MoveFeedback,
     pub ready_to_complete: bool,
     pub auto_completed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompleteRoundResponse {
     pub success: bool,
     pub message: String,
@@ -241,24 +233,24 @@ pub struct SnapshotInfo {
     pub timestamp: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerListItem {
     pub id: Uuid,
     pub displayname: String,
     pub is_admin: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub player_id: Uuid,
-    pub expires_at: u64,  // Unix timestamp
+    pub expires_at: u64, // Unix timestamp
 }
 
 // ============================================================================
 // Profile Types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerProfile {
     pub id: Uuid,
     pub displayname: String,
@@ -268,7 +260,7 @@ pub struct PlayerProfile {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerStats {
     pub games_played: u32,
     pub games_won: u32,
@@ -276,7 +268,7 @@ pub struct PlayerStats {
     pub win_rate: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateProfileRequest {
     pub bio: Option<String>,
     pub avatar_url: Option<String>,
@@ -286,12 +278,12 @@ pub struct UpdateProfileRequest {
 // Leaderboard Types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LeaderboardEntry {
     pub rank: usize,
     pub player_id: Uuid,
     pub displayname: String,
-    pub value: i64,  // Primary sort value (ELO, wins, or games played depending on leaderboard type)
+    pub value: i64, // Primary sort value (ELO, wins, or games played depending on leaderboard type)
     // Additional stats for display
     #[serde(default)]
     pub elo_rating: Option<i32>,

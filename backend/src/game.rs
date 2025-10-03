@@ -3,21 +3,21 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    Json,
 };
 use uuid::Uuid;
 
-use automatafl_logic::{Board, Coord, Move, MoveFeedback, Pid};
 use automatafl_api_types::*;
+use automatafl_logic::{Board, Coord, Move, MoveFeedback, Pid};
 use tokio::sync::broadcast;
 
 use crate::common::{
-    AppError, AuthPlayer, PlayerInGame, ServerState, GameChannels, GameSnapshot,
-    timestamp, broadcast_event,
+    AppError, AuthPlayer, GameChannels, GameSnapshot, PlayerInGame, ServerState, broadcast_event,
+    timestamp,
 };
-use crate::db;
+use crate::{db, validation};
 
 // ============================================================================
 // Game Management
@@ -59,7 +59,10 @@ pub async fn create_game(
     auth: AuthPlayer,
     State(state): ServerState,
     Json(req): Json<CreateGameRequest>,
-) -> Json<Uuid> {
+) -> Result<Json<Uuid>, AppError> {
+    // Validate player count
+    validation::validate_player_count(req.player_count)?;
+
     let board = Board::stock_two_player();
 
     let mut game_core = automatafl_logic::Game::new(board, req.player_count, req.use_column_rule);
@@ -76,13 +79,27 @@ pub async fn create_game(
     let lifecycle = GameLifecycle::Waiting;
 
     // Store game in database
-    let _ = db::create_game(&state.db, new_uuid, &game_core, &lifecycle, auth.player_id, req.player_count).await;
+    db::create_game(
+        &state.db,
+        new_uuid,
+        &game_core,
+        &lifecycle,
+        auth.player_id,
+        req.player_count,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to create game: {}", e);
+        AppError::ValidationError("Failed to create game".to_string())
+    })?;
 
     // Create broadcast channel for this game
-    let (event_tx, _) = broadcast::channel(100);
-    state.game_channels.insert(new_uuid, Arc::new(GameChannels { event_tx }));
+    let (event_tx, _) = broadcast::channel(crate::common::EVENT_CHANNEL_SIZE);
+    state
+        .game_channels
+        .insert(new_uuid, Arc::new(GameChannels { event_tx }));
 
-    Json(new_uuid)
+    Ok(Json(new_uuid))
 }
 
 #[tracing::instrument(skip(auth, state), fields(player_id = %auth.player_id, game_id = %game_uuid))]
@@ -129,7 +146,8 @@ pub async fn join_game(
             player_pid: new_player_pid,
             displayname: player_name,
         },
-    ).await?;
+    )
+    .await?;
 
     // Auto-start game when full
     if player_ids.len() + 1 == game_core.player_count as usize {
@@ -137,11 +155,7 @@ pub async fn join_game(
             .await
             .map_err(|_| AppError::NoSuchGame(game_uuid))?;
 
-        broadcast_event(
-            &state,
-            game_uuid,
-            GameEventData::GameStarted,
-        ).await?;
+        broadcast_event(&state, game_uuid, GameEventData::GameStarted).await?;
     }
 
     Ok(Json(new_player_pid))
@@ -212,11 +226,20 @@ pub async fn perform_move(
 ) -> Result<Json<MoveResultResponse>, AppError> {
     let player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
+    // Validate move coordinates
+    crate::validation::validate_move_coords(
+        move_to_make.from.x,
+        move_to_make.from.y,
+        move_to_make.to.x,
+        move_to_make.to.y,
+    )?;
+
     // Load game state
-    let (mut game_core, mut lifecycle, _) = db::load_game_state(&app_state.db, player_in_game.game_uuid)
-        .await
-        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?
-        .ok_or(AppError::NoSuchGame(player_in_game.game_uuid))?;
+    let (mut game_core, mut lifecycle, _) =
+        db::load_game_state(&app_state.db, player_in_game.game_uuid)
+            .await
+            .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?
+            .ok_or(AppError::NoSuchGame(player_in_game.game_uuid))?;
 
     let m = Move {
         who: player_in_game.player_pid,
@@ -226,9 +249,14 @@ pub async fn perform_move(
     let (feedback, ready_to_complete) = game_core.propose_move(m);
 
     // Save updated game state
-    db::update_game_state(&app_state.db, player_in_game.game_uuid, &game_core, &lifecycle)
-        .await
-        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
+    db::update_game_state(
+        &app_state.db,
+        player_in_game.game_uuid,
+        &game_core,
+        &lifecycle,
+    )
+    .await
+    .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
 
     // Broadcast move acknowledgment
     if feedback == MoveFeedback::Committed {
@@ -240,7 +268,8 @@ pub async fn perform_move(
                 from: move_to_make.from,
                 to: move_to_make.to,
             },
-        ).await?;
+        )
+        .await?;
     } else {
         broadcast_event(
             &app_state,
@@ -249,7 +278,8 @@ pub async fn perform_move(
                 player_pid: player_in_game.player_pid,
                 feedback: feedback.clone(),
             },
-        ).await?;
+        )
+        .await?;
     }
 
     let mut auto_completed = false;
@@ -269,7 +299,8 @@ pub async fn perform_move(
                             to: mv.to,
                             result: *result,
                         },
-                    ).await?;
+                    )
+                    .await?;
                 }
 
                 // Broadcast automaton move
@@ -279,28 +310,36 @@ pub async fn perform_move(
                     GameEventData::AutomatonStep {
                         location: game_core.board.automaton_location,
                     },
-                ).await?;
+                )
+                .await?;
 
                 // Check for winner
                 if let Some(winner) = game_core.winner {
                     lifecycle = GameLifecycle::Finished;
-                    
+
                     // Get game creation time for playtime calculation
-                    if let Ok(Some(game_record)) = db::get_game(&app_state.db, player_in_game.game_uuid).await {
+                    if let Ok(Some(game_record)) =
+                        db::get_game(&app_state.db, player_in_game.game_uuid).await
+                    {
                         // Update player stats and ELO ratings
                         match crate::matchmaking::update_game_completion_stats(
                             &app_state.db,
                             player_in_game.game_uuid,
                             winner,
                             game_record.created_at,
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(elo_changes) if !elo_changes.is_empty() => {
                                 // Broadcast ELO changes
                                 let _ = broadcast_event(
                                     &app_state,
                                     player_in_game.game_uuid,
-                                    GameEventData::EloUpdate { changes: elo_changes },
-                                ).await;
+                                    GameEventData::EloUpdate {
+                                        changes: elo_changes,
+                                    },
+                                )
+                                .await;
                             }
                             Err(e) => {
                                 tracing::error!("Failed to update game completion stats: {}", e);
@@ -308,32 +347,51 @@ pub async fn perform_move(
                             _ => {}
                         }
                     }
-                    
+
                     broadcast_event(
                         &app_state,
                         player_in_game.game_uuid,
                         GameEventData::GameOver { winner },
-                    ).await?;
+                    )
+                    .await?;
+
+                    // Clean up game channel after game finishes (prevent memory leak)
+                    app_state.game_channels.remove(&player_in_game.game_uuid);
+                    tracing::info!(
+                        "Cleaned up game channel for finished game: {}",
+                        player_in_game.game_uuid
+                    );
                 } else {
                     broadcast_event(
                         &app_state,
                         player_in_game.game_uuid,
                         GameEventData::RoundComplete,
-                    ).await?;
+                    )
+                    .await?;
                 }
 
                 // Save final state after round completion
-                db::update_game_state(&app_state.db, player_in_game.game_uuid, &game_core, &lifecycle)
-                    .await
-                    .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
+                db::update_game_state(
+                    &app_state.db,
+                    player_in_game.game_uuid,
+                    &game_core,
+                    &lifecycle,
+                )
+                .await
+                .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
 
                 auto_completed = true;
             }
             Err(_) => {
                 // Conflicts occurred - save updated state
-                db::update_game_state(&app_state.db, player_in_game.game_uuid, &game_core, &lifecycle)
-                    .await
-                    .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
+                db::update_game_state(
+                    &app_state.db,
+                    player_in_game.game_uuid,
+                    &game_core,
+                    &lifecycle,
+                )
+                .await
+                .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
 
                 broadcast_event(
                     &app_state,
@@ -342,7 +400,8 @@ pub async fn perform_move(
                         locked_players: game_core.locked_players.to_vec(),
                         conflict_coords: game_core.board.conflict_list.to_vec(),
                     },
-                ).await?;
+                )
+                .await?;
             }
         }
     }
@@ -363,10 +422,11 @@ pub async fn complete_round(
     let player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
 
     // Load game state
-    let (mut game_core, mut lifecycle, _) = db::load_game_state(&app_state.db, player_in_game.game_uuid)
-        .await
-        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?
-        .ok_or(AppError::NoSuchGame(player_in_game.game_uuid))?;
+    let (mut game_core, mut lifecycle, _) =
+        db::load_game_state(&app_state.db, player_in_game.game_uuid)
+            .await
+            .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?
+            .ok_or(AppError::NoSuchGame(player_in_game.game_uuid))?;
 
     match lifecycle {
         GameLifecycle::InProgress => {
@@ -383,7 +443,8 @@ pub async fn complete_round(
                                 to: mv.to,
                                 result: *result,
                             },
-                        ).await?;
+                        )
+                        .await?;
                     }
 
                     // Broadcast automaton move
@@ -393,53 +454,78 @@ pub async fn complete_round(
                         GameEventData::AutomatonStep {
                             location: game_core.board.automaton_location,
                         },
-                    ).await?;
+                    )
+                    .await?;
 
                     // Check if game is now over
                     if let Some(winner) = game_core.winner {
                         lifecycle = GameLifecycle::Finished;
-                        
+
                         // Get game creation time for playtime calculation
-                        if let Ok(Some(game_record)) = db::get_game(&app_state.db, player_in_game.game_uuid).await {
+                        if let Ok(Some(game_record)) =
+                            db::get_game(&app_state.db, player_in_game.game_uuid).await
+                        {
                             // Update player stats and ELO ratings
                             match crate::matchmaking::update_game_completion_stats(
                                 &app_state.db,
                                 player_in_game.game_uuid,
                                 winner,
                                 game_record.created_at,
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(elo_changes) if !elo_changes.is_empty() => {
                                     // Broadcast ELO changes
                                     let _ = broadcast_event(
                                         &app_state,
                                         player_in_game.game_uuid,
-                                        GameEventData::EloUpdate { changes: elo_changes },
-                                    ).await;
+                                        GameEventData::EloUpdate {
+                                            changes: elo_changes,
+                                        },
+                                    )
+                                    .await;
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to update game completion stats: {}", e);
+                                    tracing::error!(
+                                        "Failed to update game completion stats: {}",
+                                        e
+                                    );
                                 }
                                 _ => {}
                             }
                         }
-                        
+
                         broadcast_event(
                             &app_state,
                             player_in_game.game_uuid,
                             GameEventData::GameOver { winner },
-                        ).await?;
+                        )
+                        .await?;
+
+                        // Clean up game channel after game finishes (prevent memory leak)
+                        app_state.game_channels.remove(&player_in_game.game_uuid);
+                        tracing::info!(
+                            "Cleaned up game channel for finished game: {}",
+                            player_in_game.game_uuid
+                        );
                     } else {
                         broadcast_event(
                             &app_state,
                             player_in_game.game_uuid,
                             GameEventData::RoundComplete,
-                        ).await?;
+                        )
+                        .await?;
                     }
 
                     // Save updated state
-                    db::update_game_state(&app_state.db, player_in_game.game_uuid, &game_core, &lifecycle)
-                        .await
-                        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
+                    db::update_game_state(
+                        &app_state.db,
+                        player_in_game.game_uuid,
+                        &game_core,
+                        &lifecycle,
+                    )
+                    .await
+                    .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
 
                     Ok(Json(CompleteRoundResponse {
                         success: true,
@@ -448,9 +534,14 @@ pub async fn complete_round(
                 }
                 Err(_) => {
                     // Save state with conflicts
-                    db::update_game_state(&app_state.db, player_in_game.game_uuid, &game_core, &lifecycle)
-                        .await
-                        .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
+                    db::update_game_state(
+                        &app_state.db,
+                        player_in_game.game_uuid,
+                        &game_core,
+                        &lifecycle,
+                    )
+                    .await
+                    .map_err(|_| AppError::NoSuchGame(player_in_game.game_uuid))?;
 
                     broadcast_event(
                         &app_state,
@@ -459,7 +550,8 @@ pub async fn complete_round(
                             locked_players: game_core.locked_players.to_vec(),
                             conflict_coords: game_core.board.conflict_list.to_vec(),
                         },
-                    ).await?;
+                    )
+                    .await?;
 
                     Ok(Json(CompleteRoundResponse {
                         success: false,
@@ -484,6 +576,9 @@ pub async fn post_chat(
     Json(req): Json<PostChatRequest>,
 ) -> Result<Json<PostChatResponse>, AppError> {
     let player_in_game = PlayerInGame::extract(auth, game_uuid, &app_state).await?;
+
+    // Validate chat message
+    crate::validation::validate_chat_message(&req.message)?;
 
     // Get player name
     let player = db::get_player(&app_state.db, player_in_game.player_uuid)
@@ -516,7 +611,8 @@ pub async fn post_chat(
             displayname: player_name,
             message: req.message,
         },
-    ).await?;
+    )
+    .await?;
 
     Ok(Json(PostChatResponse { timestamp: ts }))
 }
@@ -624,9 +720,15 @@ pub async fn save_game(
 
     // Save snapshot
     let snapshot_json = serde_json::to_string(&snapshot).unwrap();
-    db::save_snapshot(&app_state.db, game_uuid, index, snapshot.timestamp, &snapshot_json)
-        .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+    db::save_snapshot(
+        &app_state.db,
+        game_uuid,
+        index,
+        snapshot.timestamp,
+        &snapshot_json,
+    )
+    .await
+    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
 
     Ok(Json(SaveGameResponse {
         snapshot_index: index,
@@ -672,16 +774,22 @@ pub async fn load_game(
         .map_err(|_| AppError::NoSuchSnapshot(game_uuid))?;
 
     // Update game state in database
-    db::update_game_state(&app_state.db, game_uuid, &snapshot.core, &snapshot.lifecycle)
-        .await
-        .map_err(|_| AppError::NoSuchGame(game_uuid))?;
+    db::update_game_state(
+        &app_state.db,
+        game_uuid,
+        &snapshot.core,
+        &snapshot.lifecycle,
+    )
+    .await
+    .map_err(|_| AppError::NoSuchGame(game_uuid))?;
 
     // Broadcast event
     broadcast_event(
         &app_state,
         game_uuid,
         GameEventData::GameLoaded { snapshot_index },
-    ).await?;
+    )
+    .await?;
 
     Ok(StatusCode::OK)
 }

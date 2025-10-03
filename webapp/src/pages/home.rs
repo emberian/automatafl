@@ -14,7 +14,7 @@ pub fn HomePage() -> impl IntoView {
                 <p class="hero-subtitle">
                     "A strategic particle movement game where you compete to guide the automaton to your goal"
                 </p>
-                
+
                 <div class="hero-actions">
                     <Show
                         when=is_authenticated
@@ -39,7 +39,7 @@ pub fn HomePage() -> impl IntoView {
                     </Show>
                 </div>
             </section>
-            
+
             <section class="features">
                 <h2>"Game Features"</h2>
                 <div class="feature-grid">
@@ -48,13 +48,13 @@ pub fn HomePage() -> impl IntoView {
                         <h3>"Strategic Gameplay"</h3>
                         <p>"Move particles to influence the automaton and reach your goal"</p>
                     </div>
-                    
+
                     <div class="feature-card">
                         <div class="feature-icon">{"⚛️"}</div>
                         <h3>"Particle Mechanics"</h3>
                         <p>"Attractors and repulsors affect the automaton each round"</p>
                     </div>
-                    
+
                     <div class="feature-card">
                         <div class="feature-icon">{"💬"}</div>
                         <h3>"In-game Chat"</h3>
@@ -62,7 +62,7 @@ pub fn HomePage() -> impl IntoView {
                     </div>
                 </div>
             </section>
-            
+
             <section class="how-to-play">
                 <h2>"How to Play"</h2>
                 <div class="instructions">
@@ -73,7 +73,7 @@ pub fn HomePage() -> impl IntoView {
                             <p>"Each player has a goal position on the board. Guide the automaton to your goal to win!"</p>
                         </div>
                     </div>
-                    
+
                     <div class="instruction-step">
                         <div class="step-number">"2"</div>
                         <div class="step-content">
@@ -81,7 +81,7 @@ pub fn HomePage() -> impl IntoView {
                             <p>"On your turn, move any particle (attractors or repulsors) to a new position"</p>
                         </div>
                     </div>
-                    
+
                     <div class="instruction-step">
                         <div class="step-number">"3"</div>
                         <div class="step-content">
@@ -89,7 +89,7 @@ pub fn HomePage() -> impl IntoView {
                             <p>"After both players move, the automaton moves based on the forces from all particles"</p>
                         </div>
                     </div>
-                    
+
                     <div class="instruction-step">
                         <div class="step-number">"4"</div>
                         <div class="step-content">
@@ -99,7 +99,7 @@ pub fn HomePage() -> impl IntoView {
                     </div>
                 </div>
             </section>
-            
+
             <section class="particle-types">
                 <h2>"Particle Types"</h2>
                 <div class="particle-grid">
@@ -108,13 +108,13 @@ pub fn HomePage() -> impl IntoView {
                         <h3>"Attractor"</h3>
                         <p>"Pulls the automaton towards itself with a force that decreases with distance"</p>
                     </div>
-                    
+
                     <div class="particle-card">
                         <div class="particle-visual repulsor">{"⊖"}</div>
                         <h3>"Repulsor"</h3>
                         <p>"Pushes the automaton away with a force that decreases with distance"</p>
                     </div>
-                    
+
                     <div class="particle-card">
                         <div class="particle-visual automaton">{"◉"}</div>
                         <h3>"Automaton"</h3>

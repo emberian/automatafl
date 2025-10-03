@@ -1,26 +1,26 @@
 // GameInfo component - displays game status and player information
 use crate::state::AppState;
-use automatafl_api_types::{GameStateResponse, GameLifecycle};
+use automatafl_api_types::{GameLifecycle, GameStateResponse};
 use leptos::prelude::*;
 
 #[component]
 pub fn GameInfo(game_state: GameStateResponse) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
+
     let (status_text, status_class, status_icon) = match game_state.lifecycle {
         GameLifecycle::Waiting => ("Waiting for Players", "status-waiting", "⏳"),
         GameLifecycle::InProgress => ("Game in Progress", "status-active", "▶️"),
         GameLifecycle::Finished => ("Game Finished", "status-finished", "🏁"),
     };
-    
+
     let player_count = game_state.player_ids.len();
     let max_players = game_state.game.player_count;
     let pending_moves = game_state.game.pending_moves.len();
-    
+
     // Get player names if available
     let current_player_id = app_state.current_player_id.get();
     let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
-    
+
     view! {
         <div class="game-info">
             <div class="game-status-bar">
@@ -51,7 +51,7 @@ pub fn GameInfo(game_state: GameStateResponse) -> impl IntoView {
                     </span>
                 </div>
             </div>
-            
+
             {if let Some(my_pid) = my_pid {
                 view! {
                     <div class="player-identity">
@@ -66,7 +66,7 @@ pub fn GameInfo(game_state: GameStateResponse) -> impl IntoView {
                     </div>
                 }.into_any()
             }}
-            
+
             <Show when=move || game_state.game.winner.is_some()>
                 <div class="winner-announcement">
                     <div class="winner-content">

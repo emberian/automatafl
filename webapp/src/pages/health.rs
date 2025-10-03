@@ -1,25 +1,14 @@
-use crate::{api::ApiClient, state::AppState};
+use crate::helpers::create_refreshable_resource;
 use leptos::prelude::*;
 
 #[component]
 pub fn HealthDashboardPage() -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
-    
-    let api_base_url = app_state.api_base_url.clone();
-    let health_resource = LocalResource::new(
-        move || {
-            // Track refresh_trigger to make resource reactive
-            let _ = refresh_trigger.get();
-            let api_base_url = api_base_url.clone();
-            async move {
-                let client = ApiClient::new(api_base_url);
-                client.health_check().await
-            }
-        }
-    );
-    
+
+    let health_resource = create_refreshable_resource(refresh_trigger, |client| async move {
+        client.health_check().await
+    });
+
     let refresh = move |_| {
         set_refresh_trigger.update(|n| *n += 1);
     };
@@ -34,7 +23,7 @@ pub fn HealthDashboardPage() -> impl IntoView {
                     </button>
                 </div>
             </div>
-            
+
             <Suspense fallback=move || view! {
                 <div class="loading-state">
                     <div class="spinner"></div>

@@ -1,6 +1,6 @@
 //! Common types, extractors, and utilities shared across all modules
 
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, fmt, sync::Arc, time::SystemTime};
 
 use automatafl_api_types::*;
 use automatafl_logic::Pid;
@@ -8,16 +8,35 @@ use dashmap::DashMap;
 use uuid::Uuid;
 
 use axum::{
-    extract::{FromRequestParts, ws::{WebSocket, Message}},
+    extract::{
+        FromRequestParts,
+        ws::{Message, WebSocket},
+    },
     http::{Response, StatusCode, request::Parts},
     response::IntoResponse,
 };
 
-use futures::{stream::StreamExt, SinkExt};
-use tokio::sync::broadcast;
+use futures::{SinkExt, stream::StreamExt};
 use std::time::Duration;
+use tokio::sync::broadcast;
 
 use crate::db;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// ELO K-factor for rating calculations
+pub const ELO_K_FACTOR: f64 = 32.0;
+
+/// Default starting ELO rating
+pub const DEFAULT_ELO: i32 = 1200;
+
+/// Broadcast channel size for game events
+pub const EVENT_CHANNEL_SIZE: usize = 100;
+
+/// WebSocket heartbeat interval
+pub const WEBSOCKET_PING_INTERVAL: Duration = Duration::from_secs(30);
 
 // ============================================================================
 // State Types
@@ -110,7 +129,7 @@ impl FromRequestParts<Arc<AppState>> for AdminPlayer {
         let player = db::get_player(&state.db, auth_player.player_id)
             .await
             .map_err(|_| AppError::NoSuchPlayer(auth_player.player_id))?
-            .ok_or_else(|| AppError::NoSuchPlayer(auth_player.player_id))?;
+            .ok_or(AppError::NoSuchPlayer(auth_player.player_id))?;
 
         if !player.is_admin {
             return Err(AppError::Forbidden);
@@ -177,10 +196,33 @@ pub enum AppError {
     GameNotInProgress,
     NotInGame(Uuid, Uuid),
     NoSuchSnapshot(Uuid),
+    ValidationError(String),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
+        // Log errors for observability
+        match &self {
+            AppError::NoSuchGame(uuid) => {
+                tracing::debug!("Error: No such game: {}", uuid);
+            }
+            AppError::NoSuchPlayer(uuid) => {
+                tracing::debug!("Error: No such player: {}", uuid);
+            }
+            AppError::Unauthorized | AppError::SessionExpired | AppError::InvalidCredentials => {
+                tracing::info!("Authentication error: {}", self);
+            }
+            AppError::Forbidden => {
+                tracing::warn!("Authorization error: {}", self);
+            }
+            AppError::ValidationError(msg) => {
+                tracing::info!("Validation error: {}", msg);
+            }
+            _ => {
+                tracing::debug!("Application error: {}", self);
+            }
+        }
+
         match self {
             AppError::NoSuchGame(uuid) => Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -230,6 +272,35 @@ impl IntoResponse for AppError {
                 .status(StatusCode::NOT_FOUND)
                 .body(format!("No such snapshot for game: {}", uuid).into())
                 .unwrap(),
+            AppError::ValidationError(msg) => Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(format!("Validation error: {}", msg).into())
+                .unwrap(),
+        }
+    }
+}
+
+// Implement std::error::Error for AppError
+impl std::error::Error for AppError {}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::NoSuchGame(uuid) => write!(f, "No such game: {}", uuid),
+            AppError::NoSuchPlayer(uuid) => write!(f, "No such player: {}", uuid),
+            AppError::PlayerAlreadyExists(uuid) => write!(f, "Player already exists: {}", uuid),
+            AppError::GameFull(uuid) => write!(f, "Game already full: {}", uuid),
+            AppError::Unauthorized => write!(f, "Unauthorized"),
+            AppError::SessionExpired => write!(f, "Session expired"),
+            AppError::Forbidden => write!(f, "Forbidden"),
+            AppError::InvalidCredentials => write!(f, "Invalid credentials"),
+            AppError::DisplaynameTaken(name) => write!(f, "Displayname already taken: {}", name),
+            AppError::GameNotInProgress => write!(f, "Game is not in progress"),
+            AppError::NotInGame(player, game) => {
+                write!(f, "Player {} not in game {}", player, game)
+            }
+            AppError::NoSuchSnapshot(uuid) => write!(f, "No such snapshot for game: {}", uuid),
+            AppError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }
 }
@@ -254,81 +325,116 @@ pub async fn broadcast_event(
 
     // Extract kind and data for database storage
     let (kind, data) = match &event_data {
-        GameEventData::PlayerJoined { player_id, player_pid, displayname } => {
-            ("PLAYER_JOINED", serde_json::json!({
+        GameEventData::PlayerJoined {
+            player_id,
+            player_pid,
+            displayname,
+        } => (
+            "PLAYER_JOINED",
+            serde_json::json!({
                 "player_id": player_id,
                 "player_pid": player_pid,
                 "displayname": displayname,
-            }))
-        }
-        GameEventData::GameStarted => {
-            ("GAME_STARTED", serde_json::json!({}))
-        }
-        GameEventData::MoveAcknowledged { player_pid, from, to } => {
-            ("MOVE_ACK", serde_json::json!({
+            }),
+        ),
+        GameEventData::GameStarted => ("GAME_STARTED", serde_json::json!({})),
+        GameEventData::MoveAcknowledged {
+            player_pid,
+            from,
+            to,
+        } => (
+            "MOVE_ACK",
+            serde_json::json!({
                 "player_pid": player_pid,
                 "from": from,
                 "to": to,
-            }))
-        }
-        GameEventData::MoveInvalid { player_pid, feedback } => {
-            ("MOVE_INVALID", serde_json::json!({
+            }),
+        ),
+        GameEventData::MoveInvalid {
+            player_pid,
+            feedback,
+        } => (
+            "MOVE_INVALID",
+            serde_json::json!({
                 "player_pid": player_pid,
                 "feedback": feedback,
-            }))
-        }
-        GameEventData::Move { player_pid, from, to, result } => {
-            ("MOVE", serde_json::json!({
+            }),
+        ),
+        GameEventData::Move {
+            player_pid,
+            from,
+            to,
+            result,
+        } => (
+            "MOVE",
+            serde_json::json!({
                 "player_pid": player_pid,
                 "from": from,
                 "to": to,
                 "result": result,
-            }))
-        }
-        GameEventData::AutomatonStep { location } => {
-            ("AUTOMATON_STEP", serde_json::json!({
+            }),
+        ),
+        GameEventData::AutomatonStep { location } => (
+            "AUTOMATON_STEP",
+            serde_json::json!({
                 "location": location,
-            }))
-        }
-        GameEventData::GameOver { winner } => {
-            ("GAME_OVER", serde_json::json!({
+            }),
+        ),
+        GameEventData::GameOver { winner } => (
+            "GAME_OVER",
+            serde_json::json!({
                 "winner": winner,
-            }))
-        }
-        GameEventData::EloUpdate { changes } => {
-            ("ELO_UPDATE", serde_json::json!({
+            }),
+        ),
+        GameEventData::EloUpdate { changes } => (
+            "ELO_UPDATE",
+            serde_json::json!({
                 "changes": changes,
-            }))
-        }
-        GameEventData::RoundComplete => {
-            ("ROUND_COMPLETE", serde_json::json!({}))
-        }
-        GameEventData::Conflicts { locked_players, conflict_coords } => {
-            ("CONFLICTS", serde_json::json!({
+            }),
+        ),
+        GameEventData::RoundComplete => ("ROUND_COMPLETE", serde_json::json!({})),
+        GameEventData::Conflicts {
+            locked_players,
+            conflict_coords,
+        } => (
+            "CONFLICTS",
+            serde_json::json!({
                 "locked_players": locked_players,
                 "conflict_coords": conflict_coords,
-            }))
-        }
-        GameEventData::Chat { timestamp, player_id, displayname, message } => {
-            ("CHAT", serde_json::json!({
+            }),
+        ),
+        GameEventData::Chat {
+            timestamp,
+            player_id,
+            displayname,
+            message,
+        } => (
+            "CHAT",
+            serde_json::json!({
                 "timestamp": timestamp,
                 "player_id": player_id,
                 "displayname": displayname,
                 "message": message,
-            }))
-        }
-        GameEventData::GameLoaded { snapshot_index } => {
-            ("GAME_LOADED", serde_json::json!({
+            }),
+        ),
+        GameEventData::GameLoaded { snapshot_index } => (
+            "GAME_LOADED",
+            serde_json::json!({
                 "snapshot_index": snapshot_index,
-            }))
-        }
-        GameEventData::State { lifecycle, game, player_ids } => {
-            ("STATE", serde_json::json!({
+            }),
+        ),
+        GameEventData::State {
+            lifecycle,
+            game,
+            player_ids,
+        } => (
+            "STATE",
+            serde_json::json!({
                 "lifecycle": lifecycle,
                 "game": game,
                 "player_ids": player_ids,
-            }))
-        }
+            }),
+        ),
     };
 
     // Store event in database
@@ -355,7 +461,7 @@ pub async fn broadcast_event(
 pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: Uuid) {
     // Get or create game channel
     let channels = state.game_channels.entry(game_uuid).or_insert_with(|| {
-        let (event_tx, _) = broadcast::channel(100);
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
         Arc::new(GameChannels { event_tx })
     });
 
@@ -382,7 +488,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
                 let event = GameEvent {
                     data: GameEventData::State {
                         lifecycle,
-                        game: game_state,
+                        game: Box::new(game_state),
                         player_ids,
                     },
                     timestamp: Some(timestamp()),
@@ -396,7 +502,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
 
     // Spawn task to receive events and forward to websocket with heartbeat
     let mut send_task = tokio::spawn(async move {
-        let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(30));
+        let mut heartbeat_interval = tokio::time::interval(WEBSOCKET_PING_INTERVAL);
         loop {
             tokio::select! {
                 event_result = rx.recv() => {
@@ -445,4 +551,67 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
         _ = (&mut send_task) => recv_task.abort(),
         _ = (&mut recv_task) => send_task.abort(),
     }
+}
+
+/// Spawn a background task to clean up stale game channels
+/// Removes channels for games that no longer exist or are finished
+pub fn spawn_game_channel_cleanup(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Every 5 minutes
+        loop {
+            interval.tick().await;
+
+            let channel_count_before = state.game_channels.len();
+            let mut removed = 0;
+
+            // Check each game channel
+            let game_ids: Vec<Uuid> = state
+                .game_channels
+                .iter()
+                .map(|entry| *entry.key())
+                .collect();
+
+            for game_id in game_ids {
+                // Check if game still exists and isn't finished
+                match db::get_game(&state.db, game_id).await {
+                    Ok(Some(game)) => {
+                        if let Ok(lifecycle) =
+                            serde_json::from_str::<GameLifecycle>(&game.lifecycle)
+                        {
+                            if lifecycle == GameLifecycle::Finished {
+                                state.game_channels.remove(&game_id);
+                                removed += 1;
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // Game doesn't exist, remove channel
+                        state.game_channels.remove(&game_id);
+                        removed += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to check game {} status during cleanup: {}",
+                            game_id,
+                            e
+                        );
+                    }
+                }
+            }
+
+            if removed > 0 {
+                tracing::info!(
+                    "Game channel cleanup: removed {} stale channels ({} -> {})",
+                    removed,
+                    channel_count_before,
+                    state.game_channels.len()
+                );
+            } else {
+                tracing::debug!(
+                    "Game channel cleanup: no stale channels found ({} active)",
+                    state.game_channels.len()
+                );
+            }
+        }
+    })
 }

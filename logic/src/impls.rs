@@ -312,8 +312,16 @@ mod tests {
         let p1 = Pid(1);
 
         // Both players try to move to same destination - should conflict
-        let move1 = Move { who: p0, from: Coord { x: 0, y: 2 }, to: Coord { x: 1, y: 2 } };
-        let move2 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 2 } };
+        let move1 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 2 },
+            to: Coord { x: 1, y: 2 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 2 },
+        };
 
         game.board.place(move1.from, Particle::Attractor);
         game.board.place(move2.from, Particle::Repulsor);
@@ -348,8 +356,16 @@ mod tests {
 
         // Both players try to move the same piece - should conflict
         let shared_source = Coord { x: 1, y: 3 };
-        let move1 = Move { who: p0, from: shared_source, to: Coord { x: 0, y: 3 } };
-        let move2 = Move { who: p1, from: shared_source, to: Coord { x: 1, y: 4 } };
+        let move1 = Move {
+            who: p0,
+            from: shared_source,
+            to: Coord { x: 0, y: 3 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: shared_source,
+            to: Coord { x: 1, y: 4 },
+        };
 
         game.board.place(shared_source, Particle::Attractor);
 
@@ -381,9 +397,21 @@ mod tests {
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
         game.board.place(Coord { x: 3, y: 1 }, Particle::Attractor);
 
-        let move1 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 1, y: 1 } };
-        let move2 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 1 } }; // Conflicts with P0
-        let move3 = Move { who: p2, from: Coord { x: 3, y: 1 }, to: Coord { x: 3, y: 0 } }; // No conflict
+        let move1 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 1, y: 1 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 1 },
+        }; // Conflicts with P0
+        let move3 = Move {
+            who: p2,
+            from: Coord { x: 3, y: 1 },
+            to: Coord { x: 3, y: 0 },
+        }; // No conflict
 
         let (_, _) = game.propose_move(move1);
         let (_, _) = game.propose_move(move2);
@@ -408,8 +436,16 @@ mod tests {
         game.board.place(Coord { x: 0, y: 1 }, Particle::Attractor);
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
 
-        let move4 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 0, y: 0 } };
-        let move5 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 4 } };
+        let move4 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 0, y: 0 },
+        };
+        let move5 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 4 },
+        };
 
         let (_, _) = game.propose_move(move4);
         let (_, ready2) = game.propose_move(move5);
@@ -432,8 +468,16 @@ mod tests {
         game.board.place(Coord { x: 0, y: 1 }, Particle::Attractor);
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
 
-        let move1 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 1, y: 1 } };
-        let move2 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 1 } };
+        let move1 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 1, y: 1 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 1 },
+        };
 
         let (fb1, ready_after_1) = game.propose_move(move1);
         let (fb2, ready_after_2) = game.propose_move(move2);
@@ -448,12 +492,20 @@ mod tests {
 
         // Now conflicted players should be able to resubmit
         // But they can't use the conflicted square
-        let move3 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 0, y: 0 } };
+        let move3 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 0, y: 0 },
+        };
         let (fb3, _) = game.propose_move(move3);
         assert_eq!(fb3, MoveFeedback::Committed); // Should work now
 
         // P1 also needs to resubmit
-        let move4 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 4 } };
+        let move4 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 4 },
+        };
         let (fb4, ready) = game.propose_move(move4);
         assert_eq!(fb4, MoveFeedback::Committed);
         assert!(ready, "Should be ready after both players resubmit");
@@ -474,8 +526,16 @@ mod tests {
         game.board.place(Coord { x: 1, y: 1 }, Particle::Attractor);
         game.board.place(Coord { x: 2, y: 1 }, Particle::Repulsor);
 
-        let move1 = Move { who: p0, from: Coord { x: 1, y: 1 }, to: Coord { x: 2, y: 1 } };
-        let move2 = Move { who: p1, from: Coord { x: 2, y: 1 }, to: Coord { x: 1, y: 1 } };
+        let move1 = Move {
+            who: p0,
+            from: Coord { x: 1, y: 1 },
+            to: Coord { x: 2, y: 1 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: Coord { x: 2, y: 1 },
+            to: Coord { x: 1, y: 1 },
+        };
 
         game.propose_move(move1);
         game.propose_move(move2);
@@ -501,9 +561,21 @@ mod tests {
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
         game.board.place(Coord { x: 3, y: 1 }, Particle::Attractor);
 
-        let (_, _) = game.propose_move(Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 1, y: 1 } });
-        let (_, _) = game.propose_move(Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 1 } });
-        let (_, ready1) = game.propose_move(Move { who: p2, from: Coord { x: 3, y: 1 }, to: Coord { x: 3, y: 0 } });
+        let (_, _) = game.propose_move(Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 1, y: 1 },
+        });
+        let (_, _) = game.propose_move(Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 1 },
+        });
+        let (_, ready1) = game.propose_move(Move {
+            who: p2,
+            from: Coord { x: 3, y: 1 },
+            to: Coord { x: 3, y: 0 },
+        });
 
         assert!(ready1);
 
@@ -516,8 +588,16 @@ mod tests {
         game.board.place(Coord { x: 0, y: 1 }, Particle::Attractor);
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
 
-        let (_, _) = game.propose_move(Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 0, y: 0 } });
-        let (_, ready2) = game.propose_move(Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 4 } });
+        let (_, _) = game.propose_move(Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 0, y: 0 },
+        });
+        let (_, ready2) = game.propose_move(Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 4 },
+        });
 
         assert!(ready2, "Should be ready after conflicted players resubmit");
 
@@ -542,8 +622,16 @@ mod tests {
         game.board.place(Coord { x: 0, y: 1 }, Particle::Attractor);
         game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
 
-        let move1 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 0, y: 0 } };
-        let move2 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 4 } };
+        let move1 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 1 },
+            to: Coord { x: 0, y: 0 },
+        };
+        let move2 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 3 },
+            to: Coord { x: 1, y: 4 },
+        };
 
         let (fb1, _) = game.propose_move(move1);
         let (fb2, ready) = game.propose_move(move2);
@@ -551,30 +639,62 @@ mod tests {
         assert_eq!(fb1, MoveFeedback::Committed);
         assert_eq!(fb2, MoveFeedback::Committed);
         assert!(ready, "Should be ready when both players submitted");
-        assert_eq!(game.pending_moves.len(), 2, "Should have 2 pending moves before round completes");
+        assert_eq!(
+            game.pending_moves.len(),
+            2,
+            "Should have 2 pending moves before round completes"
+        );
 
         // Complete the round successfully
         let result = game.try_complete_round();
         assert!(result.is_ok(), "Round should complete successfully");
 
         // CRITICAL: pending_moves must be cleared for the next round
-        assert_eq!(game.pending_moves.len(), 0, "pending_moves should be cleared after successful round");
-        assert_eq!(game.round, RoundState::Fresh, "Round should be back to Fresh state");
+        assert_eq!(
+            game.pending_moves.len(),
+            0,
+            "pending_moves should be cleared after successful round"
+        );
+        assert_eq!(
+            game.round,
+            RoundState::Fresh,
+            "Round should be back to Fresh state"
+        );
 
         // Now players should be able to submit new moves for the next round
         game.board.place(Coord { x: 0, y: 0 }, Particle::Attractor);
         game.board.place(Coord { x: 1, y: 4 }, Particle::Repulsor);
 
-        let move3 = Move { who: p0, from: Coord { x: 0, y: 0 }, to: Coord { x: 1, y: 0 } };
-        let move4 = Move { who: p1, from: Coord { x: 1, y: 4 }, to: Coord { x: 2, y: 4 } };
+        let move3 = Move {
+            who: p0,
+            from: Coord { x: 0, y: 0 },
+            to: Coord { x: 1, y: 0 },
+        };
+        let move4 = Move {
+            who: p1,
+            from: Coord { x: 1, y: 4 },
+            to: Coord { x: 2, y: 4 },
+        };
 
         let (fb3, _) = game.propose_move(move3);
         let (fb4, ready2) = game.propose_move(move4);
 
-        assert_eq!(fb3, MoveFeedback::Committed, "Should be able to submit new moves");
-        assert_eq!(fb4, MoveFeedback::Committed, "Should be able to submit new moves");
+        assert_eq!(
+            fb3,
+            MoveFeedback::Committed,
+            "Should be able to submit new moves"
+        );
+        assert_eq!(
+            fb4,
+            MoveFeedback::Committed,
+            "Should be able to submit new moves"
+        );
         assert!(ready2, "Should be ready for second round");
-        assert_eq!(game.pending_moves.len(), 2, "Should have 2 new pending moves");
+        assert_eq!(
+            game.pending_moves.len(),
+            2,
+            "Should have 2 new pending moves"
+        );
     }
 }
 
