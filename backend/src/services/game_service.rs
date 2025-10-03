@@ -1,3 +1,4 @@
+use crate::db::as_uuid;
 use crate::repositories::game_repository::GameRepository;
 use crate::repositories::player_repository::{PlayerRepository, PlayerStatsUpdate};
 use automatafl_api_types::{
@@ -318,8 +319,7 @@ impl GameService {
         // Get all player IDs and their PIDs
         let mut players_info: Vec<(Uuid, u8, i32)> = Vec::new();
         for gp in &game_players {
-            let player_uuid = Uuid::parse_str(&gp.player_id)
-                .map_err(|e| ServiceError::SerializationError(e.to_string()))?;
+            let player_uuid = as_uuid(&gp.player_id);
             let player = self
                 .player_repo
                 .get(player_uuid)

@@ -5,9 +5,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::common::{AdminPlayer, AppError, ServerState};
+use crate::{common::{AdminPlayer, AppError, ServerState}, db::as_uuid};
 use crate::db;
 use automatafl_api_types::*;
 
@@ -24,11 +25,13 @@ pub async fn admin_list_players(
     let player_list = players
         .into_iter()
         .filter_map(|p| {
-            Uuid::parse_str(&p.id).ok().map(|id| PlayerListItem {
-                id,
-                displayname: p.displayname,
-                is_admin: p.is_admin,
-            })
+            Uuid::parse_str(&p.id.key().to_string())
+                .ok()
+                .map(|id| PlayerListItem {
+                    id,
+                    displayname: p.displayname,
+                    is_admin: p.is_admin,
+                })
         })
         .collect();
 
@@ -224,7 +227,7 @@ pub async fn admin_get_game(
         lifecycle,
         player_ids,
         created_at: game_record.created_at,
-        created_by: game_record.created_by,
+        created_by: as_uuid(&game_record.created_by).to_string(),
         player_count: game_record.player_count,
     }))
 }
@@ -353,10 +356,8 @@ pub async fn admin_list_sessions(
 
     let mut session_info = Vec::new();
     for session in sessions {
-        if let (Ok(session_id), Ok(player_id)) = (
-            Uuid::parse_str(&session.id),
-            Uuid::parse_str(&session.player_id),
-        ) {
+        let session_id = db::as_uuid(&session.id);
+        let player_id = db::as_uuid(&session.player_id);
             // Get player displayname
             if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
                 session_info.push(AdminSessionInfo {
@@ -366,7 +367,6 @@ pub async fn admin_list_sessions(
                     expires_at: session.expires_at,
                 });
             }
-        }
     }
 
     Ok(Json(session_info))
@@ -398,7 +398,9 @@ pub async fn admin_cleanup_expired_sessions(
         .await
         .map_err(|_| AppError::Unauthorized)?;
 
-    Ok(Json(SessionCleanupResponse { deleted_count: deleted }))
+    Ok(Json(SessionCleanupResponse {
+        deleted_count: deleted,
+    }))
 }
 
 // ============================================================================
@@ -514,9 +516,8 @@ pub async fn admin_list_matchmaking_queue(
     let mut queue_info = Vec::new();
 
     for entry in queue {
-        if let Ok(player_id) = Uuid::parse_str(&entry.player_id)
-            && let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await
-        {
+        let player_id = db::as_uuid(&entry.player_id);
+        if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
             let prefs: JoinMatchmakingRequest = serde_json::from_str(&entry.game_preferences)
                 .unwrap_or(JoinMatchmakingRequest {
                     player_count: 2,
@@ -561,7 +562,7 @@ pub async fn admin_get_player_stats(
         .await
         .map_err(|_| AppError::NoSuchPlayer(player_id))?
         .unwrap_or(db::PlayerStatsRecord {
-            player_id: player_id.to_string(),
+            player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
             total_playtime: 0,
@@ -640,7 +641,7 @@ pub async fn admin_get_database_stats(
     // Count chat messages across all games
     let mut total_chat_messages = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id)
+        if let Ok(game_id) = Uuid::parse_str(&game.id.key().to_string())
             && let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await
         {
             total_chat_messages += messages.len();
@@ -650,7 +651,7 @@ pub async fn admin_get_database_stats(
     // Count snapshots across all games
     let mut total_snapshots = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id)
+        if let Ok(game_id) = Uuid::parse_str(&game.id.key().to_string())
             && let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await
         {
             total_snapshots += snapshots.len();
@@ -698,7 +699,11 @@ pub async fn admin_list_tables(
         }
 
         let query = format!("SELECT count() as count FROM {} GROUP ALL", table_name);
-        let mut response = app_state.db.query(&query).await.map_err(|_| AppError::Unauthorized)?;
+        let mut response = app_state
+            .db
+            .query(&query)
+            .await
+            .map_err(|_| AppError::Unauthorized)?;
         let results: Vec<CountResult> = response.take(0).map_err(|_| AppError::Unauthorized)?;
         let record_count = results.first().map(|r| r.count as usize).unwrap_or(0);
 

@@ -1,6 +1,7 @@
-use crate::db::{Db, GameEventRecord, GamePlayerRecord, GameRecord, SnapshotRecord};
+use crate::db::{Db, GameEventRecord, GamePlayerRecord, GameRecord, SnapshotRecord, as_uuid};
 use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem};
 use automatafl_logic::{Game, Pid};
+use surrealdb::RecordId;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -52,8 +53,7 @@ impl GameRepository {
         let player_ids: HashMap<Uuid, Pid> = game_players
             .iter()
             .filter_map(|gp| {
-                Uuid::parse_str(&gp.player_id)
-                    .ok()
+                Some(as_uuid(&gp.player_id))
                     .map(|id| (id, Pid(gp.player_pid)))
             })
             .collect();
@@ -142,11 +142,11 @@ impl GameRepository {
 
         #[derive(serde::Deserialize)]
         struct GameRow {
-            id: String,
+            id: RecordId,
             lifecycle: String,
             max_players: u8,
             created_at: u64,
-            created_by: String,
+            created_by: RecordId,
             current_players: Option<i64>,
         }
 
@@ -155,9 +155,9 @@ impl GameRepository {
         let games: Vec<GameListItem> = rows
             .into_iter()
             .filter_map(|row| {
-                let game_id = Uuid::parse_str(&row.id).ok()?;
+                let game_id = as_uuid(&row.id);
                 let lifecycle = serde_json::from_str(&row.lifecycle).ok()?;
-                let created_by = Uuid::parse_str(&row.created_by).ok()?;
+                let created_by = as_uuid(&row.created_by);
 
                 Some(GameListItem {
                     id: game_id,
@@ -217,7 +217,7 @@ impl GameRepository {
         snapshot_data: &str,
     ) -> Result<(), surrealdb::Error> {
         let record = SnapshotRecord {
-            game_id: game_id.to_string(),
+            game_id: RecordId::from_table_key("games", game_id),
             index,
             timestamp,
             snapshot_data: snapshot_data.to_string(),

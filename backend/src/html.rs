@@ -10,9 +10,10 @@ use axum::{
     },
     response::{IntoResponse, Redirect},
 };
+use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::common::{ServerState, broadcast_event, timestamp};
+use crate::{common::{ServerState, broadcast_event, timestamp}, db::as_uuid};
 use crate::db;
 use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem, GameStateResponse};
 use automatafl_logic::Pid;
@@ -50,7 +51,7 @@ async fn get_player_from_session(
         return None;
     }
 
-    let player_id = Uuid::parse_str(&session.player_id).ok()?;
+    let player_id = as_uuid(&session.player_id);
     let player = db::get_player(db, player_id).await.ok()??;
     Some((player_id, player))
 }
@@ -328,7 +329,7 @@ pub async fn html_login_submit(
                     .is_ok()
                 {
                     // Create session
-                    let player_id = Uuid::parse_str(&player.id).unwrap();
+                    let player_id = db::as_uuid(&player.id);
                     let session_id = Uuid::new_v4();
                     let expires_at = timestamp() + state.config.session_duration;
 
@@ -448,10 +449,10 @@ pub async fn html_register_submit(
     let new_uuid = Uuid::new_v4();
     match db::create_player(&state.db, new_uuid, form.displayname, password_hash, false).await {
         Ok(_) => Redirect::to("/login").into_response(),
-        Err(_) => {
+        Err(e) => {
             let template = RegisterTemplate {
                 session_id: None,
-                error: Some("Failed to create account".to_string()),
+                error: Some(format!("Failed to create account: {}", e)),
             };
             match template.render() {
                 Ok(html) => axum::response::Html(html).into_response(),
@@ -523,7 +524,7 @@ pub async fn html_dashboard(
         .ok()
         .flatten()
         .unwrap_or(db::PlayerStatsRecord {
-            player_id: player_id.to_string(),
+            player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
             total_playtime: 0,
@@ -533,15 +534,15 @@ pub async fn html_dashboard(
     let all_games = db::list_games(&state.db).await.unwrap_or_default();
     let mut recent_games = Vec::new();
     for game_record in all_games.into_iter().take(10) {
-        if let Ok(game_id) = Uuid::parse_str(&game_record.id) {
+        if let Ok(game_id) = Uuid::parse_str(&game_record.id.key().to_string()) {
             if let Ok(game_players) = db::get_game_players(&state.db, game_id).await {
                 if game_players
                     .iter()
-                    .any(|gp| gp.player_id == player_id.to_string())
+                    .any(|gp| as_uuid(&gp.player_id) == player_id)
                 {
-                    if let (Ok(lifecycle), Ok(created_by)) = (
+                    if let (Ok(lifecycle), created_by) = (
                         serde_json::from_str(&game_record.lifecycle),
-                        Uuid::parse_str(&game_record.created_by),
+                        as_uuid(&game_record.created_by),
                     ) {
                         recent_games.push(GameListItem {
                             id: game_id,
@@ -601,7 +602,7 @@ pub async fn html_profile(
         .ok()
         .flatten()
         .unwrap_or(db::PlayerStatsRecord {
-            player_id: player_id.to_string(),
+            player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
             total_playtime: 0,
@@ -1012,7 +1013,7 @@ pub async fn html_submit_move(
         .unwrap_or_default();
     let player_pid = match game_players
         .iter()
-        .find(|gp| gp.player_id == player_id.to_string())
+        .find(|gp| as_uuid(&gp.player_id) == player_id)
     {
         Some(gp) => Pid(gp.player_pid),
         None => return Redirect::to(&format!("/game/{}", game_id)).into_response(),
@@ -1324,8 +1325,8 @@ pub async fn html_admin_sessions(
         .into_iter()
         .map(|s| {
             SessionInfo {
-                session_id: s.id.clone(),
-                player_name: s.player_id.clone(),
+                session_id: as_uuid(&s.id).to_string(),
+                player_name: as_uuid(&s.player_id).to_string(),
                 created_at: 0, // Not available in current schema
                 expires_at: s.expires_at,
                 is_expired: s.expires_at < now,
@@ -1447,7 +1448,7 @@ pub async fn html_admin_games(
         let actual_player_count = game.player_count as usize;
 
         games.push(GameSummary {
-            id: gs.id.clone(),
+            id: gs.id.key().to_string(),
             lifecycle,
             player_count: actual_player_count,
             max_players: gs.player_count,
@@ -1592,7 +1593,7 @@ pub async fn html_admin_queue(
         // Get player info
         let player: Option<db::PlayerRecord> = state
             .db
-            .select(("players", entry.player_id.clone()))
+            .select(("players", as_uuid(&entry.player_id)))
             .await
             .ok()
             .flatten();
@@ -1600,7 +1601,7 @@ pub async fn html_admin_queue(
         if let Some(p) = player {
             let waiting_time = format!("{}s", now.saturating_sub(entry.queued_at));
             queue.push(QueueEntry {
-                player_id: entry.player_id.clone(),
+                player_id: as_uuid(&entry.player_id).to_string(),
                 displayname: p.displayname,
                 elo_rating: p.elo_rating,
                 joined_at: entry.queued_at,
@@ -1718,7 +1719,7 @@ pub async fn html_admin_events(
             };
             GameEventInfo {
                 timestamp: ev.timestamp,
-                game_id: ev.game_id,
+                game_id: as_uuid(&ev.game_id).to_string(),
                 event_type: event_type.to_string(),
                 details: serde_json::to_string_pretty(&ev.event).unwrap_or_else(|_| "{}".to_string()),
             }
@@ -1757,7 +1758,7 @@ pub async fn html_matchmaking_join(
 
     // Add to matchmaking queue directly
     let entry = db::MatchmakingQueueRecord {
-        player_id: player_id.to_string(),
+        player_id: RecordId::from_table_key("players", player_id),
         queued_at: timestamp(),
         game_preferences: r#"{"player_count":2,"use_column_rule":false}"#.to_string(),
     };

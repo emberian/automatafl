@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use surrealdb::RecordId;
 use uuid::Uuid;
 
 use crate::common::{AppError, AuthPlayer, ServerState};
@@ -76,7 +77,7 @@ pub async fn get_player_stats(
             AppError::NoSuchPlayer(player_id)
         })?
         .unwrap_or(db::PlayerStatsRecord {
-            player_id: player_id.to_string(),
+            player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
             total_playtime: 0,

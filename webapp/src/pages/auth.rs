@@ -25,7 +25,7 @@ pub fn LoginPage() -> impl IntoView {
         let dn = dn.clone();
         let pw = pw.clone();
         async move {
-            let mut client = create_api_client();
+            let client = create_api_client();
             client.login(dn, pw).await
         }
     });

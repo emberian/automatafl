@@ -18,7 +18,7 @@ use axum::{
 use futures::{SinkExt, stream::StreamExt};
 use std::time::Duration;
 
-use crate::{db, services};
+use crate::{db::{self, as_uuid}, services};
 
 // ============================================================================
 // Constants
@@ -95,7 +95,7 @@ impl FromRequestParts<Arc<AppState>> for AuthPlayer {
             return Err(AppError::SessionExpired);
         }
 
-        let player_id = Uuid::parse_str(&session.player_id).map_err(|_| AppError::Unauthorized)?;
+        let player_id = as_uuid(&session.player_id);
 
         Ok(AuthPlayer {
             player_id,
@@ -160,7 +160,7 @@ impl PlayerInGame {
 
         let player_record = game_players
             .iter()
-            .find(|gp| gp.player_id == auth.player_id.to_string())
+            .find(|gp| as_uuid(&gp.player_id) == auth.player_id)
             .ok_or_else(|| AppError::NotInGame(auth.player_id, game_uuid))?;
 
         Ok(PlayerInGame {
@@ -345,8 +345,7 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
                 let player_ids: HashMap<Uuid, Pid> = game_players
                     .iter()
                     .filter_map(|gp| {
-                        Uuid::parse_str(&gp.player_id)
-                            .ok()
+                        Some(as_uuid(&gp.player_id))
                             .map(|id| (id, Pid(gp.player_pid)))
                     })
                     .collect();

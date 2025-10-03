@@ -5,7 +5,9 @@ const BASE_URL: &str = "http://localhost:3000";
 
 /// Helper to create a unique test user
 fn test_username() -> String {
-    format!("testuser_{}", uuid::Uuid::new_v4())
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("testuser_{}", COUNTER.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[tokio::test]

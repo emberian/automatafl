@@ -58,47 +58,6 @@ impl From<serde_json::Error> for TransactionError {
     }
 }
 
-/// Helper for game state updates with events (atomic)
-pub async fn update_game_with_events<T: Serialize>(
-    db: &Db,
-    game_id: uuid::Uuid,
-    game_state: &automatafl_logic::Game,
-    lifecycle: &automatafl_api_types::GameLifecycle,
-    events: Vec<(String, T)>, // Vec of (event_kind, event_data)
-) -> Result<(), TransactionError> {
-    let game_state_json = serde_json::to_string(game_state)?;
-    let lifecycle_json = serde_json::to_string(lifecycle)?;
-    let timestamp = crate::common::timestamp();
-
-    let mut event_records = Vec::with_capacity(events.len());
-    for (kind, data) in events {
-        event_records.push(serde_json::json!({
-            "game_id": game_id.to_string(),
-            "timestamp": timestamp,
-            "event_kind": kind,
-            "event_data": serde_json::to_string(&data)?,
-        }));
-    }
-
-    let query = r#"
-        BEGIN TRANSACTION;
-        UPDATE games SET game_state = $game_state, lifecycle = $lifecycle WHERE id = $id;
-        IF array::len($events) > 0 THEN
-            INSERT INTO game_events $events;
-        END;
-        COMMIT TRANSACTION;
-    "#;
-
-    db.query(query)
-        .bind(("game_state", game_state_json))
-        .bind(("lifecycle", lifecycle_json))
-        .bind(("id", game_id.to_string()))
-        .bind(("events", event_records))
-        .await?;
-
-    Ok(())
-}
-
 /// Atomic player stats update with ELO change
 pub async fn update_player_stats_atomic(
     db: &Db,
@@ -176,25 +135,6 @@ pub async fn create_game_with_players(
         .bind(("player_count", player_count))
         .bind(("players", player_records))
         .await?;
-
-    Ok(())
-}
-
-/// Remove players from matchmaking queue (atomic)
-/// Note: This function only removes from queue, it does not add to games
-pub async fn remove_players_from_queue(
-    db: &Db,
-    player_uuids: Vec<uuid::Uuid>,
-) -> Result<(), TransactionError> {
-    let ids: Vec<String> = player_uuids.into_iter().map(|id| id.to_string()).collect();
-
-    let query = r#"
-        BEGIN TRANSACTION;
-        DELETE matchmaking_queue WHERE player_id IN $player_ids;
-        COMMIT TRANSACTION;
-    "#;
-
-    db.query(query).bind(("player_ids", ids)).await?;
 
     Ok(())
 }

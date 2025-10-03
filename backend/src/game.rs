@@ -351,7 +351,7 @@ pub async fn get_chat(
     let chat_msgs: Vec<ChatMessage> = messages
         .into_iter()
         .filter_map(|msg| {
-            Uuid::parse_str(&msg.player_id).ok().map(|id| ChatMessage {
+            Some(db::as_uuid(&msg.player_id)).map(|id| ChatMessage {
                 timestamp: msg.timestamp,
                 player_id: id,
                 displayname: msg.displayname,

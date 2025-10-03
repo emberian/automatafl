@@ -20,11 +20,11 @@ use automatafl_api_types::*;
 ///
 /// Note: In production, also check against breached password databases (e.g., haveibeenpwned)
 fn validate_password(password: &str) -> Result<(), &'static str> {
-    if password.len() < 8 {
-        return Err("Password must be at least 8 characters long");
+    if password.len() < 7 {
+        return Err("Password must be at least 7 characters long");
     }
-    if password.len() > 64 {
-        return Err("Password must not exceed 64 characters");
+    if password.len() > 128 {
+        return Err("Password must not exceed 128 characters");
     }
     // Allow all printable characters - no complexity requirements
     if !password.chars().all(|c| !c.is_control()) {
@@ -135,7 +135,7 @@ pub async fn login(
             AppError::InvalidCredentials
         })?;
 
-    let player_id = Uuid::parse_str(&player.id).map_err(|e| {
+    let player_id = Uuid::parse_str(&player.id.key().to_string()).map_err(|e| {
         tracing::error!("Failed to parse player ID for '{}': {}", req.displayname, e);
         AppError::InvalidCredentials
     })?;

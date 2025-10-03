@@ -9,6 +9,7 @@ use automatafl_api_types::*;
 use automatafl_logic::{Board, Coord, Pid};
 
 use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
+use crate::db::as_uuid;
 use crate::{db, middleware};
 
 // ============================================================================
@@ -48,7 +49,7 @@ pub async fn update_game_completion_stats(
     // Get all player IDs and their PIDs
     let mut players_info: Vec<(Uuid, u8, i32)> = Vec::new();
     for gp in &game_players {
-        let player_uuid = Uuid::parse_str(&gp.player_id)?;
+        let player_uuid = as_uuid(&gp.player_id);
         let player = db::get_player(db, player_uuid)
             .await?
             .ok_or("Player not found")?;
@@ -141,21 +142,20 @@ pub async fn get_leaderboard_elo(
     // Get stats for each player to populate leaderboard
     let mut entries: Vec<LeaderboardEntry> = Vec::new();
     for (player, rank) in ranked {
-        if let Ok(player_id) = Uuid::parse_str(&player.id) {
-            let stats = db::get_player_stats(&app_state.db, player_id)
-                .await
-                .ok()
-                .flatten();
-            entries.push(LeaderboardEntry {
-                rank,
-                player_id,
-                displayname: player.displayname,
-                value: player.elo_rating as i64,
-                elo_rating: Some(player.elo_rating),
-                games_played: stats.as_ref().map(|s| s.games_played),
-                games_won: stats.as_ref().map(|s| s.games_won),
-            });
-        }
+        let player_id = as_uuid(&player.id);
+        let stats = db::get_player_stats(&app_state.db, player_id)
+            .await
+            .ok()
+            .flatten();
+        entries.push(LeaderboardEntry {
+            rank,
+            player_id,
+            displayname: player.displayname,
+            value: player.elo_rating as i64,
+            elo_rating: Some(player.elo_rating),
+            games_played: stats.as_ref().map(|s| s.games_played),
+            games_won: stats.as_ref().map(|s| s.games_won),
+        });
     }
 
     let total_players = entries.len();
@@ -176,7 +176,7 @@ pub async fn get_leaderboard_wins(
     let entries: Vec<LeaderboardEntry> = ranked
         .into_iter()
         .filter_map(|(player, stats, rank)| {
-            Uuid::parse_str(&player.id).ok().map(|id| LeaderboardEntry {
+            Some(as_uuid(&player.id)).map(|id| LeaderboardEntry {
                 rank,
                 player_id: id,
                 displayname: player.displayname.clone(),
@@ -206,15 +206,16 @@ pub async fn get_leaderboard_games(
     let entries: Vec<LeaderboardEntry> = ranked
         .into_iter()
         .filter_map(|(player, stats, rank)| {
-            Uuid::parse_str(&player.id).ok().map(|id| LeaderboardEntry {
-                rank,
-                player_id: id,
-                displayname: player.displayname.clone(),
-                value: stats.games_played as i64,
-                elo_rating: Some(player.elo_rating),
-                games_played: Some(stats.games_played),
-                games_won: Some(stats.games_won),
-            })
+            Some(as_uuid(&player.id))
+                .map(|id| LeaderboardEntry {
+                    rank,
+                    player_id: id,
+                    displayname: player.displayname.clone(),
+                    value: stats.games_played as i64,
+                    elo_rating: Some(player.elo_rating),
+                    games_played: Some(stats.games_played),
+                    games_won: Some(stats.games_won),
+                })
         })
         .collect();
 
@@ -357,10 +358,9 @@ pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
             // Get player ELO ratings
             let mut players_with_elo: Vec<(db::MatchmakingQueueRecord, i32)> = Vec::new();
             for player in players {
-                if let Ok(player_uuid) = Uuid::parse_str(&player.player_id) {
-                    if let Ok(Some(player_record)) = db::get_player(&state.db, player_uuid).await {
-                        players_with_elo.push((player, player_record.elo_rating));
-                    }
+                let player_uuid = as_uuid(&player.player_id);
+                if let Ok(Some(player_record)) = db::get_player(&state.db, player_uuid).await {
+                    players_with_elo.push((player, player_record.elo_rating));
                 }
             }
 
@@ -423,19 +423,12 @@ pub async fn matchmaking_task(state: Arc<crate::common::AppState>) {
 
             let game_id = Uuid::new_v4();
             let lifecycle = GameLifecycle::Waiting;
-            let first_player_id = match Uuid::parse_str(&matched_players[0].player_id) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
+            let first_player_id = as_uuid(&matched_players[0].player_id);
 
             // Parse player UUIDs first
             let mut player_uuids = Vec::new();
             for player in &matched_players {
-                if let Ok(player_uuid) = Uuid::parse_str(&player.player_id) {
-                    player_uuids.push(player_uuid);
-                } else {
-                    tracing::error!("Failed to parse player UUID: {}", player.player_id);
-                }
+                player_uuids.push(as_uuid(&player.player_id));
             }
 
             if player_uuids.len() != matched_players.len() {

@@ -80,6 +80,7 @@ async fn ws_handler(
 /// Initialize structured logging
 fn init_tracing() {
     tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
         .with_target(false)
         .with_level(true)
         .init();
@@ -224,12 +225,12 @@ async fn server_main() {
         .route("/logout", get(html::html_logout))
         .route("/dashboard", get(html::html_dashboard))
         .route("/games", get(html::html_games_list))
-        .route("/game/:id", get(html::html_game_detail))
-        .route("/game/:id/join", post(html::html_join_game))
-        .route("/game/:id/move", post(html::html_submit_move))
-        .route("/game/:id/complete", post(html::html_complete_round))
+        .route("/game/{:id}", get(html::html_game_detail))
+        .route("/game/{:id}/join", post(html::html_join_game))
+        .route("/game/{:id}/move", post(html::html_submit_move))
+        .route("/game/{:id}/complete", post(html::html_complete_round))
         .route(
-            "/profile/:id",
+            "/profile/{:id}",
             get(html::html_profile).post(html::html_update_profile),
         )
         .route(
@@ -244,16 +245,16 @@ async fn server_main() {
         .route("/admin/players", get(html::html_admin_players))
         .route("/admin/games", get(html::html_admin_games))
         .route(
-            "/admin/games/:id/delete",
+            "/admin/games/{:id}/delete",
             post(html::html_admin_delete_game),
         )
         .route(
-            "/admin/games/:id/force-complete",
+            "/admin/games/{:id}/force-complete",
             post(html::html_admin_force_complete),
         )
         .route("/admin/sessions", get(html::html_admin_sessions))
         .route(
-            "/admin/sessions/:id/delete",
+            "/admin/sessions/{:id}/delete",
             post(html::html_admin_delete_session),
         )
         .route(
@@ -262,7 +263,7 @@ async fn server_main() {
         )
         .route("/admin/queue", get(html::html_admin_queue))
         .route(
-            "/admin/queue/:id/remove",
+            "/admin/queue/{:id}/remove",
             post(html::html_admin_remove_from_queue),
         )
         .route("/admin/events", get(html::html_admin_events))
@@ -346,7 +347,7 @@ async fn server_main() {
         // Admin endpoints - Player Management
         .route("/api/v1/admin/players", get(admin::admin_list_players))
         .route(
-            "/api/v1/admin/players/:id",
+            "/api/v1/admin/players/{:id}",
             get(admin::admin_get_player)
                 .put(admin::admin_update_player)
                 .delete(admin::admin_delete_player),
@@ -354,21 +355,21 @@ async fn server_main() {
         // Admin endpoints - Game Management
         .route("/api/v1/admin/games", get(admin::admin_list_all_games))
         .route(
-            "/api/v1/admin/games/:id",
+            "/api/v1/admin/games/{:id}",
             get(admin::admin_get_game).delete(admin::admin_delete_game),
         )
         .route(
-            "/api/v1/admin/games/:id/force-complete",
+            "/api/v1/admin/games/{:id}/force-complete",
             post(admin::admin_force_complete_round),
         )
         .route(
-            "/api/v1/admin/games/:id/lifecycle",
+            "/api/v1/admin/games/{:id}/lifecycle",
             axum::routing::put(admin::admin_set_game_lifecycle),
         )
         // Admin endpoints - Session Management
         .route("/api/v1/admin/sessions", get(admin::admin_list_sessions))
         .route(
-            "/api/v1/admin/sessions/:id",
+            "/api/v1/admin/sessions/{:id}",
             axum::routing::delete(admin::admin_delete_session),
         )
         .route(
@@ -377,24 +378,24 @@ async fn server_main() {
         )
         // Admin endpoints - Game Events & Chat
         .route(
-            "/api/v1/admin/games/:id/events",
+            "/api/v1/admin/games/{:id}/events",
             get(admin::admin_get_game_events),
         )
         .route(
-            "/api/v1/admin/games/:id/chat",
+            "/api/v1/admin/games/{:id}/chat",
             get(admin::admin_get_game_chat),
         )
         .route(
-            "/api/v1/admin/games/:id/chat/:timestamp",
+            "/api/v1/admin/games/{:id}/chat/{:timestamp}",
             axum::routing::delete(admin::admin_delete_chat_message),
         )
         // Admin endpoints - Snapshots
         .route(
-            "/api/v1/admin/games/:id/snapshots",
+            "/api/v1/admin/games/{:id}/snapshots",
             get(admin::admin_list_snapshots),
         )
         .route(
-            "/api/v1/admin/games/:id/snapshots/:index",
+            "/api/v1/admin/games/{:id}/snapshots/{:index}",
             axum::routing::delete(admin::admin_delete_snapshot),
         )
         // Admin endpoints - Matchmaking
@@ -403,12 +404,12 @@ async fn server_main() {
             get(admin::admin_list_matchmaking_queue),
         )
         .route(
-            "/api/v1/admin/matchmaking/queue/:id",
+            "/api/v1/admin/matchmaking/queue/{:id}",
             axum::routing::delete(admin::admin_remove_from_matchmaking),
         )
         // Admin endpoints - Player Stats
         .route(
-            "/api/v1/admin/players/:id/stats",
+            "/api/v1/admin/players/{:id}/stats",
             get(admin::admin_get_player_stats).put(admin::admin_update_player_stats),
         )
         // Admin endpoints - Database Introspection
@@ -469,7 +470,7 @@ async fn server_main() {
                         Method::DELETE,
                         Method::PATCH,
                     ])
-                    .allow_headers(Any)
+                    .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
                     .allow_credentials(true)
             } else {
                 // Production: Restrict to specific origins from config
