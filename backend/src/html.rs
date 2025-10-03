@@ -13,8 +13,11 @@ use axum::{
 use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::{common::{ServerState, broadcast_event, timestamp}, db::as_uuid};
 use crate::db;
+use crate::{
+    common::{ServerState, broadcast_event, timestamp},
+    db::as_uuid,
+};
 use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem, GameStateResponse};
 use automatafl_logic::Pid;
 
@@ -534,25 +537,24 @@ pub async fn html_dashboard(
     let all_games = db::list_games(&state.db).await.unwrap_or_default();
     let mut recent_games = Vec::new();
     for game_record in all_games.into_iter().take(10) {
-        if let Ok(game_id) = Uuid::parse_str(&game_record.id.key().to_string()) {
-            if let Ok(game_players) = db::get_game_players(&state.db, game_id).await {
-                if game_players
-                    .iter()
-                    .any(|gp| as_uuid(&gp.player_id) == player_id)
-                {
-                    if let (Ok(lifecycle), created_by) = (
-                        serde_json::from_str(&game_record.lifecycle),
-                        as_uuid(&game_record.created_by),
-                    ) {
-                        recent_games.push(GameListItem {
-                            id: game_id,
-                            lifecycle,
-                            player_count: game_players.len(),
-                            max_players: game_record.player_count,
-                            created_at: game_record.created_at,
-                            created_by,
-                        });
-                    }
+        let game_id = as_uuid(&game_record.id);
+        if let Ok(game_players) = db::get_game_players(&state.db, game_id).await {
+            if game_players
+                .iter()
+                .any(|gp| as_uuid(&gp.player_id) == player_id)
+            {
+                if let (Ok(lifecycle), created_by) = (
+                    serde_json::from_str(&game_record.lifecycle),
+                    as_uuid(&game_record.created_by),
+                ) {
+                    recent_games.push(GameListItem {
+                        id: game_id,
+                        lifecycle,
+                        player_count: game_players.len(),
+                        max_players: game_record.player_count,
+                        created_at: game_record.created_at,
+                        created_by,
+                    });
                 }
             }
         }
@@ -1721,7 +1723,8 @@ pub async fn html_admin_events(
                 timestamp: ev.timestamp,
                 game_id: as_uuid(&ev.game_id).to_string(),
                 event_type: event_type.to_string(),
-                details: serde_json::to_string_pretty(&ev.event).unwrap_or_else(|_| "{}".to_string()),
+                details: serde_json::to_string_pretty(&ev.event)
+                    .unwrap_or_else(|_| "{}".to_string()),
             }
         })
         .collect();

@@ -8,8 +8,11 @@ use axum::{
 use surrealdb::RecordId;
 use uuid::Uuid;
 
-use crate::{common::{AdminPlayer, AppError, ServerState}, db::as_uuid};
 use crate::db;
+use crate::{
+    common::{AdminPlayer, AppError, ServerState},
+    db::as_uuid,
+};
 use automatafl_api_types::*;
 
 // ============================================================================
@@ -25,13 +28,11 @@ pub async fn admin_list_players(
     let player_list = players
         .into_iter()
         .filter_map(|p| {
-            Uuid::parse_str(&p.id.key().to_string())
-                .ok()
-                .map(|id| PlayerListItem {
-                    id,
-                    displayname: p.displayname,
-                    is_admin: p.is_admin,
-                })
+            Some(PlayerListItem {
+                id: as_uuid(&p.id),
+                displayname: p.displayname,
+                is_admin: p.is_admin,
+            })
         })
         .collect();
 
@@ -358,15 +359,15 @@ pub async fn admin_list_sessions(
     for session in sessions {
         let session_id = db::as_uuid(&session.id);
         let player_id = db::as_uuid(&session.player_id);
-            // Get player displayname
-            if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
-                session_info.push(AdminSessionInfo {
-                    id: session_id,
-                    player_id,
-                    player_displayname: player.displayname,
-                    expires_at: session.expires_at,
-                });
-            }
+        // Get player displayname
+        if let Ok(Some(player)) = db::get_player(&app_state.db, player_id).await {
+            session_info.push(AdminSessionInfo {
+                id: session_id,
+                player_id,
+                player_displayname: player.displayname,
+                expires_at: session.expires_at,
+            });
+        }
     }
 
     Ok(Json(session_info))
@@ -641,9 +642,9 @@ pub async fn admin_get_database_stats(
     // Count chat messages across all games
     let mut total_chat_messages = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id.key().to_string())
-            && let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await
-        {
+        let game_id = as_uuid(&game.id);
+
+        if let Ok(messages) = db::get_chat_messages(&app_state.db, game_id).await {
             total_chat_messages += messages.len();
         }
     }
@@ -651,9 +652,9 @@ pub async fn admin_get_database_stats(
     // Count snapshots across all games
     let mut total_snapshots = 0;
     for game in &games {
-        if let Ok(game_id) = Uuid::parse_str(&game.id.key().to_string())
-            && let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await
-        {
+        let game_id = as_uuid(&game.id);
+
+        if let Ok(snapshots) = db::list_snapshots(&app_state.db, game_id).await {
             total_snapshots += snapshots.len();
         }
     }

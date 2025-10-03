@@ -4,6 +4,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use uuid::Uuid;
 
 use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
+use crate::db::as_uuid;
 use crate::{db, validation};
 use automatafl_api_types::*;
 
@@ -23,7 +24,7 @@ fn validate_password(password: &str) -> Result<(), &'static str> {
     if password.len() < 7 {
         return Err("Password must be at least 7 characters long");
     }
-    if password.len() > 128 {
+    if password.len() > 64 {
         return Err("Password must not exceed 128 characters");
     }
     // Allow all printable characters - no complexity requirements
@@ -135,10 +136,7 @@ pub async fn login(
             AppError::InvalidCredentials
         })?;
 
-    let player_id = Uuid::parse_str(&player.id.key().to_string()).map_err(|e| {
-        tracing::error!("Failed to parse player ID for '{}': {}", req.displayname, e);
-        AppError::InvalidCredentials
-    })?;
+    let player_id = as_uuid(&player.id);
 
     // Create session with expiration
     let session_id = Uuid::new_v4();

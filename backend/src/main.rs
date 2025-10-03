@@ -460,7 +460,7 @@ async fn server_main() {
                 // Development: Allow localhost origins
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-                        origin.as_bytes().starts_with(b"http://localhost:")
+                        origin.as_bytes().starts_with(b"http://localhost.:")
                             || origin.as_bytes().starts_with(b"http://127.0.0.1:")
                     }))
                     .allow_methods([
