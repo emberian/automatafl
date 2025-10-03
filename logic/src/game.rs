@@ -155,6 +155,10 @@ impl Game {
     /// Return the list of move results if everything was gucci, else enter conflict resolution.
     #[instrument]
     pub fn try_complete_round(&mut self) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
+        if !(self.pending_moves.len() == self.player_count as usize) {
+            return Err(());
+        }
+
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
                 // Lift the moved pieces off the board and mark paths as passable
