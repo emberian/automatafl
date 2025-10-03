@@ -1,4 +1,5 @@
 use crate::db::{Db, PlayerRecord, PlayerStatsRecord};
+use surrealdb::RecordId;
 use uuid::Uuid;
 
 /// Repository for player-related database operations
@@ -17,6 +18,47 @@ pub struct PlayerStatsUpdate {
 impl PlayerRepository {
     pub fn new(db: Db) -> Self {
         Self { db }
+    }
+
+    /// Create a new player and initialize stats record
+    pub async fn create(
+        &self,
+        player_id: Uuid,
+        displayname: String,
+        password_hash: String,
+        is_admin: bool,
+    ) -> Result<(), surrealdb::Error> {
+        let player_record = PlayerRecord {
+            id: RecordId::from_table_key("players", player_id),
+            displayname,
+            password_hash,
+            is_admin,
+            bio: None,
+            avatar_url: None,
+            created_at: crate::common::timestamp(),
+            elo_rating: crate::common::DEFAULT_ELO,
+        };
+
+        self
+            .db
+            .create::<Option<PlayerRecord>>(("players", player_id))
+            .content(player_record)
+            .await?;
+
+        let stats_record = PlayerStatsRecord {
+            player_id: RecordId::from_table_key("players", player_id),
+            games_played: 0,
+            games_won: 0,
+            total_playtime: 0,
+        };
+
+        self
+            .db
+            .create::<Option<PlayerStatsRecord>>(("player_stats", player_id))
+            .content(stats_record)
+            .await?;
+
+        Ok(())
     }
 
     /// Get player by ID
@@ -49,6 +91,11 @@ impl PlayerRepository {
             .await
     }
 
+    /// List all players (admin use case)
+    pub async fn list_all(&self) -> Result<Vec<PlayerRecord>, surrealdb::Error> {
+        self.db.select("players").await
+    }
+
     /// Update multiple player stats atomically in a single batch transaction
     /// This is the key improvement - all stats are updated together or not at all
     pub async fn update_stats_batch(
@@ -63,8 +110,6 @@ impl PlayerRepository {
         let mut statements = vec!["BEGIN TRANSACTION;".to_string()];
 
         for (idx, update) in updates.iter().enumerate() {
-            let won_delta = if update.won { 1 } else { 0 };
-            let player_id = update.player_id.to_string();
 
             // Upsert stats
             statements.push(format!(

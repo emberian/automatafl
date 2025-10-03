@@ -3,12 +3,6 @@ use crate::{api::ApiClient, components::use_toast, state::AppState};
 use leptos::prelude::*;
 use uuid::Uuid;
 
-/// Create an API client with the current session
-pub fn create_api_client() -> ApiClient {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    app_state.get_api_client()
-}
-
 /// Helper to create a resource that uses the API client and reacts to a trigger.
 /// This is the core helper that all other resource helpers should use.
 pub fn create_api_resource_with_trigger<T, F, Fut, V>(

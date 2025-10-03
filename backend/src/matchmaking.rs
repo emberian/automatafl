@@ -10,6 +10,7 @@ use automatafl_logic::{Board, Coord, Pid};
 
 use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
 use crate::db::as_uuid;
+use crate::services::{MatchmakingServiceError, PlayerServiceError};
 use crate::{db, middleware};
 
 // ============================================================================
@@ -135,18 +136,23 @@ pub use automatafl_api_types::EloChange;
 pub async fn get_leaderboard_elo(
     State(app_state): ServerState,
 ) -> Result<Json<LeaderboardResponse>, AppError> {
-    let ranked = db::get_leaderboard_by_elo(&app_state.db, 100)
+    let ranked = app_state
+        .player_service
+        .leaderboard_by_elo(100)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| map_player_error("leaderboard_elo", err))?;
 
     // Get stats for each player to populate leaderboard
     let mut entries: Vec<LeaderboardEntry> = Vec::new();
     for (player, rank) in ranked {
         let player_id = as_uuid(&player.id);
-        let stats = db::get_player_stats(&app_state.db, player_id)
-            .await
-            .ok()
-            .flatten();
+        let stats = match app_state.player_service.get_stats(player_id).await {
+            Ok(stats) => stats,
+            Err(err) => {
+                tracing::error!(player_id = %player_id, "Failed to load stats: {}", err);
+                None
+            }
+        };
         entries.push(LeaderboardEntry {
             rank,
             player_id,
@@ -169,9 +175,11 @@ pub async fn get_leaderboard_elo(
 pub async fn get_leaderboard_wins(
     State(app_state): ServerState,
 ) -> Result<Json<LeaderboardResponse>, AppError> {
-    let ranked = db::get_leaderboard_by_wins(&app_state.db, 100)
+    let ranked = app_state
+        .player_service
+        .leaderboard_by_wins(100)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| map_player_error("leaderboard_wins", err))?;
 
     let entries: Vec<LeaderboardEntry> = ranked
         .into_iter()
@@ -199,9 +207,11 @@ pub async fn get_leaderboard_wins(
 pub async fn get_leaderboard_games(
     State(app_state): ServerState,
 ) -> Result<Json<LeaderboardResponse>, AppError> {
-    let ranked = db::get_leaderboard_by_games(&app_state.db, 100)
+    let ranked = app_state
+        .player_service
+        .leaderboard_by_games(100)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| map_player_error("leaderboard_games", err))?;
 
     let entries: Vec<LeaderboardEntry> = ranked
         .into_iter()
@@ -249,16 +259,11 @@ pub async fn join_matchmaking(
 
     let preferences = serde_json::to_string(&req).unwrap();
 
-    db::join_matchmaking_queue(&app_state.db, auth.player_id, timestamp(), preferences)
+    app_state
+        .matchmaking_service
+        .join_queue(auth.player_id, timestamp(), preferences)
         .await
-        .map_err(|e| {
-            tracing::error!(
-                "Failed to join matchmaking queue for player {}: {}",
-                auth.player_id,
-                e
-            );
-            AppError::Unauthorized
-        })?;
+        .map_err(|err| map_matchmaking_error("join", auth.player_id, err))?;
 
     tracing::info!("Player {} joined matchmaking queue", auth.player_id);
     Ok(StatusCode::OK)
@@ -269,9 +274,11 @@ pub async fn leave_matchmaking(
     auth: AuthPlayer,
     State(app_state): ServerState,
 ) -> Result<StatusCode, AppError> {
-    db::leave_matchmaking_queue(&app_state.db, auth.player_id)
+    app_state
+        .matchmaking_service
+        .leave_queue(auth.player_id)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| map_matchmaking_error("leave", auth.player_id, err))?;
 
     Ok(StatusCode::OK)
 }
@@ -281,9 +288,11 @@ pub async fn get_matchmaking_status(
     auth: AuthPlayer,
     State(app_state): ServerState,
 ) -> Result<Json<MatchmakingStatus>, AppError> {
-    let status = db::get_matchmaking_status(&app_state.db, auth.player_id)
+    let status = app_state
+        .matchmaking_service
+        .get_status(auth.player_id)
         .await
-        .map_err(|_| AppError::Unauthorized)?;
+        .map_err(|err| map_matchmaking_error("status", auth.player_id, err))?;
 
     match status {
         Some(record) => {
@@ -301,6 +310,31 @@ pub async fn get_matchmaking_status(
             queued_at: None,
             estimated_wait_time: None,
         })),
+    }
+}
+
+fn map_player_error(action: &str, err: PlayerServiceError) -> AppError {
+    match err {
+        PlayerServiceError::Validation(msg) => AppError::ValidationError(msg),
+        PlayerServiceError::NotFound(_) => AppError::Unauthorized,
+        PlayerServiceError::Database(e) => {
+            tracing::error!(action = action, error = %e, "Player service error while generating leaderboard");
+            AppError::Unauthorized
+        }
+    }
+}
+
+fn map_matchmaking_error(
+    action: &str,
+    player_id: Uuid,
+    err: MatchmakingServiceError,
+) -> AppError {
+    match err {
+        MatchmakingServiceError::PlayerNotFound(_) => AppError::NoSuchPlayer(player_id),
+        MatchmakingServiceError::Database(e) => {
+            tracing::error!(player_id = %player_id, action = action, error = %e, "Matchmaking service error");
+            AppError::Unauthorized
+        }
     }
 }
 

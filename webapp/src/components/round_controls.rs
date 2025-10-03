@@ -1,5 +1,5 @@
 // RoundControls component - manual round completion and game flow controls
-use crate::{helpers::create_api_client, state::AppState};
+use crate::state::AppState;
 use automatafl_api_types::GameStateResponse;
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -15,10 +15,12 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
     let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
     let is_player = my_pid.is_some();
 
+    let app_state_for_complete = app_state.clone();
     let complete_round_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_complete.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.complete_round(gid).await
         }
     });

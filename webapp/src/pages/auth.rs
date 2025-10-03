@@ -1,4 +1,4 @@
-use crate::{components::use_toast, helpers::create_api_client, state::AppState};
+use crate::{components::use_toast, state::AppState};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -21,11 +21,13 @@ pub fn LoginPage() -> impl IntoView {
     let (password, set_password) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
 
+    let app_state_for_login_action = app_state.clone();
     let login_action = Action::new_local(move |(dn, pw): &(String, String)| {
+        let app_state = app_state_for_login_action.clone();
         let dn = dn.clone();
         let pw = pw.clone();
         async move {
-            let mut client = create_api_client();
+            let mut client = app_state.get_api_client();
             client.login(dn, pw).await
         }
     });
@@ -134,11 +136,13 @@ pub fn RegisterPage() -> impl IntoView {
     let (confirm_password, set_confirm_password) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
 
+    let app_state_for_register_action = app_state.clone();
     let register_action = Action::new_local(move |(dn, pw): &(String, String)| {
+        let app_state = app_state_for_register_action.clone();
         let dn = dn.clone();
         let pw = pw.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.register(dn, pw).await
         }
     });

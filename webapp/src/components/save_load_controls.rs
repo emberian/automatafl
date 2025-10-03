@@ -1,7 +1,7 @@
 // SaveLoadControls component - handles game save/load functionality
 use crate::{
     components::{use_modal, use_toast},
-    helpers::create_api_client,
+    state::AppState,
 };
 use automatafl_api_types::SnapshotInfo;
 use leptos::prelude::*;
@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 #[component]
 pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
     let modal = use_modal();
 
@@ -16,29 +17,35 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
     let (selected_snapshot, set_selected_snapshot) = signal(Option::<usize>::None);
 
     // Save game action
+    let app_state_for_save = app_state.clone();
     let save_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_save.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.save_game(gid).await
         }
     });
 
     // Load snapshots action
+    let app_state_for_load_snapshots = app_state.clone();
     let load_snapshots_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_load_snapshots.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.list_snapshots(gid).await.map_err(|e| e.to_string())
         }
     });
 
     // Load game action
+    let app_state_for_load = app_state.clone();
     let load_action = Action::new_local(move |(gid, idx): &(Uuid, usize)| {
+        let app_state = app_state_for_load.clone();
         let gid = *gid;
         let idx = *idx;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.load_game(gid, idx).await
         }
     });

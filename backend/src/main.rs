@@ -198,16 +198,49 @@ async fn server_main() {
 
     // Create repositories
     let game_repo = repositories::GameRepository::new(db.clone());
-    let player_repo = repositories::PlayerRepository::new(db.clone());
+    let player_repo_for_game = repositories::PlayerRepository::new(db.clone());
+    let player_repo_for_auth = repositories::PlayerRepository::new(db.clone());
+    let player_repo_for_player_service = repositories::PlayerRepository::new(db.clone());
+    let player_repo_for_matchmaking = repositories::PlayerRepository::new(db.clone());
+    let player_repo_for_admin = repositories::PlayerRepository::new(db.clone());
+
+    let session_repo_for_auth = repositories::SessionRepository::new(db.clone());
+    let session_repo_for_admin = repositories::SessionRepository::new(db.clone());
+
+    let matchmaking_repo = repositories::MatchmakingRepository::new(db.clone());
+    let matchmaking_repo_for_admin = repositories::MatchmakingRepository::new(db.clone());
 
     // Create services
-    let game_service = Arc::new(services::GameService::new(game_repo, player_repo));
+    let game_service = Arc::new(services::GameService::new(game_repo, player_repo_for_game));
+    let auth_service = Arc::new(services::AuthService::new(
+        player_repo_for_auth,
+        session_repo_for_auth,
+        config.session_duration,
+    ));
+    let player_service = Arc::new(services::PlayerService::new(player_repo_for_player_service));
+    let matchmaking_service = Arc::new(services::MatchmakingService::new(
+        matchmaking_repo,
+        player_repo_for_matchmaking,
+        Arc::clone(&game_service),
+    ));
+    let admin_service = Arc::new(services::AdminService::new(
+        repositories::GameRepository::new(db.clone()),
+        player_repo_for_admin,
+        session_repo_for_admin,
+        matchmaking_repo_for_admin,
+        Arc::clone(&game_service),
+        Arc::clone(&player_service),
+    ));
 
     // Create application state
     let app_state = Arc::new(AppState {
         db,
         config: Arc::new(config.clone()),
         game_service,
+        auth_service,
+        player_service,
+        matchmaking_service,
+        admin_service,
     });
 
     // Create the main router
@@ -453,7 +486,7 @@ async fn server_main() {
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer({
             use axum::http::{HeaderValue, Method};
-            use tower_http::cors::{AllowOrigin, Any};
+            use tower_http::cors::AllowOrigin;
 
             // Configure CORS based on environment
             let cors = if cfg!(debug_assertions) {

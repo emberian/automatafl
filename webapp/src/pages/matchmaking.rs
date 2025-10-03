@@ -1,9 +1,10 @@
-use crate::helpers::create_api_client;
+use crate::state::AppState;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
 pub fn MatchmakingPage() -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let (player_count, set_player_count) = signal(2u8);
     let (use_column_rule, set_use_column_rule) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
@@ -11,10 +12,12 @@ pub fn MatchmakingPage() -> impl IntoView {
     // Poll matchmaking status
     let (poll_trigger, set_poll_trigger) = signal(0u32);
 
+    let app_state_for_status = app_state.clone();
     let status_resource = LocalResource::new(move || {
         let _ = poll_trigger.get();
+        let app_state = app_state_for_status.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.get_matchmaking_status().await
         }
     });
@@ -32,19 +35,25 @@ pub fn MatchmakingPage() -> impl IntoView {
     });
 
     // Join matchmaking action
+    let app_state_for_join = app_state.clone();
     let join_action = Action::new_local(move |(pc, ucr): &(u8, bool)| {
+        let app_state = app_state_for_join.clone();
         let pc = *pc;
         let ucr = *ucr;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.join_matchmaking(pc, ucr).await
         }
     });
 
     // Leave matchmaking action
-    let leave_action = Action::new_local(move |_: &()| async move {
-        let client = create_api_client();
-        client.leave_matchmaking().await
+    let app_state_for_leave = app_state.clone();
+    let leave_action = Action::new_local(move |_: &()| {
+        let app_state = app_state_for_leave.clone();
+        async move {
+            let client = app_state.get_api_client();
+            client.leave_matchmaking().await
+        }
     });
 
     // Handle join result

@@ -1,7 +1,5 @@
 // ChatPanel component - displays game chat
-use crate::{
-    components::use_toast, helpers::create_api_client, state::AppState, utils::RateLimiter,
-};
+use crate::{components::use_toast, state::AppState, utils::RateLimiter};
 use leptos::html;
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -24,11 +22,13 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
 
     let messages_memo = Memo::new(move |_| chat_signal.and_then(|sig| Some(sig.get())));
 
+    let app_state_for_send = app_state.clone();
     let send_message_action = Action::new_local(move |(gid, msg): &(Uuid, String)| {
+        let app_state = app_state_for_send.clone();
         let gid = *gid;
         let msg = msg.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.send_chat(gid, msg).await
         }
     });

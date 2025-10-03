@@ -9,23 +9,19 @@ use surrealdb::RecordId;
 use uuid::Uuid;
 
 use crate::common::{AppError, AuthPlayer, ServerState};
-use crate::db;
+use crate::db::PlayerStatsRecord;
+use crate::services::PlayerServiceError;
 use automatafl_api_types::*;
 
 pub async fn get_player_profile(
     State(app_state): ServerState,
     Path(player_id): Path<Uuid>,
 ) -> Result<Json<PlayerProfile>, AppError> {
-    let player = db::get_player(&app_state.db, player_id)
+    let player = app_state
+        .player_service
+        .get_player_or_error(player_id)
         .await
-        .map_err(|e| {
-            tracing::error!("Database error getting player {}: {}", player_id, e);
-            AppError::NoSuchPlayer(player_id)
-        })?
-        .ok_or_else(|| {
-            tracing::debug!("Player {} not found", player_id);
-            AppError::NoSuchPlayer(player_id)
-        })?;
+        .map_err(|err| map_player_error("get_profile", player_id, err))?;
 
     Ok(Json(PlayerProfile {
         id: player_id,
@@ -48,20 +44,11 @@ pub async fn update_player_profile(
         return Err(AppError::Forbidden);
     }
 
-    // Validate inputs
-    if let Some(ref bio) = req.bio {
-        crate::validation::validate_bio(bio)?;
-    }
-    if let Some(ref avatar_url) = req.avatar_url {
-        crate::validation::validate_avatar_url(avatar_url)?;
-    }
-
-    db::update_player_profile(&app_state.db, player_id, req.bio, req.avatar_url)
+    app_state
+        .player_service
+        .update_profile(player_id, req.bio, req.avatar_url)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to update profile for player {}: {}", player_id, e);
-            AppError::NoSuchPlayer(player_id)
-        })?;
+        .map_err(|err| map_player_error("update_profile", player_id, err))?;
 
     Ok(StatusCode::OK)
 }
@@ -70,13 +57,12 @@ pub async fn get_player_stats(
     State(app_state): ServerState,
     Path(player_id): Path<Uuid>,
 ) -> Result<Json<PlayerStats>, AppError> {
-    let stats = db::get_player_stats(&app_state.db, player_id)
+    let stats = app_state
+        .player_service
+        .get_stats(player_id)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to get player stats for {}: {}", player_id, e);
-            AppError::NoSuchPlayer(player_id)
-        })?
-        .unwrap_or(db::PlayerStatsRecord {
+        .map_err(|err| map_player_error("get_stats", player_id, err))?
+        .unwrap_or(PlayerStatsRecord {
             player_id: RecordId::from_table_key("players", player_id),
             games_played: 0,
             games_won: 0,
@@ -95,4 +81,15 @@ pub async fn get_player_stats(
         total_playtime: stats.total_playtime,
         win_rate,
     }))
+}
+
+fn map_player_error(action: &str, player_id: Uuid, err: PlayerServiceError) -> AppError {
+    match err {
+        PlayerServiceError::NotFound(_) => AppError::NoSuchPlayer(player_id),
+        PlayerServiceError::Validation(msg) => AppError::ValidationError(msg),
+        PlayerServiceError::Database(e) => {
+            tracing::error!(player_id = %player_id, action = action, error = %e, "Player service database error");
+            AppError::NoSuchPlayer(player_id)
+        }
+    }
 }

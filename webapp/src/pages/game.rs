@@ -3,7 +3,6 @@ use crate::{
         ChatPanel, GameBoard, GameHistory, GameInfo, MoveControls, RoundControls, SaveLoadControls,
         SkeletonGameBoard, SkeletonList, use_toast,
     },
-    helpers::create_api_client,
     state::AppState,
     websocket::create_game_websocket,
 };
@@ -14,14 +13,17 @@ use uuid::Uuid;
 
 #[component]
 pub fn GamesListPage() -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let (filter_status, set_filter_status) = signal("all".to_string());
     let (sort_by, set_sort_by) = signal("created_at".to_string());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
+    let app_state_for_games = app_state.clone();
     let games_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
+        let app_state = app_state_for_games.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.list_games().await
         }
     });
@@ -195,25 +197,29 @@ fn GameCard(game: GameListItem) -> impl IntoView {
 
 #[component]
 pub fn CreateGamePage() -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = leptos_router::hooks::use_navigate();
 
     let (player_count, set_player_count) = signal(2u8);
     let (use_column_rule, set_use_column_rule) = signal(true);
 
+    let app_state_for_create = app_state.clone();
     let create_action = Action::new_local(move |(pc, ucr): &(u8, bool)| {
+        let app_state = app_state_for_create.clone();
         let pc = *pc;
         let ucr = *ucr;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.create_game(pc, ucr).await
         }
     });
 
+    let app_state_for_join = app_state.clone();
     let join_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_join.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.join_game(gid).await
         }
     });
@@ -374,10 +380,12 @@ pub fn GamePage() -> impl IntoView {
     });
 
     // Fetch initial game state (once)
+    let app_state_for_initial_load = app_state.clone();
     let initial_load_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_initial_load.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.get_game_state_typed(gid).await
         }
     });
@@ -420,10 +428,12 @@ pub fn GamePage() -> impl IntoView {
     });
 
     // Auto-join action for when viewing a game that's waiting for players
+    let app_state_for_auto_join_action = app_state.clone();
     let auto_join_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_auto_join_action.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.join_game(gid).await
         }
     });

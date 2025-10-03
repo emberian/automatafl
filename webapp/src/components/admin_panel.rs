@@ -1,7 +1,6 @@
 // AdminPanel component - comprehensive admin functionality
 use crate::{
     components::{use_modal, use_toast},
-    helpers::create_api_client,
     state::AppState,
 };
 use automatafl_api_types::{GameListItem, PlayerListItem};
@@ -93,22 +92,28 @@ fn AdminPlayersTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
     let toast = use_toast();
 
     let (players, set_players) = signal(Vec::<PlayerListItem>::new());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
-    let load_players_action = Action::new_local(move |_: &()| async move {
-        let client = create_api_client();
-        client.admin_list_players().await.map_err(|e| e.to_string())
+    let app_state_for_load_players = app_state.clone();
+    let load_players_action = Action::new_local(move |_: &()| {
+        let app_state = app_state_for_load_players.clone();
+        async move {
+            let client = app_state.get_api_client();
+            client.admin_list_players().await.map_err(|e| e.to_string())
+        }
     });
 
+    let app_state_for_delete_player = app_state.clone();
     let delete_player_action = Action::new_local(move |pid: &Uuid| {
+        let app_state = app_state_for_delete_player.clone();
         let pid = *pid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client
                 .admin_delete_player(pid)
                 .await
@@ -235,22 +240,28 @@ fn AdminGamesTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let modal = use_modal();
     let toast = use_toast();
 
     let (games, set_games) = signal(Vec::<GameListItem>::new());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
-    let load_games_action = Action::new_local(move |_: &()| async move {
-        let client = create_api_client();
-        client.admin_list_games().await.map_err(|e| e.to_string())
+    let app_state_for_load_games = app_state.clone();
+    let load_games_action = Action::new_local(move |_: &()| {
+        let app_state = app_state_for_load_games.clone();
+        async move {
+            let client = app_state.get_api_client();
+            client.admin_list_games().await.map_err(|e| e.to_string())
+        }
     });
 
+    let app_state_for_delete_game = app_state.clone();
     let delete_game_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_delete_game.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client
                 .admin_delete_game(gid)
                 .await
@@ -258,10 +269,12 @@ fn AdminGamesTab(
         }
     });
 
+    let app_state_for_force_complete = app_state.clone();
     let force_complete_action = Action::new_local(move |gid: &Uuid| {
+        let app_state = app_state_for_force_complete.clone();
         let gid = *gid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client
                 .admin_force_complete_round(gid)
                 .await
@@ -409,23 +422,27 @@ fn AdminSessionsTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
 
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
+    let app_state_for_sessions = app_state.clone();
     let sessions_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
+        let app_state = app_state_for_sessions.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.admin_list_sessions().await
         }
     });
 
+    let app_state_for_delete_session = app_state.clone();
     let delete_session_action = Action::new_local(move |sid: &Uuid| {
+        let app_state = app_state_for_delete_session.clone();
         let sid = *sid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client
                 .admin_delete_session(sid)
                 .await
@@ -433,12 +450,16 @@ fn AdminSessionsTab(
         }
     });
 
-    let cleanup_action = Action::new_local(move |_: &()| async move {
-        let client = create_api_client();
-        client
-            .admin_cleanup_expired_sessions()
-            .await
-            .map_err(|e| e.to_string())
+    let app_state_for_cleanup = app_state.clone();
+    let cleanup_action = Action::new_local(move |_: &()| {
+        let app_state = app_state_for_cleanup.clone();
+        async move {
+            let client = app_state.get_api_client();
+            client
+                .admin_cleanup_expired_sessions()
+                .await
+                .map_err(|e| e.to_string())
+        }
     });
 
     let toast_clone = toast.clone();
@@ -569,23 +590,27 @@ fn AdminMatchmakingTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
     _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let toast = use_toast();
 
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
+    let app_state_for_queue = app_state.clone();
     let queue_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
+        let app_state = app_state_for_queue.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.admin_list_matchmaking_queue().await
         }
     });
 
+    let app_state_for_remove = app_state.clone();
     let remove_action = Action::new_local(move |pid: &Uuid| {
+        let app_state = app_state_for_remove.clone();
         let pid = *pid;
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client
                 .admin_remove_from_matchmaking(pid)
                 .await
@@ -702,22 +727,26 @@ fn AdminDatabaseTab(
     #[allow(unused_variables)] status: ReadSignal<String>,
     #[allow(unused_variables)] _set_status: WriteSignal<String>,
 ) -> impl IntoView {
-    let _app_state = use_context::<AppState>().expect("AppState should be provided");
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
 
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
+    let app_state_for_stats = app_state.clone();
     let stats_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
+        let app_state = app_state_for_stats.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.admin_get_database_stats().await
         }
     });
 
+    let app_state_for_tables = app_state.clone();
     let tables_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
+        let app_state = app_state_for_tables.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.admin_list_tables().await
         }
     });

@@ -1,5 +1,5 @@
 // MoveControls component - handles move input and submission
-use crate::{components::use_toast, helpers::create_api_client, state::AppState};
+use crate::{components::use_toast, state::AppState};
 use automatafl_api_types::GameStateResponse;
 use automatafl_logic::{Coord, MoveFeedback};
 use leptos::prelude::*;
@@ -30,13 +30,15 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
         .map(|pid| game_state.game.pending_moves.iter().any(|mv| mv.who == pid))
         .unwrap_or(false);
 
+    let app_state_for_submit = app_state.clone();
     let submit_move_action =
         Action::new_local(move |(gid, fx, fy, tx, ty): &(Uuid, u8, u8, u8, u8)| {
+            let app_state = app_state_for_submit.clone();
             let gid = *gid;
             let from = Coord { x: *fx, y: *fy };
             let to = Coord { x: *tx, y: *ty };
             async move {
-                let client = create_api_client();
+                let client = app_state.get_api_client();
                 client.perform_move(gid, from, to).await
             }
         });

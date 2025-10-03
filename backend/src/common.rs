@@ -55,6 +55,14 @@ pub struct AppState {
     pub config: Arc<crate::config::Config>,
     /// Game service for business logic
     pub game_service: Arc<services::GameService>,
+    /// Authentication service for identity workflow
+    pub auth_service: Arc<services::AuthService>,
+    /// Player service for profile & stats operations
+    pub player_service: Arc<services::PlayerService>,
+    /// Matchmaking service orchestrating queue / background tasks
+    pub matchmaking_service: Arc<services::MatchmakingService>,
+    /// Administrative facade aggregating operations
+    pub admin_service: Arc<services::AdminService>,
 }
 
 pub type ServerState = axum::extract::State<Arc<AppState>>;
@@ -85,9 +93,14 @@ impl FromRequestParts<Arc<AppState>> for AuthPlayer {
 
         let session_id = Uuid::parse_str(auth_header).map_err(|_| AppError::Unauthorized)?;
 
-        let session = db::get_session(&state.db, session_id)
+        let session = state
+            .auth_service
+            .get_session(session_id)
             .await
-            .map_err(|_| AppError::Unauthorized)?
+            .map_err(|err| {
+                tracing::error!(session_id = %session_id, "Failed to fetch session: {}", err);
+                AppError::Unauthorized
+            })?
             .ok_or(AppError::Unauthorized)?;
 
         // Check if session has expired
@@ -119,10 +132,18 @@ impl FromRequestParts<Arc<AppState>> for AdminPlayer {
     ) -> Result<Self, Self::Rejection> {
         let auth_player = AuthPlayer::from_request_parts(parts, state).await?;
 
-        let player = db::get_player(&state.db, auth_player.player_id)
+        let player = state
+            .player_service
+            .get_player_or_error(auth_player.player_id)
             .await
-            .map_err(|_| AppError::NoSuchPlayer(auth_player.player_id))?
-            .ok_or(AppError::NoSuchPlayer(auth_player.player_id))?;
+            .map_err(|err| {
+                tracing::error!(player_id = %auth_player.player_id, "Failed to load player: {}", err);
+                match err {
+                    crate::services::PlayerServiceError::NotFound(id) => AppError::NoSuchPlayer(id),
+                    crate::services::PlayerServiceError::Validation(msg) => AppError::ValidationError(msg),
+                    crate::services::PlayerServiceError::Database(_) => AppError::NoSuchPlayer(auth_player.player_id),
+                }
+            })?;
 
         if !player.is_admin {
             return Err(AppError::Forbidden);

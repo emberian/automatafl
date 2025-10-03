@@ -1,5 +1,5 @@
 // GameHistory component - displays game events and history
-use crate::{helpers::create_api_client, state::AppState};
+use crate::state::AppState;
 use automatafl_api_types::{GameEvent, GameEventData};
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -20,8 +20,9 @@ pub fn GameHistory(game_id: Uuid) -> impl IntoView {
             .get_history_signal(game_id)
             .map(|sig| sig.get());
         let filter = filter_event_kind.get();
+        let app_state = app_state_for_resource.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             if let Some(kind) = filter {
                 client
                     .get_game_history_filtered(game_id, None, None, Some(kind))

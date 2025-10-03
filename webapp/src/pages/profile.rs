@@ -1,4 +1,4 @@
-use crate::{helpers::create_api_client, state::AppState};
+use crate::state::AppState;
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_params_map};
 use uuid::Uuid;
@@ -15,12 +15,14 @@ pub fn UserProfilePage() -> impl IntoView {
             .and_then(|id| Uuid::parse_str(&id).ok())
     });
 
+    let app_state_for_profile = app_state.clone();
     let profile_resource = LocalResource::new(move || {
+        let app_state = app_state_for_profile.clone();
         let uid = user_id.get();
         async move {
             match uid {
                 Some(uid) => {
-                    let client = create_api_client();
+                    let client = app_state.get_api_client();
                     client.get_player_profile(uid).await
                 }
                 None => Err(automatafl_backend_client::ClientError::Api(
@@ -30,12 +32,14 @@ pub fn UserProfilePage() -> impl IntoView {
         }
     });
 
+    let app_state_for_stats = app_state.clone();
     let stats_resource = LocalResource::new(move || {
+        let app_state = app_state_for_stats.clone();
         let uid = user_id.get();
         async move {
             match uid {
                 Some(uid) => {
-                    let client = create_api_client();
+                    let client = app_state.get_api_client();
                     client.get_player_stats(uid).await
                 }
                 None => Err(automatafl_backend_client::ClientError::Api(
@@ -226,6 +230,7 @@ fn ProfileEditSection(
     initial_bio: Option<String>,
     initial_avatar: Option<String>,
 ) -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let (is_editing, set_is_editing) = signal(false);
     let (bio, set_bio) = signal(initial_bio.clone().unwrap_or_default());
     let (avatar_url, set_avatar_url) = signal(initial_avatar.clone().unwrap_or_default());
@@ -235,12 +240,14 @@ fn ProfileEditSection(
     let (initial_bio_signal, _) = signal(initial_bio.clone().unwrap_or_default());
     let (initial_avatar_signal, _) = signal(initial_avatar.clone().unwrap_or_default());
 
+    let app_state_for_update = app_state.clone();
     let update_action = Action::new_local(move |(pid, b, a): &(Uuid, String, String)| {
+        let app_state = app_state_for_update.clone();
         let pid = *pid;
         let bio = if b.is_empty() { None } else { Some(b.clone()) };
         let avatar = if a.is_empty() { None } else { Some(a.clone()) };
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.update_player_profile(pid, bio, avatar).await
         }
     });

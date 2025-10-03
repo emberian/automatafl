@@ -25,8 +25,8 @@
 
 use crate::db::Db;
 use serde::Serialize;
-use std::fmt;
 use surrealdb::Error as DbError;
+use std::fmt;
 
 /// Custom error type for transaction operations
 #[derive(Debug)]
@@ -58,6 +58,46 @@ impl From<serde_json::Error> for TransactionError {
     }
 }
 
+/// Helper for game state updates with events (atomic)
+pub async fn update_game_with_events<T: Serialize>(
+    db: &Db,
+    game_id: uuid::Uuid,
+    game_state: &automatafl_logic::Game,
+    lifecycle: &automatafl_api_types::GameLifecycle,
+    events: Vec<(String, T)>, // Vec of (event_kind, event_data)
+) -> Result<(), TransactionError> {
+    let game_state_json = serde_json::to_string(game_state)?;
+    let lifecycle_json = serde_json::to_string(lifecycle)?;
+    let timestamp = crate::common::timestamp();
+
+    // Start transaction
+    db.query("BEGIN TRANSACTION;").await?;
+
+    // Update game state with parameterized query
+    db.query("UPDATE games SET game_state = $game_state, lifecycle = $lifecycle WHERE id = $id")
+        .bind(("game_state", game_state_json))
+        .bind(("lifecycle", lifecycle_json))
+        .bind(("id", game_id.to_string()))
+        .await?;
+
+    // Add all events with parameterized queries
+    for (kind, data) in events {
+        let data_json = serde_json::to_string(&data)?;
+        
+        db.query("CREATE game_events SET game_id = $game_id, timestamp = $timestamp, event_kind = $kind, event_data = $data")
+            .bind(("game_id", game_id.to_string()))
+            .bind(("timestamp", timestamp))
+            .bind(("kind", kind))
+            .bind(("data", data_json))
+            .await?;
+    }
+
+    // Commit transaction
+    db.query("COMMIT TRANSACTION;").await?;
+
+    Ok(())
+}
+
 /// Atomic player stats update with ELO change
 pub async fn update_player_stats_atomic(
     db: &Db,
@@ -66,30 +106,44 @@ pub async fn update_player_stats_atomic(
     playtime: u64,
     new_elo: Option<i32>,
 ) -> Result<(), TransactionError> {
+    // Start transaction
+    db.query("BEGIN TRANSACTION;").await?;
+
+    // Update or create stats with atomic operations
     let won_delta = if won { 1 } else { 0 };
+    
+    db.query(
+        "LET $stats = (SELECT * FROM player_stats WHERE player_id = $player_id)[0];\
+         IF $stats THEN \
+             UPDATE player_stats SET \
+                 games_played += 1, \
+                 games_won += $won_delta, \
+                 total_playtime += $playtime \
+             WHERE player_id = $player_id \
+         ELSE \
+             CREATE player_stats SET \
+                 player_id = $player_id, \
+                 games_played = 1, \
+                 games_won = $won_delta, \
+                 total_playtime = $playtime \
+         END;"
+    )
+    .bind(("player_id", player_id.to_string()))
+    .bind(("won_delta", won_delta))
+    .bind(("playtime", playtime))
+    .await?;
 
-    let mut query = String::from(
-        "BEGIN TRANSACTION;\n        LET $stats = (SELECT * FROM player_stats WHERE player_id = $player_id)[0];\n        IF $stats THEN\n            UPDATE player_stats SET\n                games_played += 1,\n                games_won += $won_delta,\n                total_playtime += $playtime\n            WHERE player_id = $player_id\n        ELSE\n            CREATE player_stats SET\n                player_id = $player_id,\n                games_played = 1,\n                games_won = $won_delta,\n                total_playtime = $playtime\n        END;\n",
-    );
-
-    if new_elo.is_some() {
-        query.push_str("        UPDATE players SET elo_rating = $elo WHERE id = $player_id;\n");
-    }
-
-    query.push_str("        COMMIT TRANSACTION;\n");
-
-    let mut request = db
-        .query(query)
-        .bind(("player_id", player_id.to_string()))
-        .bind(("won_delta", won_delta))
-        .bind(("playtime", playtime));
-
+    // Update ELO if provided
     if let Some(elo) = new_elo {
-        request = request.bind(("elo", elo));
+        db.query("UPDATE players SET elo_rating = $elo WHERE id = $id")
+            .bind(("elo", elo))
+            .bind(("id", player_id.to_string()))
+            .await?;
     }
 
-    request.await?;
-
+    // Commit transaction
+    db.query("COMMIT TRANSACTION;").await?;
+    
     Ok(())
 }
 
@@ -107,34 +161,55 @@ pub async fn create_game_with_players(
     let lifecycle_json = serde_json::to_string(lifecycle)?;
     let timestamp = crate::common::timestamp();
 
-    let mut player_records = Vec::with_capacity(player_uuids.len());
+    // Start transaction
+    db.query("BEGIN TRANSACTION;").await?;
+
+    // Create game with parameterized query
+    db.query(
+        "CREATE games SET id = $id, game_state = $game_state, lifecycle = $lifecycle, \
+         created_at = $created_at, created_by = $created_by, player_count = $player_count"
+    )
+    .bind(("id", game_id.to_string()))
+    .bind(("game_state", game_state_json))
+    .bind(("lifecycle", lifecycle_json))
+    .bind(("created_at", timestamp))
+    .bind(("created_by", creator_id.to_string()))
+    .bind(("player_count", player_count))
+    .await?;
+
+    // Add all players with parameterized queries
     for (player_uuid, pid) in player_uuids {
-        player_records.push(serde_json::json!({
-            "game_id": game_id.to_string(),
-            "player_id": player_uuid.to_string(),
-            "player_pid": pid,
-        }));
+        db.query("CREATE game_players SET game_id = $game_id, player_id = $player_id, player_pid = $player_pid")
+            .bind(("game_id", game_id.to_string()))
+            .bind(("player_id", player_uuid.to_string()))
+            .bind(("player_pid", pid))
+            .await?;
     }
 
-    let query = r#"
-        BEGIN TRANSACTION;
-        CREATE games SET id = $id, game_state = $game_state, lifecycle = $lifecycle,
-            created_at = $created_at, created_by = $created_by, player_count = $player_count;
-        IF array::len($players) > 0 THEN
-            INSERT INTO game_players $players;
-        END;
-        COMMIT TRANSACTION;
-    "#;
+    // Commit transaction
+    db.query("COMMIT TRANSACTION;").await?;
 
-    db.query(query)
-        .bind(("id", game_id.to_string()))
-        .bind(("game_state", game_state_json))
-        .bind(("lifecycle", lifecycle_json))
-        .bind(("created_at", timestamp))
-        .bind(("created_by", creator_id.to_string()))
-        .bind(("player_count", player_count))
-        .bind(("players", player_records))
-        .await?;
+    Ok(())
+}
+
+/// Remove players from matchmaking queue (atomic)
+/// Note: This function only removes from queue, it does not add to games
+pub async fn remove_players_from_queue(
+    db: &Db,
+    player_uuids: Vec<uuid::Uuid>,
+) -> Result<(), TransactionError> {
+    // Start transaction
+    db.query("BEGIN TRANSACTION;").await?;
+
+    // Remove each player from queue with parameterized queries
+    for player_uuid in &player_uuids {
+        db.query("DELETE matchmaking_queue WHERE player_id = $player_id")
+            .bind(("player_id", player_uuid.to_string()))
+            .await?;
+    }
+
+    // Commit transaction
+    db.query("COMMIT TRANSACTION;").await?;
 
     Ok(())
 }

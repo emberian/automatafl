@@ -1,5 +1,5 @@
 // GameBoard component - renders the Automatafl board with traditional hnefetafl pieces
-use crate::{helpers::create_api_client, state::AppState};
+use crate::state::AppState;
 use automatafl_api_types::GameStateResponse;
 use automatafl_logic::{Coord, Particle};
 use leptos::prelude::*;
@@ -29,10 +29,12 @@ pub fn GameBoard(
     let can_interact = my_pid.is_some() && !has_pending_move;
 
     // Move submission action
+    let app_state_for_move = app_state.clone();
     let move_action = Action::new_local(move |(gid, from, to): &(Uuid, Coord, Coord)| {
+        let app_state = app_state_for_move.clone();
         let (gid, from, to) = (*gid, *from, *to);
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             client.perform_move(gid, from, to).await
         }
     });

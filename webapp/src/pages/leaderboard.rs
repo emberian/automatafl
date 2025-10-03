@@ -1,18 +1,21 @@
-use crate::helpers::create_api_client;
+use crate::state::AppState;
 use automatafl_api_types::LeaderboardEntry;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
 pub fn LeaderboardPage() -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
     let (active_tab, set_active_tab) = signal("elo".to_string());
     let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
+    let app_state_for_leaderboard = app_state.clone();
     let leaderboard_resource = LocalResource::new(move || {
         let _ = refresh_trigger.get();
         let tab = active_tab.get();
+        let app_state = app_state_for_leaderboard.clone();
         async move {
-            let client = create_api_client();
+            let client = app_state.get_api_client();
             match tab.as_str() {
                 "elo" => client.get_leaderboard_elo().await,
                 "wins" => client.get_leaderboard_wins().await,
