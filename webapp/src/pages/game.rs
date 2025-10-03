@@ -1,10 +1,10 @@
 use crate::{
     api::ApiClient,
-    components::{GameBoard, ChatPanel, GameInfo, MoveControls},
+    components::{GameBoard, ChatPanel, GameInfo, MoveControls, RoundControls, SaveLoadControls},
     state::AppState,
-    websocket::create_websocket_connection,
+    websocket::create_game_websocket,
 };
-use automatafl_api::{GameStateResponse, GameStatus};
+use automatafl_api_types::{GameListItem, GameLifecycle};
 use leptos::prelude::*;
 use leptos_router::{hooks::use_params_map, components::A};
 use uuid::Uuid;
@@ -12,30 +12,17 @@ use uuid::Uuid;
 #[component]
 pub fn GamesListPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let (games, set_games) = create_signal(Vec::<GameStateResponse>::new());
-    let (loading, set_loading) = create_signal(true);
-    let (error, set_error) = create_signal(Option::<String>::None);
     
-    // Fetch games on mount
-    Effect::new(move |_| {
-        spawn_local(async move {
-            let client = ApiClient::new(
-                app_state.api_base_url.clone(),
-                app_state.auth_token.get()
-            );
-            
-            match client.list_games().await {
-                Ok(game_list) => {
-                    set_games.set(game_list);
-                    set_loading.set(false);
-                }
-                Err(e) => {
-                    set_error.set(Some(e));
-                    set_loading.set(false);
-                }
+    let api_base_url = app_state.api_base_url.clone();
+    let games_resource = LocalResource::new(
+        move || {
+            let api_base_url = api_base_url.clone();
+            async move {
+                let client = ApiClient::new(api_base_url);
+                client.list_games().await
             }
-        });
-    });
+        }
+    );
 
     view! {
         <div class="games-list-page">
@@ -45,73 +32,57 @@ pub fn GamesListPage() -> impl IntoView {
                     <A href="/games/create" attr:class="button button-primary">
                         "Create New Game"
                     </A>
-                    <A href="/matchmaking" attr:class="button button-secondary">
-                        "Quick Match"
-                    </A>
                 </div>
             </div>
             
-            <Show
-                when=move || loading.get()
-                fallback=move || view! {
-                    <Show
-                        when=move || error.get().is_some()
-                        fallback=move || view! {
-                            <div class="games-grid">
-                                <For
-                                    each=move || games.get()
-                                    key=|game| game.id
-                                    let:game
-                                >
-                                    <GameCard game=game />
-                                </For>
-                                
-                                <Show when=move || games.get().is_empty()>
-                                    <div class="empty-state">
-                                        <h3>"No active games"</h3>
-                                        <p>"Be the first to create a game!"</p>
-                                    </div>
-                                </Show>
-                            </div>
-                        }
-                    >
-                        <div class="error-state">
-                            <h3>"Error loading games"</h3>
-                            <p>{move || error.get().unwrap_or_default()}</p>
-                            <button attr:class="button" on:click=move |_| {
-                                set_loading.set(true);
-                                set_error.set(None);
-                                // Trigger refetch by updating effect
-                            }>
-                                "Retry"
-                            </button>
-                        </div>
-                    </Show>
-                }
-            >
+            <Suspense fallback=move || view! {
                 <div class="loading-state">
                     <div class="spinner"></div>
                     <p>"Loading games..."</p>
                 </div>
-            </Show>
+            }>
+                {move || {
+                    games_resource.get().map(|result| {
+                        match result {
+                            Ok(games) => view! {
+                                <div class="games-grid">
+                                    {if games.is_empty() {
+                                        view! {
+                                            <div class="empty-state">
+                                                <h3>"No active games"</h3>
+                                                <p>"Be the first to create a game!"</p>
+                                                <A href="/games/create" attr:class="button button-primary">
+                                                    "Create Game"
+                                                </A>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        games.into_iter().map(|game| {
+                                            view! { <GameCard game=game /> }
+                                        }).collect_view().into_any()
+                                    }}
+                                </div>
+                            }.into_any(),
+                            Err(e) => view! {
+                                <div class="error-state">
+                                    <h3>"Error loading games"</h3>
+                                    <p>{format!("{}", e)}</p>
+                                </div>
+                            }.into_any()
+                        }
+                    })
+                }}
+            </Suspense>
         </div>
     }
 }
 
 #[component]
-fn GameCard(game: GameStateResponse) -> impl IntoView {
-    let status_class = match game.round_state.as_str() {
-        "waiting" => "status-waiting",
-        "active" => "status-active",
-        "completed" => "status-completed",
-        _ => "status-unknown",
-    };
-    
-    let status_text = match game.round_state.as_str() {
-        "waiting" => "Waiting for players",
-        "active" => "In progress",
-        "completed" => "Completed",
-        _ => "Unknown",
+fn GameCard(game: GameListItem) -> impl IntoView {
+    let (status_class, status_text) = match game.lifecycle {
+        GameLifecycle::Waiting => ("status-waiting", "Waiting for players"),
+        GameLifecycle::InProgress => ("status-active", "In progress"),
+        GameLifecycle::Finished => ("status-completed", "Finished"),
     };
 
     view! {
@@ -121,41 +92,29 @@ fn GameCard(game: GameStateResponse) -> impl IntoView {
                 <span class=format!("game-status {}", status_class)>{status_text}</span>
             </div>
             
-            <div class="game-card-players">
-                <div class="player-info">
-                    <span class="player-label">"White:"</span>
-                    {game.white_player.as_ref()
-                        .map(|p| p.username.clone())
-                        .unwrap_or_else(|| "Waiting...".to_string())}
+            <div class="game-card-info">
+                <div class="info-row">
+                    <span class="info-label">"Players:"</span>
+                    <span class="info-value">{game.player_count}" / "{game.max_players}</span>
                 </div>
-                <div class="player-info">
-                    <span class="player-label">"Black:"</span>
-                    {game.black_player.as_ref()
-                        .map(|p| p.username.clone())
-                        .unwrap_or_else(|| "Waiting...".to_string())}
+                <div class="info-row">
+                    <span class="info-label">"Created:"</span>
+                    <span class="info-value">
+                        {chrono::DateTime::from_timestamp(game.created_at as i64, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| "Unknown".to_string())}
+                    </span>
                 </div>
             </div>
             
-            <Show when=move || game.spectator_count > 0>
-                <div class="spectator-count">
-                    "👁 " {game.spectator_count} " spectators"
-                </div>
-            </Show>
-            
             <div class="game-card-actions">
-                <A href=format!("/games/{}", game.id) attr:class="button button-small">
-                    "View Game"
+                <A href=format!("/games/{}", game.id) attr:class="button button-small button-primary">
+                    {match game.lifecycle {
+                        GameLifecycle::Waiting => "Join Game",
+                        GameLifecycle::InProgress => "View Game",
+                        GameLifecycle::Finished => "View Results",
+                    }}
                 </A>
-                <Show when=move || game.round_state == "waiting">
-                    <button attr:class="button button-small button-primary">
-                        "Join Game"
-                    </button>
-                </Show>
-                <Show when=move || game.round_state == "active">
-                    <A href=format!("/games/{}/spectate", game.id) attr:class="button button-small">
-                        "Spectate"
-                    </A>
-                </Show>
             </div>
         </div>
     }
@@ -166,228 +125,333 @@ pub fn CreateGamePage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = leptos_router::hooks::use_navigate();
     
-    let (time_control, set_time_control) = create_signal("none".to_string());
-    let (creating, set_creating) = create_signal(false);
-    let (error, set_error) = create_signal(Option::<String>::None);
-
-    let create_game = move |_| {
-        set_creating.set(true);
-        set_error.set(None);
-        
-        let time_control_value = if time_control.get() == "none" {
-            None
-        } else {
-            Some(time_control.get())
-        };
-        
-        spawn_local(async move {
-            let client = ApiClient::new(
-                app_state.api_base_url.clone(),
-                app_state.auth_token.get()
-            );
-            
-            match client.create_game(time_control_value).await {
-                Ok(game) => {
-                    navigate(&format!("/games/{}", game.id), Default::default());
+    let (player_count, set_player_count) = signal(2u8);
+    let (use_column_rule, set_use_column_rule) = signal(true);
+    
+    let api_base_url_for_create = app_state.api_base_url.clone();
+    let create_action = Action::new_local(move |(pc, ucr): &(u8, bool)| {
+        let pc = *pc;
+        let ucr = *ucr;
+        let base_url = api_base_url_for_create.clone();
+        async move {
+            let client = ApiClient::new(base_url);
+            client.create_game(pc, ucr).await
+        }
+    });
+    
+    let api_base_url_for_join = app_state.api_base_url.clone();
+    let join_action = Action::new_local(move |gid: &Uuid| {
+        let gid = *gid;
+        let base_url = api_base_url_for_join.clone();
+        async move {
+            let client = ApiClient::new(base_url);
+            client.join_game(gid).await
+        }
+    });
+    
+    let on_submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        create_action.dispatch((player_count.get(), use_column_rule.get()));
+    };
+    
+    // After game is created, join it
+    Effect::new(move |_| {
+        if let Some(Ok(game_id)) = create_action.value().get() {
+            join_action.dispatch(game_id);
+        }
+    });
+    
+    // After joining, navigate to the game
+    Effect::new(move |_| {
+        if let Some(result) = join_action.value().get() {
+            match result {
+                Ok(_pid) => {
+                    // Get the game_id from create_action
+                    if let Some(Ok(game_id)) = create_action.value().get() {
+                        navigate(&format!("/games/{}", game_id), Default::default());
+                    }
                 }
                 Err(e) => {
-                    set_error.set(Some(e));
-                    set_creating.set(false);
+                    web_sys::console::error_1(&format!("Failed to join game: {}", e).into());
+                    // Still navigate to show the error
+                    if let Some(Ok(game_id)) = create_action.value().get() {
+                        navigate(&format!("/games/{}", game_id), Default::default());
+                    }
                 }
             }
-        });
-    };
+        }
+    });
 
     view! {
         <div class="create-game-page">
-            <div class="create-game-card">
+            <div class="page-header">
                 <h1>"Create New Game"</h1>
-                
-                <div class="game-options">
-                    <div class="option-group">
-                        <label>"Time Control"</label>
-                        <select
-                            class="form-select"
-                            on:change=move |ev| set_time_control.set(event_target_value(&ev))
-                            prop:value=time_control
-                        >
-                            <option value="none">"No time limit"</option>
-                            <option value="blitz">"Blitz (5 minutes)"</option>
-                            <option value="rapid">"Rapid (10 minutes)"</option>
-                            <option value="classical">"Classical (30 minutes)"</option>
-                        </select>
+            </div>
+            
+            <form on:submit=on_submit class="create-game-form">
+                <div class="form-section">
+                    <h3>"Game Settings"</h3>
+                    
+                    <div class="form-group">
+                        <label>"Number of Players"</label>
+                        <div class="radio-group">
+                            <label class="radio-option">
+                                <input
+                                    type="radio"
+                                    name="player_count"
+                                    value="2"
+                                    checked=move || player_count.get() == 2
+                                    on:change=move |_| set_player_count.set(2)
+                                />
+                                <span>"2 Players"</span>
+                            </label>
+                            <label class="radio-option">
+                                <input
+                                    type="radio"
+                                    name="player_count"
+                                    value="4"
+                                    checked=move || player_count.get() == 4
+                                    on:change=move |_| set_player_count.set(4)
+                                />
+                                <span>"4 Players"</span>
+                            </label>
+                        </div>
+                        <small class="form-hint">"Standard two-player or four-player game"</small>
                     </div>
                     
-                    <div class="option-info">
-                        <h3>"Game Rules"</h3>
-                        <ul>
-                            <li>"Board size: 11x11"</li>
-                            <li>"Each player controls attractors and repulsors"</li>
-                            <li>"Guide the automaton to your goal to win"</li>
-                            <li>"First player to reach their goal wins"</li>
-                        </ul>
+                    <div class="form-group">
+                        <label class="checkbox-option">
+                            <input
+                                type="checkbox"
+                                checked=use_column_rule
+                                on:change=move |ev| set_use_column_rule.set(event_target_checked(&ev))
+                            />
+                            <span>"Use Column Rule"</span>
+                        </label>
+                        <small class="form-hint">
+                            "When automaton priorities tie, prefer horizontal movement. Recommended for standard play."
+                        </small>
                     </div>
                 </div>
                 
-                <Show when=move || error.get().is_some()>
-                    <div class="error-message">
-                        {move || error.get().unwrap_or_default()}
-                    </div>
-                </Show>
+                {move || {
+                    if let Some(Err(e)) = create_action.value().get() {
+                        view! {
+                            <div class="error-message">
+                                {format!("Failed to create game: {}", e)}
+                            </div>
+                        }.into_any()
+                    } else if let Some(Err(e)) = join_action.value().get() {
+                        view! {
+                            <div class="error-message">
+                                {format!("Game created but failed to join: {}", e)}
+                            </div>
+                        }.into_any()
+                    } else if join_action.pending().get() {
+                        view! {
+                            <div class="success-message">
+                                "Game created! Joining..."
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {}.into_any()
+                    }
+                }}
                 
                 <div class="form-actions">
                     <button
-                        attr:class="button button-primary"
-                        on:click=create_game
-                        disabled=creating
+                        type="submit"
+                        class="button button-primary button-large"
+                        disabled=move || create_action.pending().get() || join_action.pending().get()
                     >
-                        {move || if creating.get() { "Creating..." } else { "Create Game" }}
+                        {move || {
+                            if join_action.pending().get() {
+                                "Joining..."
+                            } else if create_action.pending().get() {
+                                "Creating..."
+                            } else {
+                                "Create Game"
+                            }
+                        }}
                     </button>
                     <A href="/games" attr:class="button button-secondary">
                         "Cancel"
                     </A>
                 </div>
-            </div>
+            </form>
         </div>
     }
 }
 
 #[component]
 pub fn GamePage() -> impl IntoView {
-    let params = use_params_map();
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let params = use_params_map();
     
-    let game_id = move || {
+    let game_id = Memo::new(move |_| {
         params.get()
             .get("id")
             .and_then(|id| Uuid::parse_str(&id).ok())
-    };
+    });
     
-    let (game_state, set_game_state) = create_signal(Option::<GameStateResponse>::None);
-    let (selected_cell, set_selected_cell) = create_signal(Option::<(u8, u8)>::None);
-    let (error, set_error) = create_signal(Option::<String>::None);
-    let (loading, set_loading) = create_signal(true);
+    let api_base_url = app_state.api_base_url.clone();
+    let app_state_for_resource = app_state.clone();
     
-    // WebSocket connection
-    let ws_connection = store_value(None);
-    
-    // Fetch initial game state and setup WebSocket
-    Effect::new(move |_| {
-        if let Some(id) = game_id() {
-            spawn_local(async move {
-                let client = ApiClient::new(
-                    app_state.api_base_url.clone(),
-                    app_state.auth_token.get()
-                );
-                
-                match client.get_game(id).await {
-                    Ok(game) => {
-                        set_game_state.set(Some(game));
-                        set_loading.set(false);
-                        
-                        // Setup WebSocket connection
-                        if let Some(ws) = create_websocket_connection(&app_state) {
-                            let _ = ws.subscribe_to_game(id).await;
-                            ws_connection.set_value(Some(ws));
-                        }
+    let game_state_resource = LocalResource::new(
+        move || {
+            let gid = game_id.get();
+            // Track the game refresh trigger to make resource reactive
+            let _trigger = gid.map(|id| app_state_for_resource.get_game_refresh_trigger(id));
+            let api_base_url = api_base_url.clone();
+            async move {
+                match gid {
+                    Some(gid) => {
+                        let client = ApiClient::new(api_base_url);
+                        client.get_game_state_typed(gid).await
                     }
-                    Err(e) => {
-                        set_error.set(Some(e));
-                        set_loading.set(false);
-                    }
+                    None => Err(automatafl_backend_client::ClientError::Api("Invalid game ID".to_string()))
                 }
-            });
+            }
+        }
+    );
+    
+    // Auto-join action for when viewing a game that's waiting for players
+    let api_base_url_for_auto_join = app_state.api_base_url.clone();
+    let auto_join_action = Action::new_local(move |gid: &Uuid| {
+        let gid = *gid;
+        let base_url = api_base_url_for_auto_join.clone();
+        async move {
+            let client = ApiClient::new(base_url);
+            client.join_game(gid).await
+        }
+    });
+    
+    // Track if we've already attempted auto-join for this game
+    let (auto_join_attempted, set_auto_join_attempted) = signal(Option::<Uuid>::None);
+    
+    // Auto-join logic: join if authenticated, not already in game, and game is waiting
+    let app_state_for_auto_join = app_state.clone();
+    Effect::new(move |_| {
+        if let Some(state) = game_state_resource.get().and_then(|r| r.ok()) {
+            if let Some(gid) = game_id.get() {
+                let current_player_id = app_state_for_auto_join.current_player_id.get();
+                let is_in_game = current_player_id.and_then(|pid| state.player_ids.get(&pid)).is_some();
+                let is_waiting = matches!(state.lifecycle, GameLifecycle::Waiting);
+                let already_attempted = auto_join_attempted.get() == Some(gid);
+                
+                // Auto-join if: authenticated, not in game, game is waiting, and haven't tried yet
+                if current_player_id.is_some() && !is_in_game && is_waiting && !already_attempted {
+                    set_auto_join_attempted.set(Some(gid));
+                    auto_join_action.dispatch(gid);
+                }
+            }
+        }
+    });
+    
+    let app_state_for_effect = app_state.clone();
+    // Refresh game state after auto-join succeeds
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = auto_join_action.value().get() {
+            if let Some(gid) = game_id.get() {
+                app_state_for_effect.trigger_game_refresh(gid);
+            }
+        }
+    });
+    
+    // Setup WebSocket when we have a game ID
+    let app_state_for_effect = app_state.clone();
+    Effect::new(move |_| {
+        if let Some(gid) = game_id.get() {
+            // Register for refresh triggers
+            app_state_for_effect.register_game_refresh(gid);
+            
+            let _ws = create_game_websocket(gid, &app_state_for_effect);
+            // WebSocket connection is maintained until the effect is cleaned up
         }
     });
     
     view! {
         <div class="game-page">
-            <Show
-                when=move || loading.get()
-                fallback=move || view! {
-                    <Show
-                        when=move || game_state.get().is_some()
-                        fallback=move || view! {
-                            <div class="error-state">
-                                <h2>"Error loading game"</h2>
-                                <p>{move || error.get().unwrap_or_else(|| "Game not found".to_string())}</p>
-                                <A href="/games" attr:class="button">"Back to Games"</A>
-                            </div>
-                        }
-                    >
-                        {move || {
-                            let game = game_state.get().unwrap();
-                            let board_signal = move || game_state.get().unwrap().board;
-                            
-                            view! {
-                                <div class="game-container">
-                                    <div class="game-header">
-                                        <h1>"Game " {game.id.to_string().chars().take(8).collect::<String>()}</h1>
-                                        <div class="game-actions">
-                                            <A href=format!("/games/{}/history", game.id) attr:class="button button-small">
-                                                "View History"
-                                            </A>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="game-content">
-                                        <div class="game-left-panel">
-                                            <GameInfo game_state=game_state.into() />
-                                            <MoveControls
-                                                game_state=game_state.into()
-                                                selected_cell=selected_cell
-                                                on_submit_move=move |from_x, from_y, to_x, to_y| {
-                                                    // Submit move logic
-                                                }
-                                                on_clear_selection=move || {
-                                                    set_selected_cell.set(None);
-                                                }
-                                            />
-                                        </div>
-                                        
-                                        <div class="game-center">
-                                            <GameBoard
-                                                board=Signal::derive(board_signal)
-                                                selected_cell=selected_cell
-                                                on_cell_click=move |x, y| {
-                                                    set_selected_cell.update(|sel| {
-                                                        if *sel == Some((x, y)) {
-                                                            *sel = None;
-                                                        } else {
-                                                            *sel = Some((x, y));
-                                                        }
-                                                    });
-                                                }
-                                                show_coordinates=Signal::derive(move || false)
-                                                highlight_goals=Signal::derive(move || true)
-                                            />
-                                        </div>
-                                        
-                                        <div class="game-right-panel">
-                                            <ChatPanel game_id=game.id />
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-                        }}
-                    </Show>
+            {move || {
+                if auto_join_action.pending().get() {
+                    view! {
+                        <div class="loading-state">
+                            <div class="spinner"></div>
+                            <p>"Joining game..."</p>
+                        </div>
+                    }.into_any()
+                } else if let Some(Err(e)) = auto_join_action.value().get() {
+                    view! {
+                        <div class="error-message" style="margin: 20px;">
+                            {format!("Failed to join game: {}. You can still spectate.", e)}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {}.into_any()
                 }
-            >
+            }}
+            
+            <Suspense fallback=move || view! {
                 <div class="loading-state">
                     <div class="spinner"></div>
                     <p>"Loading game..."</p>
                 </div>
-            </Show>
+            }>
+                {move || {
+                    game_state_resource.get().map(|result| {
+                        match result {
+                            Ok(state) => {
+                                let gid = game_id.get().unwrap();
+                                view! {
+                                    <div class="game-container">
+                                        <div class="game-header">
+                                            <GameInfo game_state=state.clone() />
+                                        </div>
+                                        <div class="game-main">
+                                            <div class="game-left-panel">
+                                                <MoveControls game_id=gid game_state=state.clone() />
+                                                <RoundControls game_id=gid game_state=state.clone() />
+                                                <SaveLoadControls game_id=gid />
+                                            </div>
+                                            <div class="game-center">
+                                                <GameBoard game_id=gid game_state=state.clone() />
+                                            </div>
+                                            <div class="game-right-panel">
+                                                <ChatPanel game_id=gid />
+                                            </div>
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            }
+                            Err(e) => view! {
+                                <div class="error-state">
+                                    <h3>"Error loading game"</h3>
+                                    <p>{format!("{}", e)}</p>
+                                    <A href="/games" attr:class="button">
+                                        "Back to Games"
+                                    </A>
+                                </div>
+                            }.into_any()
+                        }
+                    })
+                }}
+            </Suspense>
         </div>
     }
 }
 
+// TODO: These pages require additional backend support for game history/spectating
 #[component]
 pub fn GameHistoryPage() -> impl IntoView {
     view! {
         <div class="game-history-page">
             <h1>"Game History"</h1>
-            <p>"Game history view coming soon..."</p>
+            <div class="stub-notice">
+                <p>"Game history/replay is not yet implemented in the backend."</p>
+                <A href="/games" attr:class="button">
+                    "Back to Games"
+                </A>
+            </div>
         </div>
     }
 }
@@ -397,7 +461,12 @@ pub fn SpectatePage() -> impl IntoView {
     view! {
         <div class="spectate-page">
             <h1>"Spectate Game"</h1>
-            <p>"Spectator mode coming soon..."</p>
+            <div class="stub-notice">
+                <p>"Spectator mode uses the same game view. Spectator-specific features coming soon."</p>
+                <A href="/games" attr:class="button">
+                    "Back to Games"
+                </A>
+            </div>
         </div>
     }
 }

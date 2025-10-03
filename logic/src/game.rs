@@ -206,6 +206,9 @@ impl Game {
                     }
                 }
 
+                // Clear pending moves for the next round
+                self.pending_moves.clear();
+
                 Ok(results)
             }
             Err(moves_conflicted) => {

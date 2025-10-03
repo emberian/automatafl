@@ -1,5 +1,5 @@
+// ChatPanel component - displays game chat
 use crate::{api::ApiClient, state::AppState};
-use automatafl_api::ChatMessage;
 use leptos::prelude::*;
 use uuid::Uuid;
 
@@ -7,25 +7,33 @@ use uuid::Uuid;
 pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     
-    let (messages, set_messages) = create_signal(Vec::<ChatMessage>::new());
-    let (message_input, set_message_input) = create_signal(String::new());
-    let (sending, set_sending) = create_signal(false);
-    let (error, set_error) = create_signal(Option::<String>::None);
+    let (message_input, set_message_input) = signal(String::new());
     
-    // Load initial messages
-    Effect::new(move |_| {
-        spawn_local(async move {
-            let client = ApiClient::new(
-                app_state.api_base_url.clone(),
-                app_state.auth_token.get()
-            );
-            
-            if let Ok(msgs) = client.get_messages(game_id).await {
-                set_messages(msgs);
+    let api_base_url = app_state.api_base_url.clone();
+    let app_state_for_resource = app_state.clone();
+    let messages_resource = LocalResource::new(
+        move || {
+            // Track game refresh trigger to make resource reactive to WebSocket events
+            let _trigger = app_state_for_resource.get_game_refresh_trigger(game_id);
+            let api_base_url = api_base_url.clone();
+            async move {
+                let client = ApiClient::new(api_base_url);
+                client.get_chat(game_id).await
             }
-        });
-    });
+        }
+    );
     
+    let api_base_url_for_action = app_state.api_base_url.clone();
+    let send_message_action = Action::new_local(move |(gid, msg): &(Uuid, String)| {
+        let gid = *gid;
+        let msg = msg.clone();
+        let base_url = api_base_url_for_action.clone();
+        async move {
+            let client = ApiClient::new(base_url);
+            client.send_chat(gid, msg).await
+        }
+    });
+
     let send_message = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         
@@ -34,96 +42,79 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
             return;
         }
         
-        set_sending(true);
-        set_error(None);
-        
-        spawn_local(async move {
-            let client = ApiClient::new(
-                app_state.api_base_url.clone(),
-                app_state.auth_token.get()
-            );
-            
-            match client.send_message(game_id, msg).await {
-                Ok(new_msg) => {
-                    set_messages.update(|msgs| msgs.push(new_msg));
-                    set_message_input(String::new());
-                    set_sending(false);
-                }
-                Err(e) => {
-                    set_error(Some(e));
-                    set_sending(false);
-                }
-            }
-        });
+        send_message_action.dispatch((game_id, msg));
     };
-
+    
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = send_message_action.value().get() {
+            set_message_input.set(String::new());
+            // Chat will refresh via WebSocket CHAT event triggering game refresh
+        }
+    });
+    
     view! {
         <div class="chat-panel">
-            <h3>"Game Chat"</h3>
+            <h3>"Chat"</h3>
             
-            <div class="chat-messages" id="chat-messages">
-                <For
-                    each=move || messages.get()
-                    key=|msg| msg.id
-                    let:msg
-                >
-                    <ChatMessageView message=msg />
-                </For>
-                
-                <Show when=move || messages.get().is_empty()>
-                    <div class="chat-empty">
-                        <p>"No messages yet. Say hello!"</p>
-                    </div>
-                </Show>
+            <div class="chat-messages">
+                <Suspense fallback=move || view! {
+                    <div class="loading">Loading messages...</div>
+                }>
+                    {move || {
+                        messages_resource.get().map(|result| {
+                            match result {
+                                Ok(messages) => {
+                                    if messages.is_empty() {
+                                        view! {
+                                            <div class="chat-empty">
+                                                <p>"No messages yet"</p>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        messages.into_iter().map(|message| {
+                                            view! {
+                                                <div class="chat-message">
+                                                    <div class="message-header">
+                                                        <span class="message-author">{message.displayname.clone()}</span>
+                                                        <span class="message-time">
+                                                            {chrono::DateTime::from_timestamp(message.timestamp as i64, 0)
+                                                                .map(|dt| dt.format("%H:%M:%S").to_string())
+                                                                .unwrap_or_else(|| "".to_string())}
+                                                        </span>
+                                                    </div>
+                                                    <div class="message-content">{message.message.clone()}</div>
+                                                </div>
+                                            }
+                                        }).collect_view().into_any()
+                                    }
+                                }
+                                Err(e) => view! {
+                                    <div class="chat-error">
+                                        <p>"Error loading messages: " {format!("{}", e)}</p>
+                                    </div>
+                                }.into_any()
+                            }
+                        })
+                    }}
+                </Suspense>
             </div>
             
-            <Show when=move || error.get().is_some()>
-                <div class="chat-error">
-                    {move || error.get().unwrap_or_default()}
-                </div>
-            </Show>
-            
-            <form class="chat-input-form" on:submit=send_message>
+            <form on:submit=send_message class="chat-input-form">
                 <input
                     type="text"
                     class="chat-input"
                     placeholder="Type a message..."
-                    value=message_input
-                    on:input=move |ev| set_message_input(event_target_value(&ev))
-                    disabled=sending
+                    on:input=move |ev| set_message_input.set(event_target_value(&ev))
+                    prop:value=message_input
                 />
                 <button
                     type="submit"
-                    class="chat-send-button"
-                    disabled=move || sending.get() || message_input.get().trim().is_empty()
+                    class="button button-small"
+                    disabled=move || send_message_action.pending().get() || message_input.get().trim().is_empty()
                 >
-                    {move || if sending.get() { "..." } else { "Send" }}
+                    {move || if send_message_action.pending().get() { "..." } else { "Send" }}
                 </button>
             </form>
-        </div>
-    }
-}
-
-#[component]
-fn ChatMessageView(message: ChatMessage) -> impl IntoView {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let current_user = app_state.current_user;
-    
-    let is_own_message = move || {
-        current_user.get()
-            .map(|user| user.id == message.user_id)
-            .unwrap_or(false)
-    };
-    
-    let time_str = message.created_at.format("%H:%M").to_string();
-    
-    view! {
-        <div
-            class="chat-message"
-            class:own-message=is_own_message
-        >
-            <span class="chat-time">{time_str}</span>
-            <span class="chat-text">{message.message}</span>
         </div>
     }
 }

@@ -7,41 +7,48 @@ pub fn LoginPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = use_navigate();
     
-    let (username, set_username) = create_signal(String::new());
-    let (password, set_password) = create_signal(String::new());
-    let (error, set_error) = create_signal(Option::<String>::None);
-    let (loading, set_loading) = create_signal(false);
+    let (displayname, set_displayname) = signal(String::new());
+    let (password, set_password) = signal(String::new());
+    let (error, set_error) = signal(Option::<String>::None);
+    
+    let api_base_url = app_state.api_base_url.clone();
+    let login_action = Action::new_local(move |(dn, pw): &(String, String)| {
+        let dn = dn.clone();
+        let pw = pw.clone();
+        let base_url = api_base_url.clone();
+        async move {
+            let mut client = ApiClient::new(base_url);
+            client.login(dn, pw).await
+        }
+    });
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         
-        let app_state = app_state.clone();
-        let username = username.get();
-        let password = password.get();
+        let displayname_val = displayname.get();
+        let password_val = password.get();
         
-        if username.is_empty() || password.is_empty() {
-            set_error(Some("Username and password are required".to_string()));
+        if displayname_val.is_empty() || password_val.is_empty() {
+            set_error.set(Some("Display name and password are required".to_string()));
             return;
         }
         
-        set_loading(true);
-        set_error(None);
-        
-        spawn_local(async move {
-            let client = ApiClient::new(app_state.api_base_url.clone(), None);
-            
-            match client.login(username, password).await {
-                Ok(auth_response) => {
-                    app_state.login(auth_response.token, auth_response.user);
-                    navigate("/games", Default::default());
-                }
-                Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
-                }
-            }
-        });
+        set_error.set(None);
+        login_action.dispatch((displayname_val, password_val));
     };
+    
+    Effect::new(move |_| {
+        match login_action.value().get() {
+            Some(Ok(login_response)) => {
+                app_state.login(login_response.session_id, login_response.player_id);
+                navigate("/", Default::default());
+            }
+            Some(Err(e)) => {
+                set_error.set(Some(format!("Login failed: {}", e)));
+            }
+            None => {}
+        }
+    });
 
     view! {
         <div class="auth-container">
@@ -50,14 +57,14 @@ pub fn LoginPage() -> impl IntoView {
                 
                 <form on:submit=on_submit class="auth-form">
                     <div class="form-group">
-                        <label for="username">"Username"</label>
+                        <label for="displayname">"Display Name"</label>
                         <input
                             type="text"
-                            id="username"
+                            id="displayname"
                             class="form-input"
-                            placeholder="Enter your username"
-                            on:input=move |ev| set_username(event_target_value(&ev))
-                            prop:value=username
+                            placeholder="Enter your display name"
+                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
+                            prop:value=displayname
                         />
                     </div>
                     
@@ -68,23 +75,21 @@ pub fn LoginPage() -> impl IntoView {
                             id="password"
                             class="form-input"
                             placeholder="Enter your password"
-                            on:input=move |ev| set_password(event_target_value(&ev))
+                            on:input=move |ev| set_password.set(event_target_value(&ev))
                             prop:value=password
                         />
                     </div>
                     
-                    <Show when=move || error.get().is_some()>
-                        <div class="error-message">
-                            {move || error.get().unwrap_or_default()}
-                        </div>
-                    </Show>
+                    {move || error.get().map(|e| view! {
+                        <div class="error-message">{e}</div>
+                    })}
                     
                     <button
                         type="submit"
                         class="submit-button"
-                        disabled=loading
+                        disabled=move || login_action.pending().get()
                     >
-                        {move || if loading.get() { "Logging in..." } else { "Login" }}
+                        {move || if login_action.pending().get() { "Logging in..." } else { "Login" }}
                     </button>
                 </form>
                 
@@ -101,78 +106,99 @@ pub fn RegisterPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = use_navigate();
     
-    let (username, set_username) = create_signal(String::new());
-    let (password, set_password) = create_signal(String::new());
-    let (confirm_password, set_confirm_password) = create_signal(String::new());
-    let (error, set_error) = create_signal(Option::<String>::None);
-    let (loading, set_loading) = create_signal(false);
+    let (displayname, set_displayname) = signal(String::new());
+    let (password, set_password) = signal(String::new());
+    let (confirm_password, set_confirm_password) = signal(String::new());
+    let (error, set_error) = signal(Option::<String>::None);
+    let (success, set_success) = signal(Option::<String>::None);
+    
+    let api_base_url = app_state.api_base_url.clone();
+    let register_action = Action::new_local(move |(dn, pw): &(String, String)| {
+        let dn = dn.clone();
+        let pw = pw.clone();
+        let base_url = api_base_url.clone();
+        async move {
+            let client = ApiClient::new(base_url);
+            client.register(dn, pw).await
+        }
+    });
 
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         
-        let app_state = app_state.clone();
-        let username = username.get();
-        let password = password.get();
-        let confirm_password = confirm_password.get();
+        let displayname_val = displayname.get();
+        let password_val = password.get();
+        let confirm_password_val = confirm_password.get();
         
         // Validation
-        if username.is_empty() || password.is_empty() {
-            set_error(Some("Username and password are required".to_string()));
+        if displayname_val.is_empty() || password_val.is_empty() {
+            set_error.set(Some("Display name and password are required".to_string()));
             return;
         }
         
-        if username.len() < 3 {
-            set_error(Some("Username must be at least 3 characters".to_string()));
+        if displayname_val.len() < 3 {
+            set_error.set(Some("Display name must be at least 3 characters".to_string()));
             return;
         }
         
-        if password.len() < 6 {
-            set_error(Some("Password must be at least 6 characters".to_string()));
+        if password_val.len() < 6 {
+            set_error.set(Some("Password must be at least 6 characters".to_string()));
             return;
         }
         
-        if password != confirm_password {
-            set_error(Some("Passwords do not match".to_string()));
+        if password_val != confirm_password_val {
+            set_error.set(Some("Passwords do not match".to_string()));
             return;
         }
         
-        set_loading(true);
-        set_error(None);
-        
-        spawn_local(async move {
-            let client = ApiClient::new(app_state.api_base_url.clone(), None);
-            
-            match client.register(username, password).await {
-                Ok(auth_response) => {
-                    app_state.login(auth_response.token, auth_response.user);
-                    navigate("/games", Default::default());
-                }
-                Err(e) => {
-                    set_error(Some(e));
-                    set_loading(false);
-                }
-            }
-        });
+        set_error.set(None);
+        set_success.set(None);
+        register_action.dispatch((displayname_val, password_val));
     };
+    
+    let navigate_clone = navigate.clone();
+    Effect::new(move |_| {
+        match register_action.value().get() {
+            Some(Ok(register_response)) => {
+                set_success.set(Some(format!(
+                    "Account created successfully! Player ID: {}. You can now log in.",
+                    register_response.player_id
+                )));
+                
+                // Redirect to login after 2 seconds
+                let nav = navigate_clone.clone();
+                set_timeout(
+                    move || {
+                        nav("/login", Default::default());
+                    },
+                    std::time::Duration::from_secs(2)
+                );
+            }
+            Some(Err(e)) => {
+                set_error.set(Some(format!("Registration failed: {}", e)));
+            }
+            None => {}
+        }
+    });
 
     view! {
         <div class="auth-container">
             <div class="auth-card">
                 <h1>"Create Your Account"</h1>
-                <p class="auth-subtitle">"Join Automatafl and start playing strategic particle games!"</p>
+                <p class="auth-subtitle">"Join Automatafl and start playing!"</p>
                 
                 <form on:submit=on_submit class="auth-form">
                     <div class="form-group">
-                        <label for="username">"Username"</label>
+                        <label for="displayname">"Display Name"</label>
                         <input
                             type="text"
-                            id="username"
+                            id="displayname"
                             class="form-input"
-                            placeholder="Choose a username (min 3 characters)"
-                            on:input=move |ev| set_username(event_target_value(&ev))
-                            prop:value=username
+                            placeholder="Choose a display name (min 3 characters)"
+                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
+                            prop:value=displayname
                         />
-                        <small class="form-hint">"This will be your display name in games"</small>
+                        <small class="form-hint">"This will be your name in games"</small>
                     </div>
                     
                     <div class="form-group">
@@ -182,7 +208,7 @@ pub fn RegisterPage() -> impl IntoView {
                             id="password"
                             class="form-input"
                             placeholder="Create a password (min 6 characters)"
-                            on:input=move |ev| set_password(event_target_value(&ev))
+                            on:input=move |ev| set_password.set(event_target_value(&ev))
                             prop:value=password
                         />
                     </div>
@@ -194,27 +220,25 @@ pub fn RegisterPage() -> impl IntoView {
                             id="confirm-password"
                             class="form-input"
                             placeholder="Re-enter your password"
-                            on:input=move |ev| set_confirm_password(event_target_value(&ev))
+                            on:input=move |ev| set_confirm_password.set(event_target_value(&ev))
                             prop:value=confirm_password
                         />
                     </div>
                     
-                    <Show when=move || error.get().is_some()>
-                        <div class="error-message">
-                            {move || error.get().unwrap_or_default()}
-                        </div>
-                    </Show>
+                    {move || error.get().map(|e| view! {
+                        <div class="error-message">{e}</div>
+                    })}
                     
-                    <div class="form-info">
-                        <p>"By registering, you'll start with a rating of 1200"</p>
-                    </div>
+                    {move || success.get().map(|s| view! {
+                        <div class="success-message">{s}</div>
+                    })}
                     
                     <button
                         type="submit"
                         class="submit-button"
-                        disabled=loading
+                        disabled=move || register_action.pending().get()
                     >
-                        {move || if loading.get() { "Creating Account..." } else { "Register" }}
+                        {move || if register_action.pending().get() { "Creating Account..." } else { "Register" }}
                     </button>
                 </form>
                 

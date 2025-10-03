@@ -4,38 +4,106 @@ mod pages;
 mod state;
 mod websocket;
 
-use api::ApiClient;
-use components::*;
 use leptos::prelude::*;
-use leptos_router::{Router, Routes, Route};
+use leptos_router::components::{Router, Routes, Route};
+use leptos_router::path;
 use pages::*;
-use state::{AppState, MatchmakingState};
-use uuid::Uuid;
+use state::AppState;
 
 #[component]
 fn App() -> impl IntoView {
     let app_state = AppState::new();
     provide_context(app_state.clone());
 
+    let app_state_for_nav = app_state.clone();
+    let app_state_for_auth = app_state.clone();
+    
     view! {
         <Router>
             <main>
-                <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path="/" view=HomePage />
-                    <Route path="/login" view=LoginPage />
-                    <Route path="/register" view=RegisterPage />
-                    <Route path="/games" view=GamesListPage />
-                    <Route path="/games/create" view=CreateGamePage />
-                    <Route path="/games/:id" view=GamePage />
-                    <Route path="/games/:id/history" view=GameHistoryPage />
-                    <Route path="/games/:id/spectate" view=SpectatePage />
-                    <Route path="/users/:id" view=UserProfilePage />
-                    <Route path="/users/:id/games" view=UserGamesPage />
-                    <Route path="/leaderboard" view=LeaderboardPage />
-                    <Route path="/matchmaking" view=MatchmakingPage />
-                    <Route path="/health" view=HealthDashboardPage />
-                    <Route path="/metrics" view=MetricsPage />
-                </Routes>
+                <nav class="main-nav">
+                    <div class="nav-container">
+                        <a href="/" class="nav-brand">"Automatafl"</a>
+                        <div class="nav-links">
+                            <a href="/games">"Games"</a>
+                            <Show when=move || app_state_for_nav.is_authenticated()>
+                                <a href="/games/create">"Create Game"</a>
+                                <a href="/admin">"Admin"</a>
+                            </Show>
+                            <a href="/health">"Status"</a>
+                        </div>
+                        <div class="nav-auth">
+                            <Show
+                                when=move || app_state_for_auth.is_authenticated()
+                                fallback=|| view! {
+                                    <a href="/login" class="button button-small">"Login"</a>
+                                    <a href="/register" class="button button-small button-primary">"Register"</a>
+                                }
+                            >
+                                {
+                                    let app_state_clone = app_state.clone();
+                                    let navigate = leptos_router::hooks::use_navigate();
+                                    view! {
+                                        <button 
+                                            class="button button-small"
+                                            on:click=move |_| {
+                                                app_state_clone.logout();
+                                                navigate("/", Default::default());
+                                            }
+                                        >
+                                            "Logout"
+                                        </button>
+                                    }
+                                }
+                            </Show>
+                        </div>
+                    </div>
+                </nav>
+                
+                <div class="main-content">
+                    <Routes fallback=|| view! { 
+                        <div class="page-not-found">
+                            <h1>"404 - Page Not Found"</h1>
+                            <p>"The page you're looking for doesn't exist."</p>
+                            <a href="/" class="button button-primary">"Go Home"</a>
+                        </div>
+                    }>
+                        <Route path=path!("/") view=HomePage />
+                        <Route path=path!("/login") view=LoginPage />
+                        <Route path=path!("/register") view=RegisterPage />
+                        <Route path=path!("/games") view=GamesListPage />
+                        <Route path=path!("/games/create") view=CreateGamePage />
+                        <Route path=path!("/games/:id") view=GamePage />
+                        
+                        // Health & Status
+                        <Route path=path!("/health") view=HealthDashboardPage />
+                        <Route path=path!("/metrics") view=MetricsPage />
+                        
+                        // Stub pages for future features
+                        <Route path=path!("/matchmaking") view=MatchmakingPage />
+                        <Route path=path!("/leaderboard") view=LeaderboardPage />
+                        <Route path=path!("/users/:id") view=UserProfilePage />
+                        <Route path=path!("/users/:id/games") view=UserGamesPage />
+                        
+                        // Game-related stubs
+                        <Route path=path!("/games/:id/history") view=GameHistoryPage />
+                        <Route path=path!("/games/:id/spectate") view=SpectatePage />
+                        
+                        // Admin page
+                        <Route path=path!("/admin") view=AdminPage />
+                    </Routes>
+                </div>
+                
+                <footer class="main-footer">
+                    <div class="footer-content">
+                        <p>"Automatafl - A strategic particle movement game"</p>
+                        <p class="footer-links">
+                            <a href="/health">"System Status"</a>
+                            {" · "}
+                            <a href="https://github.com/automatafl" target="_blank">"GitHub"</a>
+                        </p>
+                    </div>
+                </footer>
             </main>
         </Router>
     }

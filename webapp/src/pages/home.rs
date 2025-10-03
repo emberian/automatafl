@@ -5,7 +5,7 @@ use leptos_router::components::A;
 #[component]
 pub fn HomePage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
-    let user = app_state.current_user;
+    let is_authenticated = move || app_state.is_authenticated();
 
     view! {
         <div class="home-page">
@@ -17,9 +17,9 @@ pub fn HomePage() -> impl IntoView {
                 
                 <div class="hero-actions">
                     <Show
-                        when=move || user.get().is_some()
+                        when=is_authenticated
                         fallback=|| view! {
-                            <A href="/register" attr:attr:class="button button-primary button-large">
+                            <A href="/register" attr:class="button button-primary button-large">
                                 "Get Started"
                             </A>
                             <A href="/login" attr:class="button button-secondary button-large">
@@ -33,9 +33,10 @@ pub fn HomePage() -> impl IntoView {
                         <A href="/games/create" attr:class="button button-secondary button-large">
                             "Create Game"
                         </A>
-                        <A href="/matchmaking" attr:class="button button-secondary button-large">
-                            "Quick Match"
-                        </A>
+                        // Note: Matchmaking not yet implemented in backend
+                        // <A href="/matchmaking" attr:class="button button-secondary button-large">
+                        //     "Quick Match"
+                        // </A>
                     </Show>
                 </div>
             </section>

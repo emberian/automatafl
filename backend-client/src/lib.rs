@@ -17,6 +17,8 @@ pub enum ClientError {
     Deserialized(String),
 }
 
+// these impls are needed for leptos to work
+
 impl serde::Serialize for ClientError {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where

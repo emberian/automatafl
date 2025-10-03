@@ -530,6 +530,52 @@ mod tests {
         // locked_players should be cleared after successful round
         assert_eq!(game.locked_players.len(), 0);
     }
+
+    #[test]
+    fn pending_moves_cleared_after_successful_round() {
+        let mut game = Game::new(Board::stock_testing(), 2, true);
+
+        let p0 = Pid(0);
+        let p1 = Pid(1);
+
+        // Setup two valid non-conflicting moves
+        game.board.place(Coord { x: 0, y: 1 }, Particle::Attractor);
+        game.board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
+
+        let move1 = Move { who: p0, from: Coord { x: 0, y: 1 }, to: Coord { x: 0, y: 0 } };
+        let move2 = Move { who: p1, from: Coord { x: 1, y: 3 }, to: Coord { x: 1, y: 4 } };
+
+        let (fb1, _) = game.propose_move(move1);
+        let (fb2, ready) = game.propose_move(move2);
+
+        assert_eq!(fb1, MoveFeedback::Committed);
+        assert_eq!(fb2, MoveFeedback::Committed);
+        assert!(ready, "Should be ready when both players submitted");
+        assert_eq!(game.pending_moves.len(), 2, "Should have 2 pending moves before round completes");
+
+        // Complete the round successfully
+        let result = game.try_complete_round();
+        assert!(result.is_ok(), "Round should complete successfully");
+
+        // CRITICAL: pending_moves must be cleared for the next round
+        assert_eq!(game.pending_moves.len(), 0, "pending_moves should be cleared after successful round");
+        assert_eq!(game.round, RoundState::Fresh, "Round should be back to Fresh state");
+
+        // Now players should be able to submit new moves for the next round
+        game.board.place(Coord { x: 0, y: 0 }, Particle::Attractor);
+        game.board.place(Coord { x: 1, y: 4 }, Particle::Repulsor);
+
+        let move3 = Move { who: p0, from: Coord { x: 0, y: 0 }, to: Coord { x: 1, y: 0 } };
+        let move4 = Move { who: p1, from: Coord { x: 1, y: 4 }, to: Coord { x: 2, y: 4 } };
+
+        let (fb3, _) = game.propose_move(move3);
+        let (fb4, ready2) = game.propose_move(move4);
+
+        assert_eq!(fb3, MoveFeedback::Committed, "Should be able to submit new moves");
+        assert_eq!(fb4, MoveFeedback::Committed, "Should be able to submit new moves");
+        assert!(ready2, "Should be ready for second round");
+        assert_eq!(game.pending_moves.len(), 2, "Should have 2 new pending moves");
+    }
 }
 
 impl core::fmt::Debug for Board {

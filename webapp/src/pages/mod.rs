@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod game;
 mod health;
@@ -6,6 +7,7 @@ mod leaderboard;
 mod matchmaking;
 mod profile;
 
+pub use admin::AdminPage;
 pub use auth::{LoginPage, RegisterPage};
 pub use game::{CreateGamePage, GameHistoryPage, GamePage, GamesListPage, SpectatePage};
 pub use health::{HealthDashboardPage, MetricsPage};
