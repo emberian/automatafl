@@ -2,7 +2,7 @@
 
 use axum::{
     extract::Request,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -220,6 +220,12 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
     let path = req.uri().path();
     let headers = req.headers();
 
+    // Skip CSRF checks for public authentication endpoints that cannot have a
+    // session cookie yet (e.g. login form submissions).
+    if is_csrf_exempt(method, path) {
+        return Ok(next.run(req).await);
+    }
+
     // Only check state-changing methods for non-API routes
     if !matches!(method.as_str(), "POST" | "PUT" | "DELETE" | "PATCH") || path.starts_with("/api/")
     {
@@ -276,6 +282,17 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
     // For requests without session cookies, be more strict
     tracing::warn!(path, method = %method, "State-changing request without session cookie");
     Err(StatusCode::UNAUTHORIZED)
+}
+
+fn is_csrf_exempt(method: &Method, path: &str) -> bool {
+    const EXEMPT_ROUTES: &[(&str, &str)] = &[
+        ("POST", "/login"),
+        ("POST", "/register"),
+    ];
+
+    EXEMPT_ROUTES.iter().any(|(allowed_method, allowed_path)| {
+        allowed_path == &path && method.as_str().eq_ignore_ascii_case(allowed_method)
+    })
 }
 
 /// Check if origin is allowed for CSRF protection

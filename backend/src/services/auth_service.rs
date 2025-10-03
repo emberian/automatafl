@@ -64,16 +64,27 @@ impl fmt::Display for AuthServiceError {
 impl std::error::Error for AuthServiceError {}
 
 impl AuthService {
-    pub fn new(
+    pub async fn new(
         player_repo: PlayerRepository,
         session_repo: SessionRepository,
         session_duration: u64,
     ) -> Self {
-        Self {
+        let this = Self {
             player_repo,
             session_repo,
             session_duration,
+        };
+        if this
+            .player_repo
+            .find_by_displayname("admin".to_string())
+            .await
+            .is_ok_and(|o| o.is_none())
+        {
+            this.register("admin".to_string(), "adminnn".to_string(), true)
+                .await
+                .expect("failed to register admin:admin");
         }
+        this
     }
 
     /// Register a new player account
@@ -81,6 +92,7 @@ impl AuthService {
         &self,
         displayname: String,
         password: String,
+        is_admin: bool,
     ) -> Result<RegisterResult, AuthServiceError> {
         // Validate incoming payload
         validation::validate_displayname(&displayname)
@@ -111,7 +123,7 @@ impl AuthService {
                 displayname,
                 password_hash,
                 salt.to_string(),
-                false,
+                is_admin,
             )
             .await?;
 

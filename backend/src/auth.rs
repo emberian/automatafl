@@ -13,7 +13,7 @@ pub async fn register_player(
 ) -> Result<Json<RegisterResponse>, AppError> {
     let service = &state.auth_service;
     let response = service
-        .register(payload.displayname.clone(), payload.password.clone())
+        .register(payload.displayname.clone(), payload.password.clone(), false)
         .await
         .map_err(|err| map_auth_error("register", &payload.displayname, err))?;
 

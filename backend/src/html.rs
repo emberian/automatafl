@@ -342,7 +342,7 @@ pub async fn html_register_submit(
 
     match state
         .auth_service
-        .register(form.displayname.clone(), form.password.clone())
+        .register(form.displayname.clone(), form.password.clone(), false)
         .await
     {
         Ok(_) => Redirect::to("/login").into_response(),
