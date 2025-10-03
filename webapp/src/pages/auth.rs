@@ -1,4 +1,4 @@
-use crate::{api::ApiClient, state::AppState};
+use crate::{api::ApiClient, state::AppState, components::use_toast};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -6,6 +6,7 @@ use leptos_router::hooks::use_navigate;
 pub fn LoginPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = use_navigate();
+    let toast = use_toast();
     
     let (displayname, set_displayname) = signal(String::new());
     let (password, set_password) = signal(String::new());
@@ -41,10 +42,12 @@ pub fn LoginPage() -> impl IntoView {
         match login_action.value().get() {
             Some(Ok(login_response)) => {
                 app_state.login(login_response.session_id, login_response.player_id);
+                toast.success("Login successful! Redirecting...");
                 navigate("/", Default::default());
             }
             Some(Err(e)) => {
-                set_error.set(Some(format!("Login failed: {}", e)));
+                toast.error(format!("Login failed: {}", e));
+                set_error.set(None); // Clear inline error if present
             }
             None => {}
         }
@@ -105,12 +108,12 @@ pub fn LoginPage() -> impl IntoView {
 pub fn RegisterPage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     let navigate = use_navigate();
+    let toast = use_toast();
     
     let (displayname, set_displayname) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (confirm_password, set_confirm_password) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
-    let (success, set_success) = signal(Option::<String>::None);
     
     let api_base_url = app_state.api_base_url.clone();
     let register_action = Action::new_local(move |(dn, pw): &(String, String)| {
@@ -152,18 +155,15 @@ pub fn RegisterPage() -> impl IntoView {
         }
         
         set_error.set(None);
-        set_success.set(None);
         register_action.dispatch((displayname_val, password_val));
     };
     
     let navigate_clone = navigate.clone();
     Effect::new(move |_| {
         match register_action.value().get() {
-            Some(Ok(register_response)) => {
-                set_success.set(Some(format!(
-                    "Account created successfully! Player ID: {}. You can now log in.",
-                    register_response.player_id
-                )));
+            Some(Ok(_register_response)) => {
+                toast.success("Account created successfully! Redirecting to login...");
+                set_error.set(None);
                 
                 // Redirect to login after 2 seconds
                 let nav = navigate_clone.clone();
@@ -175,7 +175,8 @@ pub fn RegisterPage() -> impl IntoView {
                 );
             }
             Some(Err(e)) => {
-                set_error.set(Some(format!("Registration failed: {}", e)));
+                toast.error(format!("Registration failed: {}", e));
+                set_error.set(None);
             }
             None => {}
         }
@@ -227,10 +228,6 @@ pub fn RegisterPage() -> impl IntoView {
                     
                     {move || error.get().map(|e| view! {
                         <div class="error-message">{e}</div>
-                    })}
-                    
-                    {move || success.get().map(|s| view! {
-                        <div class="success-message">{s}</div>
                     })}
                     
                     <button

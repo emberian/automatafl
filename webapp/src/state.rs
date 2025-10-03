@@ -34,7 +34,7 @@ pub enum MatchmakingState {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MoveEvent {
     pub from: Coord,
     pub to: Coord,
@@ -43,7 +43,7 @@ pub struct MoveEvent {
     pub timestamp: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConflictEvent {
     pub coord: Coord,
     pub players: Vec<u8>,
@@ -203,149 +203,80 @@ impl AppState {
     }
 
     pub fn handle_game_event(&self, game_id: Uuid, event: GameEvent) {
-        web_sys::console::log_1(&format!("Game event for {}: {} ", game_id, event.kind).into());
+        use automatafl_api_types::GameEventData;
+        use automatafl_logic::MoveResult;
         
         // Handle different event types
-        match event.kind.as_str() {
-            "PLAYER_JOINED" => {
-                // Refresh game state
-                web_sys::console::log_1(&"Player joined event".into());
+        match &event.data {
+            GameEventData::PlayerJoined { displayname, .. } => {
+                web_sys::console::log_1(&format!("Player {} joined", displayname).into());
                 self.trigger_game_refresh(game_id);
             }
-            "GAME_STARTED" => {
+            GameEventData::GameStarted => {
                 web_sys::console::log_1(&"Game started event".into());
                 self.trigger_game_refresh(game_id);
             }
-            "MOVE_ACK" => {
-                web_sys::console::log_1(&"Move acknowledged".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    if let Some(player_pid) = data.get("player_pid") {
-                        web_sys::console::log_1(&format!("Player {} move acknowledged", player_pid).into());
-                    }
-                }
-                // Trigger refresh to show updated pending moves
+            GameEventData::MoveAcknowledged { player_pid, .. } => {
+                web_sys::console::log_1(&format!("Player {} move acknowledged", player_pid.0).into());
                 self.trigger_game_refresh(game_id);
             }
-            "MOVE_INVALID" => {
-                web_sys::console::warn_1(&"Invalid move".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    if let Some(feedback) = data.get("feedback") {
-                        web_sys::console::warn_1(&format!("Move invalid: {:?}", feedback).into());
-                    }
-                }
+            GameEventData::MoveInvalid { player_pid, feedback } => {
+                web_sys::console::warn_1(&format!("Invalid move from player {}: {:?}", player_pid.0, feedback).into());
             }
-            "MOVE" => {
+            GameEventData::Move { player_pid, from, to, result } => {
                 web_sys::console::log_1(&"Move executed".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    web_sys::console::log_1(&format!("Move data: {:?}", data).into());
-                    
-                    // Extract move data and create visualization
-                    if let (Some(player_pid), Some(from), Some(to), Some(result)) = (
-                        data.get("player_pid").and_then(|v| v.as_u64()).map(|v| v as u8),
-                        data.get("from").and_then(|v| {
-                            let arr = v.as_array()?;
-                            Some(Coord { 
-                                x: arr.get(0)?.as_u64()? as u8, 
-                                y: arr.get(1)?.as_u64()? as u8 
-                            })
-                        }),
-                        data.get("to").and_then(|v| {
-                            let arr = v.as_array()?;
-                            Some(Coord { 
-                                x: arr.get(0)?.as_u64()? as u8, 
-                                y: arr.get(1)?.as_u64()? as u8 
-                            })
-                        }),
-                        data.get("result").and_then(|v| v.as_str())
-                    ) {
-                        let success = result == "Success";
-                        let move_event = MoveEvent {
-                            from,
-                            to,
-                            player_id: player_pid,
-                            success,
-                            timestamp: js_sys::Date::now() as u64,
-                        };
-                        self.add_move_event(game_id, move_event);
-                    }
-                }
+                
+                let success = matches!(result, MoveResult::Applied);
+                let move_event = MoveEvent {
+                    from: *from,
+                    to: *to,
+                    player_id: player_pid.0,
+                    success,
+                    timestamp: js_sys::Date::now() as u64,
+                };
+                self.add_move_event(game_id, move_event);
                 self.trigger_game_refresh(game_id);
             }
-            "CONFLICTS" => {
+            GameEventData::Conflicts { locked_players, conflict_coords } => {
                 web_sys::console::warn_1(&"Move conflicts detected".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    web_sys::console::warn_1(&format!("Conflicts: {:?}", data).into());
-                    
-                    // Extract conflict data and create visualization
-                    if let Some(conflict_coords) = data.get("conflict_coords").and_then(|v| v.as_array()) {
-                        for coord_value in conflict_coords {
-                            if let Some(coord_arr) = coord_value.as_array() {
-                                if let (Some(x), Some(y)) = (
-                                    coord_arr.get(0).and_then(|v| v.as_u64()).map(|v| v as u8),
-                                    coord_arr.get(1).and_then(|v| v.as_u64()).map(|v| v as u8)
-                                ) {
-                                    let coord = Coord { x, y };
-                                    
-                                    // Get locked players for this conflict
-                                    let players = if let Some(locked_players) = data.get("locked_players").and_then(|v| v.as_array()) {
-                                        locked_players.iter()
-                                            .filter_map(|p| p.as_u64().map(|v| v as u8))
-                                            .collect()
-                                    } else {
-                                        vec![]
-                                    };
-                                    
-                                    let conflict_event = ConflictEvent {
-                                        coord,
-                                        players,
-                                        timestamp: js_sys::Date::now() as u64,
-                                    };
-                                    self.add_conflict_event(game_id, conflict_event);
-                                }
-                            }
-                        }
-                    }
+                
+                // Create conflict events for visualization
+                for coord in conflict_coords {
+                    let conflict_event = ConflictEvent {
+                        coord: *coord,
+                        players: locked_players.iter().map(|p| p.0).collect(),
+                        timestamp: js_sys::Date::now() as u64,
+                    };
+                    self.add_conflict_event(game_id, conflict_event);
                 }
                 self.trigger_game_refresh(game_id);
             }
-            "AUTOMATON_STEP" => {
-                web_sys::console::log_1(&"Automaton moved".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    if let Some(location) = data.get("location") {
-                        web_sys::console::log_1(&format!("Automaton at: {:?}", location).into());
-                    }
-                }
+            GameEventData::AutomatonStep { location } => {
+                web_sys::console::log_1(&format!("Automaton at: {:?}", location).into());
                 self.trigger_game_refresh(game_id);
             }
-            "ROUND_COMPLETE" => {
+            GameEventData::RoundComplete => {
                 web_sys::console::log_1(&"Round completed".into());
                 self.trigger_game_refresh(game_id);
             }
-            "GAME_OVER" => {
-                web_sys::console::log_1(&"Game over!".into());
-                if let Ok(data) = serde_json::from_value::<serde_json::Value>(event.data.clone()) {
-                    if let Some(winner) = data.get("winner") {
-                        web_sys::console::log_1(&format!("Winner: {:?}", winner).into());
-                    }
-                }
+            GameEventData::GameOver { winner } => {
+                web_sys::console::log_1(&format!("Game over! Winner: {}", winner.0).into());
                 self.trigger_game_refresh(game_id);
             }
-            "CHAT" => {
-                // Chat message received - trigger game refresh to update chat
-                web_sys::console::log_1(&"Chat message received".into());
+            GameEventData::EloUpdate { changes } => {
+                web_sys::console::log_1(&format!("ELO ratings updated: {} players", changes.len()).into());
+            }
+            GameEventData::Chat { displayname, message, .. } => {
+                web_sys::console::log_1(&format!("{}: {}", displayname, message).into());
                 self.trigger_game_refresh(game_id);
             }
-            "STATE" => {
-                // Full state update
+            GameEventData::State { .. } => {
                 web_sys::console::log_1(&"Full game state update".into());
                 self.trigger_game_refresh(game_id);
             }
-            "GAME_LOADED" => {
-                web_sys::console::log_1(&"Game loaded from snapshot".into());
+            GameEventData::GameLoaded { snapshot_index } => {
+                web_sys::console::log_1(&format!("Game loaded from snapshot {}", snapshot_index).into());
                 self.trigger_game_refresh(game_id);
-            }
-            _ => {
-                web_sys::console::log_1(&format!("Unknown event type: {}", event.kind).into());
             }
         }
     }

@@ -60,6 +60,37 @@ enum Commands {
     /// Chat management
     #[command(subcommand)]
     Chat(ChatCommands),
+
+    /// Player profile management
+    #[command(subcommand)]
+    Profile(ProfileCommands),
+
+    /// View leaderboards
+    #[command(subcommand)]
+    Leaderboard(LeaderboardCommands),
+
+    /// Matchmaking
+    #[command(subcommand)]
+    Matchmaking(MatchmakingCommands),
+
+    /// Admin commands
+    #[command(subcommand)]
+    Admin(AdminCommands),
+
+    /// Game history
+    History {
+        /// Game ID
+        game_id: Uuid,
+        /// Filter by event kind
+        #[arg(short, long)]
+        kind: Option<String>,
+        /// Filter events since timestamp
+        #[arg(long)]
+        since: Option<u64>,
+        /// Filter events until timestamp
+        #[arg(long)]
+        until: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -161,6 +192,225 @@ enum ChatCommands {
     History {
         /// Game ID
         game_id: Uuid,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommands {
+    /// Get player profile
+    Get {
+        /// Player ID
+        player_id: Uuid,
+    },
+
+    /// Update your profile
+    Update {
+        /// Player ID
+        player_id: Uuid,
+        /// Bio text
+        #[arg(short, long)]
+        bio: Option<String>,
+        /// Avatar URL
+        #[arg(short, long)]
+        avatar: Option<String>,
+    },
+
+    /// Get player stats
+    Stats {
+        /// Player ID
+        player_id: Uuid,
+    },
+}
+
+#[derive(Subcommand)]
+enum LeaderboardCommands {
+    /// ELO rating leaderboard
+    Elo,
+
+    /// Most wins leaderboard
+    Wins,
+
+    /// Most games played leaderboard
+    Games,
+}
+
+#[derive(Subcommand)]
+enum MatchmakingCommands {
+    /// Join matchmaking queue
+    Join {
+        /// Number of players (2 or 4)
+        #[arg(short, long, default_value = "2")]
+        players: u8,
+
+        /// Use column rule for tie-breaking
+        #[arg(short, long)]
+        column_rule: bool,
+    },
+
+    /// Leave matchmaking queue
+    Leave,
+
+    /// Check matchmaking status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum AdminCommands {
+    /// Player management
+    #[command(subcommand)]
+    Player(AdminPlayerCommands),
+
+    /// Game management
+    #[command(subcommand)]
+    Game(AdminGameCommands),
+
+    /// Session management
+    #[command(subcommand)]
+    Session(AdminSessionCommands),
+
+    /// Matchmaking queue management
+    #[command(subcommand)]
+    Queue(AdminQueueCommands),
+
+    /// Database statistics
+    Stats,
+
+    /// List database tables
+    Tables,
+}
+
+#[derive(Subcommand)]
+enum AdminPlayerCommands {
+    /// List all players
+    List,
+
+    /// Get player details
+    Get {
+        /// Player ID
+        player_id: Uuid,
+    },
+
+    /// Update player
+    Update {
+        /// Player ID
+        player_id: Uuid,
+        /// JSON data to update
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        data: Vec<String>,
+    },
+
+    /// Delete player
+    Delete {
+        /// Player ID
+        player_id: Uuid,
+    },
+
+    /// Get player stats
+    Stats {
+        /// Player ID
+        player_id: Uuid,
+    },
+
+    /// Update player stats
+    UpdateStats {
+        /// Player ID
+        player_id: Uuid,
+        /// JSON data to update
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        data: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminGameCommands {
+    /// List all games
+    List,
+
+    /// Get game details
+    Get {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Delete a game
+    Delete {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Force complete a round
+    ForceComplete {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Set game lifecycle
+    SetLifecycle {
+        /// Game ID
+        game_id: Uuid,
+        /// Lifecycle (Waiting, InProgress, Finished)
+        lifecycle: String,
+    },
+
+    /// Get game events
+    Events {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Get game chat
+    Chat {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Delete chat message
+    DeleteChat {
+        /// Game ID
+        game_id: Uuid,
+        /// Message timestamp
+        timestamp: u64,
+    },
+
+    /// List game snapshots
+    Snapshots {
+        /// Game ID
+        game_id: Uuid,
+    },
+
+    /// Delete snapshot
+    DeleteSnapshot {
+        /// Game ID
+        game_id: Uuid,
+        /// Snapshot index
+        index: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminSessionCommands {
+    /// List all sessions
+    List,
+
+    /// Delete a session
+    Delete {
+        /// Session ID
+        session_id: Uuid,
+    },
+
+    /// Cleanup expired sessions
+    Cleanup,
+}
+
+#[derive(Subcommand)]
+enum AdminQueueCommands {
+    /// List matchmaking queue
+    List,
+
+    /// Remove player from queue
+    Remove {
+        /// Player ID
+        player_id: Uuid,
     },
 }
 
@@ -401,6 +651,326 @@ async fn handle_chat_history(client: &AutomataflClient, game_id: Uuid) -> Result
     Ok(())
 }
 
+async fn handle_game_history(
+    client: &AutomataflClient,
+    game_id: Uuid,
+    kind: Option<String>,
+    since: Option<u64>,
+    until: Option<u64>,
+) -> Result<()> {
+    println!("{}", format!("Fetching game history for {}...", game_id).cyan());
+    let events = client.get_game_history_filtered(game_id, since, until, kind).await?;
+
+    if events.is_empty() {
+        println!("{}", "No events found".dimmed());
+    } else {
+        println!("\n{} {}:\n", events.len(), if events.len() == 1 { "event" } else { "events" });
+        for event in events {
+            let timestamp_str = event.timestamp
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            // Extract kind from the event data enum
+            let kind = match &event.data {
+                automatafl_api_types::GameEventData::PlayerJoined { .. } => "PLAYER_JOINED",
+                automatafl_api_types::GameEventData::GameStarted => "GAME_STARTED",
+                automatafl_api_types::GameEventData::MoveAcknowledged { .. } => "MOVE_ACK",
+                automatafl_api_types::GameEventData::MoveInvalid { .. } => "MOVE_INVALID",
+                automatafl_api_types::GameEventData::Move { .. } => "MOVE",
+                automatafl_api_types::GameEventData::AutomatonStep { .. } => "AUTOMATON_STEP",
+                automatafl_api_types::GameEventData::GameOver { .. } => "GAME_OVER",
+                automatafl_api_types::GameEventData::EloUpdate { .. } => "ELO_UPDATE",
+                automatafl_api_types::GameEventData::RoundComplete => "ROUND_COMPLETE",
+                automatafl_api_types::GameEventData::Conflicts { .. } => "CONFLICTS",
+                automatafl_api_types::GameEventData::Chat { .. } => "CHAT",
+                automatafl_api_types::GameEventData::GameLoaded { .. } => "GAME_LOADED",
+                automatafl_api_types::GameEventData::State { .. } => "STATE",
+            };
+            
+            println!("[{}] {}: {}",
+                timestamp_str,
+                kind.bold(),
+                serde_json::to_string(&event.data)?
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn handle_profile_get(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching profile for {}...", player_id).cyan());
+    let profile = client.get_player_profile(player_id).await?;
+
+    println!("\n{}", "Player Profile:".bold());
+    println!("  ID: {}", profile.id);
+    println!("  Name: {}", profile.displayname.green());
+    println!("  ELO: {}", profile.elo_rating.to_string().yellow());
+    println!("  Created: {}", profile.created_at);
+    if let Some(bio) = profile.bio {
+        println!("  Bio: {}", bio);
+    }
+    if let Some(avatar) = profile.avatar_url {
+        println!("  Avatar: {}", avatar);
+    }
+    Ok(())
+}
+
+async fn handle_profile_update(
+    client: &AutomataflClient,
+    player_id: Uuid,
+    bio: Option<String>,
+    avatar: Option<String>,
+) -> Result<()> {
+    println!("{}", "Updating profile...".cyan());
+    client.update_player_profile(player_id, bio, avatar).await?;
+    println!("{}", "✓ Profile updated!".green());
+    Ok(())
+}
+
+async fn handle_profile_stats(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching stats for {}...", player_id).cyan());
+    let stats = client.get_player_stats(player_id).await?;
+
+    println!("\n{}", "Player Stats:".bold());
+    println!("  Games Played: {}", stats.games_played);
+    println!("  Games Won: {}", stats.games_won);
+    println!("  Win Rate: {:.1}%", stats.win_rate * 100.0);
+    println!("  Total Playtime: {}s", stats.total_playtime);
+    Ok(())
+}
+
+async fn handle_leaderboard(client: &AutomataflClient, board_type: &str) -> Result<()> {
+    println!("{}", format!("Fetching {} leaderboard...", board_type).cyan());
+
+    let leaderboard = match board_type {
+        "elo" => client.get_leaderboard_elo().await?,
+        "wins" => client.get_leaderboard_wins().await?,
+        "games" => client.get_leaderboard_games().await?,
+        _ => unreachable!(),
+    };
+
+    println!("\n{} Leaderboard ({} players):\n", board_type.to_uppercase(), leaderboard.total_players);
+
+    for entry in leaderboard.entries {
+        println!("  {}. {} - {}",
+            entry.rank.to_string().yellow(),
+            entry.displayname.bold(),
+            entry.value.to_string().cyan()
+        );
+    }
+
+    Ok(())
+}
+
+async fn handle_matchmaking_join(client: &AutomataflClient, players: u8, column_rule: bool) -> Result<()> {
+    println!("{}", format!("Joining matchmaking queue ({} players)...", players).cyan());
+    client.join_matchmaking(players, column_rule).await?;
+    println!("{}", "✓ Joined matchmaking queue!".green());
+    println!("{}", "Waiting for match...".dimmed());
+    Ok(())
+}
+
+async fn handle_matchmaking_leave(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Leaving matchmaking queue...".cyan());
+    client.leave_matchmaking().await?;
+    println!("{}", "✓ Left matchmaking queue".green());
+    Ok(())
+}
+
+async fn handle_matchmaking_status(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Checking matchmaking status...".cyan());
+    let status = client.get_matchmaking_status().await?;
+
+    if status.in_queue {
+        println!("{}", "✓ In matchmaking queue".green());
+        if let Some(queued_at) = status.queued_at {
+            println!("  Queued at: {}", queued_at);
+        }
+        if let Some(wait_time) = status.estimated_wait_time {
+            println!("  Estimated wait: {}s", wait_time);
+        }
+    } else {
+        println!("{}", "Not in matchmaking queue".dimmed());
+    }
+
+    Ok(())
+}
+
+// Admin handlers
+
+async fn handle_admin_player_list(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching all players...".cyan());
+    let result = client.admin_list_players().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_player_get(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching player {}...", player_id).cyan());
+    let result = client.admin_get_player(player_id).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_player_update(client: &AutomataflClient, player_id: Uuid, data: Vec<String>) -> Result<()> {
+    let json_str = data.join(" ");
+    let json_data: serde_json::Value = serde_json::from_str(&json_str)?;
+    println!("{}", format!("Updating player {}...", player_id).cyan());
+    client.admin_update_player(player_id, json_data).await?;
+    println!("{}", "✓ Player updated!".green());
+    Ok(())
+}
+
+async fn handle_admin_player_delete(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Deleting player {}...", player_id).cyan());
+    client.admin_delete_player(player_id).await?;
+    println!("{}", "✓ Player deleted!".green());
+    Ok(())
+}
+
+async fn handle_admin_player_stats(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching stats for player {}...", player_id).cyan());
+    let result = client.admin_get_player_stats(player_id).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_player_update_stats(client: &AutomataflClient, player_id: Uuid, data: Vec<String>) -> Result<()> {
+    let json_str = data.join(" ");
+    let json_data: serde_json::Value = serde_json::from_str(&json_str)?;
+    println!("{}", format!("Updating stats for player {}...", player_id).cyan());
+    client.admin_update_player_stats(player_id, json_data).await?;
+    println!("{}", "✓ Stats updated!".green());
+    Ok(())
+}
+
+async fn handle_admin_game_list(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching all games...".cyan());
+    let result = client.admin_list_games().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_game_get(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching game {}...", game_id).cyan());
+    let result = client.admin_get_game(game_id).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_game_delete(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Deleting game {}...", game_id).cyan());
+    client.admin_delete_game(game_id).await?;
+    println!("{}", "✓ Game deleted!".green());
+    Ok(())
+}
+
+async fn handle_admin_game_force_complete(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Force completing round for game {}...", game_id).cyan());
+    let result = client.admin_force_complete_round(game_id).await?;
+    println!("{}", "✓ Round force completed!".green());
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_game_set_lifecycle(client: &AutomataflClient, game_id: Uuid, lifecycle: String) -> Result<()> {
+    let lifecycle_value = serde_json::json!({ "lifecycle": lifecycle });
+    println!("{}", format!("Setting game {} lifecycle to {}...", game_id, lifecycle).cyan());
+    client.admin_set_game_lifecycle(game_id, lifecycle_value).await?;
+    println!("{}", "✓ Lifecycle updated!".green());
+    Ok(())
+}
+
+async fn handle_admin_game_events(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching events for game {}...", game_id).cyan());
+    let events = client.admin_get_game_events(game_id).await?;
+    println!("\n{} {}:\n", events.len(), if events.len() == 1 { "event" } else { "events" });
+    for event in events {
+        println!("{}", serde_json::to_string_pretty(&event)?);
+    }
+    Ok(())
+}
+
+async fn handle_admin_game_chat(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching chat for game {}...", game_id).cyan());
+    let messages = client.admin_get_game_chat(game_id).await?;
+    println!("\n{} {}:\n", messages.len(), if messages.len() == 1 { "message" } else { "messages" });
+    for msg in messages {
+        println!("[{}] {}: {}", msg.timestamp, msg.displayname.bold(), msg.message);
+    }
+    Ok(())
+}
+
+async fn handle_admin_game_delete_chat(client: &AutomataflClient, game_id: Uuid, timestamp: u64) -> Result<()> {
+    println!("{}", format!("Deleting chat message {} from game {}...", timestamp, game_id).cyan());
+    client.admin_delete_chat_message(game_id, timestamp).await?;
+    println!("{}", "✓ Chat message deleted!".green());
+    Ok(())
+}
+
+async fn handle_admin_game_snapshots(client: &AutomataflClient, game_id: Uuid) -> Result<()> {
+    println!("{}", format!("Fetching snapshots for game {}...", game_id).cyan());
+    let result = client.admin_list_snapshots(game_id).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_game_delete_snapshot(client: &AutomataflClient, game_id: Uuid, index: usize) -> Result<()> {
+    println!("{}", format!("Deleting snapshot {} from game {}...", index, game_id).cyan());
+    client.admin_delete_snapshot(game_id, index).await?;
+    println!("{}", "✓ Snapshot deleted!".green());
+    Ok(())
+}
+
+async fn handle_admin_session_list(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching all sessions...".cyan());
+    let result = client.admin_list_sessions().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_session_delete(client: &AutomataflClient, session_id: Uuid) -> Result<()> {
+    println!("{}", format!("Deleting session {}...", session_id).cyan());
+    client.admin_delete_session(session_id).await?;
+    println!("{}", "✓ Session deleted!".green());
+    Ok(())
+}
+
+async fn handle_admin_session_cleanup(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Cleaning up expired sessions...".cyan());
+    let result = client.admin_cleanup_expired_sessions().await?;
+    println!("{}", "✓ Cleanup complete!".green());
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_queue_list(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching matchmaking queue...".cyan());
+    let result = client.admin_list_matchmaking_queue().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_queue_remove(client: &AutomataflClient, player_id: Uuid) -> Result<()> {
+    println!("{}", format!("Removing player {} from queue...", player_id).cyan());
+    client.admin_remove_from_matchmaking(player_id).await?;
+    println!("{}", "✓ Player removed from queue!".green());
+    Ok(())
+}
+
+async fn handle_admin_stats(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching database stats...".cyan());
+    let result = client.admin_get_database_stats().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn handle_admin_tables(client: &AutomataflClient) -> Result<()> {
+    println!("{}", "Fetching database tables...".cyan());
+    let result = client.admin_list_tables().await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -467,6 +1037,77 @@ async fn main() -> Result<()> {
                 handle_chat_send(&client, game_id, message).await
             }
             ChatCommands::History { game_id } => handle_chat_history(&client, game_id).await,
+        },
+        Commands::History { game_id, kind, since, until } => {
+            handle_game_history(&client, game_id, kind, since, until).await
+        }
+        Commands::Profile(profile_cmd) => match profile_cmd {
+            ProfileCommands::Get { player_id } => handle_profile_get(&client, player_id).await,
+            ProfileCommands::Update { player_id, bio, avatar } => {
+                handle_profile_update(&client, player_id, bio, avatar).await
+            }
+            ProfileCommands::Stats { player_id } => handle_profile_stats(&client, player_id).await,
+        },
+        Commands::Leaderboard(leaderboard_cmd) => match leaderboard_cmd {
+            LeaderboardCommands::Elo => handle_leaderboard(&client, "elo").await,
+            LeaderboardCommands::Wins => handle_leaderboard(&client, "wins").await,
+            LeaderboardCommands::Games => handle_leaderboard(&client, "games").await,
+        },
+        Commands::Matchmaking(matchmaking_cmd) => match matchmaking_cmd {
+            MatchmakingCommands::Join { players, column_rule } => {
+                handle_matchmaking_join(&client, players, column_rule).await
+            }
+            MatchmakingCommands::Leave => handle_matchmaking_leave(&client).await,
+            MatchmakingCommands::Status => handle_matchmaking_status(&client).await,
+        },
+        Commands::Admin(admin_cmd) => match admin_cmd {
+            AdminCommands::Player(player_cmd) => match player_cmd {
+                AdminPlayerCommands::List => handle_admin_player_list(&client).await,
+                AdminPlayerCommands::Get { player_id } => handle_admin_player_get(&client, player_id).await,
+                AdminPlayerCommands::Update { player_id, data } => {
+                    handle_admin_player_update(&client, player_id, data).await
+                }
+                AdminPlayerCommands::Delete { player_id } => handle_admin_player_delete(&client, player_id).await,
+                AdminPlayerCommands::Stats { player_id } => handle_admin_player_stats(&client, player_id).await,
+                AdminPlayerCommands::UpdateStats { player_id, data } => {
+                    handle_admin_player_update_stats(&client, player_id, data).await
+                }
+            },
+            AdminCommands::Game(game_cmd) => match game_cmd {
+                AdminGameCommands::List => handle_admin_game_list(&client).await,
+                AdminGameCommands::Get { game_id } => handle_admin_game_get(&client, game_id).await,
+                AdminGameCommands::Delete { game_id } => handle_admin_game_delete(&client, game_id).await,
+                AdminGameCommands::ForceComplete { game_id } => {
+                    handle_admin_game_force_complete(&client, game_id).await
+                }
+                AdminGameCommands::SetLifecycle { game_id, lifecycle } => {
+                    handle_admin_game_set_lifecycle(&client, game_id, lifecycle).await
+                }
+                AdminGameCommands::Events { game_id } => handle_admin_game_events(&client, game_id).await,
+                AdminGameCommands::Chat { game_id } => handle_admin_game_chat(&client, game_id).await,
+                AdminGameCommands::DeleteChat { game_id, timestamp } => {
+                    handle_admin_game_delete_chat(&client, game_id, timestamp).await
+                }
+                AdminGameCommands::Snapshots { game_id } => handle_admin_game_snapshots(&client, game_id).await,
+                AdminGameCommands::DeleteSnapshot { game_id, index } => {
+                    handle_admin_game_delete_snapshot(&client, game_id, index).await
+                }
+            },
+            AdminCommands::Session(session_cmd) => match session_cmd {
+                AdminSessionCommands::List => handle_admin_session_list(&client).await,
+                AdminSessionCommands::Delete { session_id } => {
+                    handle_admin_session_delete(&client, session_id).await
+                }
+                AdminSessionCommands::Cleanup => handle_admin_session_cleanup(&client).await,
+            },
+            AdminCommands::Queue(queue_cmd) => match queue_cmd {
+                AdminQueueCommands::List => handle_admin_queue_list(&client).await,
+                AdminQueueCommands::Remove { player_id } => {
+                    handle_admin_queue_remove(&client, player_id).await
+                }
+            },
+            AdminCommands::Stats => handle_admin_stats(&client).await,
+            AdminCommands::Tables => handle_admin_tables(&client).await,
         },
     };
 

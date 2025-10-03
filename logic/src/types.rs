@@ -48,7 +48,7 @@ pub enum RoundState {
 }
 
 /// Player 0 move: {}
-#[derive(Debug, Display, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MoveResult {
     /// failed because there was never a piece to move at the source.
     NoSource,

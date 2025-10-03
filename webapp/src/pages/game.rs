@@ -1,6 +1,6 @@
 use crate::{
     api::ApiClient,
-    components::{GameBoard, ChatPanel, GameInfo, MoveControls, RoundControls, SaveLoadControls},
+    components::{GameBoard, ChatPanel, GameHistory, GameInfo, MoveControls, RoundControls, SaveLoadControls, use_toast, SkeletonList, SkeletonGameBoard},
     state::AppState,
     websocket::create_game_websocket,
 };
@@ -36,10 +36,7 @@ pub fn GamesListPage() -> impl IntoView {
             </div>
             
             <Suspense fallback=move || view! {
-                <div class="loading-state">
-                    <div class="spinner"></div>
-                    <p>"Loading games..."</p>
-                </div>
+                <SkeletonList count=6 />
             }>
                 {move || {
                     games_resource.get().map(|result| {
@@ -286,6 +283,7 @@ pub fn CreateGamePage() -> impl IntoView {
 #[component]
 pub fn GamePage() -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let toast = use_toast();
     let params = use_params_map();
     
     let game_id = Memo::new(move |_| {
@@ -351,9 +349,17 @@ pub fn GamePage() -> impl IntoView {
     let app_state_for_effect = app_state.clone();
     // Refresh game state after auto-join succeeds
     Effect::new(move |_| {
-        if let Some(Ok(_)) = auto_join_action.value().get() {
-            if let Some(gid) = game_id.get() {
-                app_state_for_effect.trigger_game_refresh(gid);
+        if let Some(result) = auto_join_action.value().get() {
+            match result {
+                Ok(_) => {
+                    toast.success("Joined game successfully!");
+                    if let Some(gid) = game_id.get() {
+                        app_state_for_effect.trigger_game_refresh(gid);
+                    }
+                }
+                Err(e) => {
+                    toast.warning(format!("Could not join: {}. You can still spectate.", e));
+                }
             }
         }
     });
@@ -392,10 +398,7 @@ pub fn GamePage() -> impl IntoView {
             }}
             
             <Suspense fallback=move || view! {
-                <div class="loading-state">
-                    <div class="spinner"></div>
-                    <p>"Loading game..."</p>
-                </div>
+                <SkeletonGameBoard />
             }>
                 {move || {
                     game_state_resource.get().map(|result| {
@@ -403,24 +406,7 @@ pub fn GamePage() -> impl IntoView {
                             Ok(state) => {
                                 let gid = game_id.get().unwrap();
                                 view! {
-                                    <div class="game-container">
-                                        <div class="game-header">
-                                            <GameInfo game_state=state.clone() />
-                                        </div>
-                                        <div class="game-main">
-                                            <div class="game-left-panel">
-                                                <MoveControls game_id=gid game_state=state.clone() />
-                                                <RoundControls game_id=gid game_state=state.clone() />
-                                                <SaveLoadControls game_id=gid />
-                                            </div>
-                                            <div class="game-center">
-                                                <GameBoard game_id=gid game_state=state.clone() />
-                                            </div>
-                                            <div class="game-right-panel">
-                                                <ChatPanel game_id=gid />
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <GameView game_id=gid game_state=state.clone() />
                                 }.into_any()
                             }
                             Err(e) => view! {
@@ -440,14 +426,90 @@ pub fn GamePage() -> impl IntoView {
     }
 }
 
-// TODO: These pages require additional backend support for game history/spectating
+/// Improved game view with tabbed interface
+#[component]
+fn GameView(game_id: Uuid, game_state: automatafl_api_types::GameStateResponse) -> impl IntoView {
+    let (active_right_tab, set_active_right_tab) = signal("chat".to_string());
+    let (show_move_form, set_show_move_form) = signal(false);
+    
+    view! {
+        <div class="game-container">
+            <div class="game-header">
+                <GameInfo game_state=game_state.clone() />
+            </div>
+            <div class="game-main">
+                <div class="game-left-panel">
+                    {{
+                        let game_state_clone = game_state.clone();
+                        move || if !show_move_form.get() {
+                            view! {
+                                <div class="game-controls-compact">
+                                    <RoundControls game_id=game_id game_state=game_state_clone.clone() />
+                                    <SaveLoadControls game_id=game_id />
+                                    <button
+                                        class="button button-small button-secondary"
+                                        on:click=move |_| set_show_move_form.set(true)
+                                    >
+                                        "📝 Show Move Form"
+                                    </button>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div class="game-controls-expanded">
+                                    <MoveControls game_id=game_id game_state=game_state_clone.clone() />
+                                    <RoundControls game_id=game_id game_state=game_state_clone.clone() />
+                                    <SaveLoadControls game_id=game_id />
+                                    <button
+                                        class="button button-small button-secondary"
+                                        on:click=move |_| set_show_move_form.set(false)
+                                    >
+                                        "Hide Move Form"
+                                    </button>
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+                </div>
+                <div class="game-center">
+                    <GameBoard game_id=game_id game_state=game_state.clone() />
+                </div>
+                <div class="game-right-panel">
+                    <div class="right-panel-tabs">
+                        <button
+                            class=move || format!("tab {}", if active_right_tab.get() == "chat" { "active" } else { "" })
+                            on:click=move |_| set_active_right_tab.set("chat".to_string())
+                        >
+                            "💬 Chat"
+                        </button>
+                        <button
+                            class=move || format!("tab {}", if active_right_tab.get() == "history" { "active" } else { "" })
+                            on:click=move |_| set_active_right_tab.set("history".to_string())
+                        >
+                            "📜 History"
+                        </button>
+                    </div>
+                    <div class="right-panel-content">
+                        <Show when=move || active_right_tab.get() == "chat">
+                            <ChatPanel game_id=game_id />
+                        </Show>
+                        <Show when=move || active_right_tab.get() == "history">
+                            <GameHistory game_id=game_id />
+                        </Show>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
 #[component]
 pub fn GameHistoryPage() -> impl IntoView {
     view! {
         <div class="game-history-page">
             <h1>"Game History"</h1>
             <div class="stub-notice">
-                <p>"Game history/replay is not yet implemented in the backend."</p>
+                <p>"Individual game history pages coming soon. Use the history tab in active games."</p>
                 <A href="/games" attr:class="button">
                     "Back to Games"
                 </A>

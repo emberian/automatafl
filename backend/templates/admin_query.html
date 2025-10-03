@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Database Query - Admin{% endblock %}
+
+{% block content %}
+<h2>🔧 Database Query Interface</h2>
+
+<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+    <strong>⚠️ Warning:</strong> This is a direct database access manhole. Use with caution.
+    All queries are executed with full privileges.
+</div>
+
+<form method="POST" action="/admin/query" style="max-width: 100%;">
+    <label><strong>SurrealQL Query:</strong></label>
+    <textarea name="query" rows="8" 
+              style="width: 100%; font-family: 'Courier New', monospace; font-size: 13px; padding: 10px;" 
+              placeholder="SELECT * FROM players LIMIT 10;" 
+              required>{{ query_text }}</textarea>
+    
+    <div style="margin: 15px 0;">
+        <button type="submit" style="background: #e74c3c;">Execute Query</button>
+        <a href="/admin" class="button" style="background: #95a5a6;">Cancel</a>
+    </div>
+</form>
+
+<h3>Quick Queries</h3>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; margin: 20px 0;">
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="SELECT * FROM players ORDER BY elo_rating DESC LIMIT 10;">
+        <button type="submit" style="width: 100%; background: #3498db; font-size: 12px;">Top 10 Players by ELO</button>
+    </form>
+    
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="SELECT * FROM games WHERE lifecycle = 'InProgress';">
+        <button type="submit" style="width: 100%; background: #27ae60; font-size: 12px;">Active Games</button>
+    </form>
+    
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="SELECT * FROM sessions WHERE expires_at > {{ timestamp }};">
+        <button type="submit" style="width: 100%; background: #f39c12; font-size: 12px;">Active Sessions</button>
+    </form>
+    
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="SELECT * FROM matchmaking_queue;">
+        <button type="submit" style="width: 100%; background: #9b59b6; font-size: 12px;">Matchmaking Queue</button>
+    </form>
+    
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="INFO FOR DB;">
+        <button type="submit" style="width: 100%; background: #34495e; font-size: 12px;">Database Info</button>
+    </form>
+    
+    <form method="POST" action="/admin/query">
+        <input type="hidden" name="query" value="SELECT * FROM game_events ORDER BY timestamp DESC LIMIT 50;">
+        <button type="submit" style="width: 100%; background: #16a085; font-size: 12px;">Recent Events</button>
+    </form>
+</div>
+
+{% if result.is_some() %}
+<h3>Query Results</h3>
+<div style="background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; overflow-x: auto;">
+    {% if let Some(res) = result %}
+        {% if let Some(err) = error %}
+            <div style="color: #e74c3c; font-family: monospace;">
+                <strong>Error:</strong> {{ err }}
+            </div>
+        {% else %}
+            <pre style="margin: 0; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">{{ res }}</pre>
+        {% endif %}
+    {% endif %}
+</div>
+{% endif %}
+
+<h3>Database Schema</h3>
+<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0; font-family: monospace; font-size: 12px;">
+<strong>Tables:</strong><br>
+• <code>players</code> - Player accounts and profiles<br>
+• <code>player_stats</code> - Player statistics<br>
+• <code>games</code> - Game records<br>
+• <code>game_players</code> - Player-game associations<br>
+• <code>game_snapshots</code> - Saved game states<br>
+• <code>game_events</code> - Game event history<br>
+• <code>chat_messages</code> - In-game chat<br>
+• <code>sessions</code> - Authentication sessions<br>
+• <code>matchmaking_queue</code> - Matchmaking queue entries<br>
+</div>
+{% endblock %}
+

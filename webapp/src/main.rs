@@ -2,6 +2,7 @@ mod api;
 mod components;
 mod pages;
 mod state;
+mod utils;
 mod websocket;
 
 use leptos::prelude::*;
@@ -9,17 +10,35 @@ use leptos_router::components::{Router, Routes, Route};
 use leptos_router::path;
 use pages::*;
 use state::AppState;
+use components::{
+    NetworkStatus, ConnectionStatus, ToastContainer, ToastContext, 
+    ModalContainer, ModalContext, KeyboardContext, KeyboardShortcutsHelp
+};
 
 #[component]
 fn App() -> impl IntoView {
     let app_state = AppState::new();
     provide_context(app_state.clone());
+    
+    let toast_ctx = ToastContext::new();
+    provide_context(toast_ctx);
+    
+    let modal_ctx = ModalContext::new();
+    provide_context(modal_ctx);
+    
+    let kb_ctx = KeyboardContext::new();
+    provide_context(kb_ctx);
 
     let app_state_for_nav = app_state.clone();
+    let app_state_for_nav_leader = app_state.clone();
     let app_state_for_auth = app_state.clone();
     
     view! {
         <Router>
+            <ToastContainer />
+            <ModalContainer />
+            <KeyboardShortcutsHelp />
+            <NetworkStatus />
             <main>
                 <nav class="main-nav">
                     <div class="nav-container">
@@ -28,11 +47,16 @@ fn App() -> impl IntoView {
                             <a href="/games">"Games"</a>
                             <Show when=move || app_state_for_nav.is_authenticated()>
                                 <a href="/games/create">"Create Game"</a>
+                                <a href="/matchmaking">"Quick Match"</a>
+                            </Show>
+                            <a href="/leaderboard">"Leaderboard"</a>
+                            <Show when=move || app_state_for_nav_leader.is_authenticated()>
                                 <a href="/admin">"Admin"</a>
                             </Show>
                             <a href="/health">"Status"</a>
                         </div>
                         <div class="nav-auth">
+                            <ConnectionStatus />
                             <Show
                                 when=move || app_state_for_auth.is_authenticated()
                                 fallback=|| view! {
@@ -77,7 +101,6 @@ fn App() -> impl IntoView {
                         
                         // Health & Status
                         <Route path=path!("/health") view=HealthDashboardPage />
-                        <Route path=path!("/metrics") view=MetricsPage />
                         
                         // Stub pages for future features
                         <Route path=path!("/matchmaking") view=MatchmakingPage />

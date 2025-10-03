@@ -1,4 +1,4 @@
-// GameBoard component - renders the Automatafl board
+// GameBoard component - renders the Automatafl board with traditional hnefetafl pieces
 use crate::{api::ApiClient, state::AppState};
 use automatafl_api_types::GameStateResponse;
 use automatafl_logic::{Particle, Coord};
@@ -14,37 +14,21 @@ pub fn GameBoard(
     let board = game_state.game.board;
     let app_state = use_context::<AppState>().expect("AppState should be provided");
     
-    // Selection state for click-to-move interaction
+    // Single selection state for clean click-to-move
     let (selected_cell, set_selected_cell) = signal(Option::<Coord>::None);
     
-    // Track recent moves for visualization
-    let (recent_moves, _set_recent_moves) = signal(Vec::<(Coord, Coord, bool)>::new());
-    
-    // Track move animations and indicators
-    let (move_indicators, set_move_indicators) = signal(Vec::<MoveIndicator>::new());
-    
-    // Track conflict markers
-    let (conflict_markers, set_conflict_markers) = signal(Vec::<ConflictMarker>::new());
-    
-    // Track automaton move indicator
-    let (automaton_move, _set_automaton_move) = signal(Option::<(Coord, Coord)>::None);
-    
-    // Check if current player can make moves
+    // Derived state from app_state
     let current_player_id = app_state.current_player_id.get();
     let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
-    
-    // Check if player has already submitted a move this round
     let has_pending_move = my_pid.map(|pid| {
         game_state.game.pending_moves.iter().any(|mv| mv.who == pid)
     }).unwrap_or(false);
-    
     let can_interact = my_pid.is_some() && !has_pending_move;
     
+    // Move submission action
     let api_base_url = app_state.api_base_url.clone();
     let move_action = Action::new_local(move |(gid, from, to): &(Uuid, Coord, Coord)| {
-        let gid = *gid;
-        let from = *from;
-        let to = *to;
+        let (gid, from, to) = (*gid, *from, *to);
         let base_url = api_base_url.clone();
         async move {
             let client = ApiClient::new(base_url);
@@ -52,388 +36,294 @@ pub fn GameBoard(
         }
     });
     
+    // Clean click handler
     let handle_cell_click = move |coord: Coord| {
-        if !can_interact {
-            return;
-        }
+        if !can_interact { return; }
         
         match selected_cell.get() {
-            None => {
-                // First click - select source
-                set_selected_cell.set(Some(coord));
-            }
+            None => set_selected_cell.set(Some(coord)),
+            Some(from) if from == coord => set_selected_cell.set(None),
             Some(from) => {
-                if from == coord {
-                    // Clicking same cell - deselect
-                    set_selected_cell.set(None);
+                if let Some(callback) = on_move {
+                    callback.run((from, coord));
                 } else {
-                    // Second click - make move
-                    if let Some(callback) = on_move {
-                        callback.run((from, coord));
-                    } else {
-                        // Default behavior - submit move via API
-                        move_action.dispatch((game_id, from, coord));
-                    }
-                    set_selected_cell.set(None);
+                    move_action.dispatch((game_id, from, coord));
                 }
+                set_selected_cell.set(None);
             }
         }
     };
     
-    // Effect to handle move results and update visualization
-    Effect::new(move |_| {
-        if let Some(result) = move_action.value().get() {
-            match result {
-                Ok(_) => {
-                    // Move was successful - visualization will be updated via WebSocket events
-                }
-                Err(_) => {
-                    // Handle error case - could add visual feedback here
-                }
-            }
-        }
+    // Get visual indicators from app state
+    let app_state_for_move_events = app_state.clone();
+    let move_events = Memo::new(move |_| {
+        let events = app_state_for_move_events.get_move_events(game_id);
+        let now = js_sys::Date::now() as u64;
+        events.into_iter().filter(|e| now - e.timestamp < 3000).collect::<Vec<_>>()
     });
     
-    // Listen for WebSocket events to update visualizations
-    let app_state_for_events = app_state.clone();
-    Effect::new(move |_| {
-        // Get move events from app state and convert to indicators
-        let move_events = app_state_for_events.get_move_events(game_id);
-        let current_time = js_sys::Date::now() as u64;
-        
-        let indicators: Vec<MoveIndicator> = move_events.into_iter()
-            .filter(|event| current_time - event.timestamp < 3000) // Show for 3 seconds
-            .map(|event| MoveIndicator {
-                from: event.from,
-                to: event.to,
-                player_id: event.player_id,
-                success: event.success,
-                timestamp: event.timestamp,
-            })
-            .collect();
-        
-        set_move_indicators.set(indicators);
-        
-        // Get conflict events from app state and convert to markers
-        let conflict_events = app_state_for_events.get_conflict_events(game_id);
-        let markers: Vec<ConflictMarker> = conflict_events.into_iter()
-            .filter(|event| current_time - event.timestamp < 2000) // Show for 2 seconds
-            .map(|event| ConflictMarker {
-                coord: event.coord,
-                players: event.players.clone(),
-                timestamp: event.timestamp,
-            })
-            .collect();
-        
-        set_conflict_markers.set(markers);
+    let app_state_for_conflict_events = app_state.clone();
+    let conflict_events = Memo::new(move |_| {
+        let events = app_state_for_conflict_events.get_conflict_events(game_id);
+        let now = js_sys::Date::now() as u64;
+        events.into_iter().filter(|e| now - e.timestamp < 2000).collect::<Vec<_>>()
     });
     
     view! {
-        <div class="game-board" style="position: relative;">
-            <div class="board-grid" style=format!("grid-template-columns: repeat({}, 1fr)", board.size.x)>
+        <div class="game-board-container">
+            // SVG-based board with traditional piece rendering
+            <svg 
+                class="game-board-svg"
+                viewBox=format!("0 0 {} {}", board.size.x, board.size.y)
+                style=format!("width: {}em; height: {}em;", board.size.x as f32 * 3.5, board.size.y as f32 * 3.5)
+            >
+                <defs>
+                    <PieceDefs />
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                            refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
+                    </marker>
+                </defs>
+                
+                // Board cells and pieces
                 {(0..board.size.y).map(|y| {
                     (0..board.size.x).map(|x| {
-                        let coord = automatafl_logic::Coord { x, y };
+                        let coord = Coord { x, y };
                         let cell = board.particles[(x as usize, y as usize)];
                         let is_automaton = board.automaton_location == coord;
-                        
-                        // Check if this is a goal
                         let is_goal = game_state.game.goals.iter().any(|(c, _)| *c == coord);
                         let goal_player = game_state.game.goals.iter()
                             .find(|(c, _)| *c == coord)
                             .map(|(_, pid)| pid.0);
-                        
-                        // Check if this cell is selected
                         let is_selected = selected_cell.get() == Some(coord);
                         
-                        let cell_class = format!(
-                            "board-cell {} {} {} {} {}",
-                            particle_class(cell.what),
-                            if is_automaton { "automaton" } else { "" },
-                            if is_goal { format!("goal goal-p{}", goal_player.unwrap_or(0)) } else { String::new() },
-                            if is_selected { "selected" } else { "" },
-                            if can_interact { "interactive" } else { "" }
-                        );
-                        
-                        let coord_for_click = coord;
                         view! {
-                            <div 
-                                class=cell_class
-                                data-x=x
-                                data-y=y
-                                on:click=move |_| handle_cell_click(coord_for_click)
-                            >
-                                <span class="cell-content">
-                                    {particle_symbol(cell.what, is_automaton)}
-                                </span>
-                                {if is_selected {
-                                    view! { <div class="selection-pulse"></div> }.into_any()
-                                } else {
-                                    view! {}.into_any()
-                                }}
-                            </div>
+                            <BoardCell 
+                                coord=coord
+                                particle=cell.what
+                                is_automaton=is_automaton
+                                is_goal=is_goal
+                                goal_player=goal_player
+                                is_selected=is_selected
+                                can_interact=can_interact
+                                on_click=handle_cell_click
+                            />
                         }
                     }).collect::<Vec<_>>()
                 }).collect::<Vec<_>>()}
-            </div>
-            
-            // Move indicators overlay
-            <div class="move-indicators-overlay">
+                
+                // Move indicators
                 {move || {
-                    move_indicators.get().into_iter().map(|indicator| {
-                        let player_class = format!("player-{}", indicator.player_id);
-                        let success_class = if indicator.success { "success" } else { "failed" };
-                        
+                    move_events.get().iter().map(|event| {
+                        let success_color = if event.success { "#070" } else { "#f00" };
                         view! {
                             <MoveArrow 
-                                from=indicator.from 
-                                to=indicator.to 
-                                board_size=(board.size.x, board.size.y)
-                                class=format!("move-arrow {} {}", player_class, success_class)
+                                from=event.from 
+                                to=event.to 
+                                color=success_color
                             />
                         }
                     }).collect_view()
                 }}
-            </div>
-            
-            // Conflict markers overlay
-            <div class="conflict-markers-overlay">
+                
+                // Conflict markers
                 {move || {
-                    conflict_markers.get().into_iter().map(|marker| {
+                    conflict_events.get().iter().map(|event| {
                         view! {
-                            <ConflictMarkerView 
-                                coord=marker.coord 
-                                board_size=(board.size.x, board.size.y)
-                                players=marker.players.clone()
+                            <circle
+                                cx=event.coord.x as f32 + 0.5
+                                cy=event.coord.y as f32 + 0.5
+                                r="0.45"
+                                fill="rgba(200, 0, 0, 0.6)"
+                                class="conflict-pulse"
                             />
                         }
                     }).collect_view()
                 }}
-            </div>
+            </svg>
             
-            // Automaton move indicator
-            {move || {
-                if let Some((from, to)) = automaton_move.get() {
-                    view! {
-                        <div class="automaton-move-overlay">
-                            <MoveArrow 
-                                from=from 
-                                to=to 
-                                board_size=(board.size.x, board.size.y)
-                                class="automaton-move".to_string()
-                            />
+            // Status display
+            <BoardStatus 
+                has_pending_move=has_pending_move
+                can_interact=can_interact
+                my_pid=my_pid.map(|pid| pid.0)
+                selected_cell=selected_cell.get()
+                on_cancel=move || set_selected_cell.set(None)
+                move_result=move_action.value().get()
+            />
+        </div>
+    }
+}
+
+// SVG piece definitions - traditional hnefetafl style
+#[component]
+fn PieceDefs() -> impl IntoView {
+    view! {
+        <g id="piece-attractor">
+            <circle cx="0.5" cy="0.5" r="0.42" fill="#ddd" stroke="#777" stroke-width="0.04"/>
+            <circle cx="0.35" cy="0.35" r="0.08" fill="#fff"/>
+            <text x="0.5" y="0.5" text-anchor="middle" dominant-baseline="central" 
+                  font-size="0.5" fill="#333" font-weight="bold">"⊕"</text>
+        </g>
+        <g id="piece-repulsor">
+            <circle cx="0.5" cy="0.5" r="0.42" fill="#222" stroke="#000" stroke-width="0.04"/>
+            <circle cx="0.35" cy="0.35" r="0.08" fill="#777"/>
+            <text x="0.5" y="0.5" text-anchor="middle" dominant-baseline="central" 
+                  font-size="0.5" fill="#ddd" font-weight="bold">"⊖"</text>
+        </g>
+        <g id="piece-automaton">
+            <circle cx="0.5" cy="0.5" r="0.42" fill="#990" stroke="#550" stroke-width="0.04"/>
+            <circle cx="0.35" cy="0.35" r="0.08" fill="#bb6"/>
+            <text x="0.5" y="0.5" text-anchor="middle" dominant-baseline="central" 
+                  font-size="0.5" fill="#ffea00" font-weight="bold">"◉"</text>
+        </g>
+    }
+}
+
+// Individual board cell component
+#[component]
+fn BoardCell(
+    coord: Coord,
+    particle: Particle,
+    is_automaton: bool,
+    is_goal: bool,
+    goal_player: Option<u8>,
+    is_selected: bool,
+    can_interact: bool,
+    on_click: impl Fn(Coord) + 'static + Copy,
+) -> impl IntoView {
+    let x = coord.x as f32;
+    let y = coord.y as f32;
+    
+    let piece_id = if is_automaton {
+        "#piece-automaton"
+    } else {
+        match particle {
+            Particle::Attractor => "#piece-attractor",
+            Particle::Repulsor => "#piece-repulsor",
+            Particle::Automaton => "#piece-automaton",
+            Particle::Vacuum => "",
+        }
+    };
+    
+    let cell_fill = if is_goal {
+        match goal_player {
+            Some(1) => "#e8d4a0",
+            Some(2) => "#a0c4e8",
+            Some(3) => "#e8a0a0",
+            Some(4) => "#a0e8a0",
+            _ => "#ca8"
+        }
+    } else {
+        "#ca8"
+    };
+    
+    view! {
+        <g>
+            <rect 
+                x=x y=y width="1" height="1"
+                fill=cell_fill
+                stroke="#000" 
+                stroke-width="0.03"
+                class=move || if can_interact { "cell-interactive" } else { "" }
+                on:click=move |_| on_click(coord)
+            />
+            {if is_selected {
+                view! {
+                    <rect 
+                        x=x y=y width="1" height="1"
+                        fill="rgba(0, 100, 0, 0.3)"
+                        stroke="#0a0" 
+                        stroke-width="0.06"
+                        class="selection-indicator"
+                    />
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+            {if !piece_id.is_empty() {
+                view! {
+                    <use_ href=piece_id x=x y=y width="1" height="1" />
+                }.into_any()
+            } else {
+                view! {}.into_any()
+            }}
+        </g>
+    }
+}
+
+// Status display component
+#[component]
+fn BoardStatus(
+    has_pending_move: bool,
+    can_interact: bool,
+    my_pid: Option<u8>,
+    selected_cell: Option<Coord>,
+    on_cancel: impl Fn() + 'static + Copy,
+    move_result: Option<Result<automatafl_api_types::MoveResultResponse, automatafl_backend_client::ClientError>>,
+) -> impl IntoView {
+    view! {
+        <div class="board-status">
+            {if has_pending_move {
+                view! { <p class="status-info">"✓ Move submitted! Waiting for other players..."</p> }.into_any()
+            } else if can_interact {
+                match selected_cell {
+                    Some(coord) => view! {
+                        <div class="status-controls">
+                            <p>"Selected: (" {coord.x} ", " {coord.y} ") - Click destination"</p>
+                            <button class="button button-small" on:click=move |_| on_cancel()>"Cancel"</button>
                         </div>
-                    }.into_any()
-                } else {
-                    view! {}.into_any()
+                    }.into_any(),
+                    None => view! { <p>"Click a piece to select, then click where to move"</p> }.into_any()
                 }
+            } else if my_pid.is_some() {
+                view! { <p>"You've already submitted your move"</p> }.into_any()
+            } else {
+                view! { <p class="status-spectator">"Spectating"</p> }.into_any()
             }}
             
-            {move || {
-                if has_pending_move {
-                    view! {
-                        <div class="board-status">
-                            <p>"✓ Move submitted! Waiting for other players..."</p>
-                        </div>
-                    }.into_any()
-                } else if can_interact {
-                    match selected_cell.get() {
-                        Some(coord) => view! {
-                            <div class="board-status">
-                                <p>"Selected: (" {coord.x} ", " {coord.y} ") - Click another cell to move"</p>
-                                <button 
-                                    class="button button-small"
-                                    on:click=move |_| set_selected_cell.set(None)
-                                >
-                                    "Cancel Selection"
-                                </button>
-                            </div>
-                        }.into_any(),
-                        None => view! {
-                            <div class="board-status">
-                                <p>"Click a cell to select it, then click destination to move"</p>
-                            </div>
-                        }.into_any()
-                    }
-                } else if my_pid.is_some() {
-                    view! {
-                        <div class="board-status">
-                            <p>"Waiting to submit your move..."</p>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! {
-                        <div class="board-status">
-                            <p>"You are spectating this game"</p>
-                        </div>
-                    }.into_any()
-                }
-            }}
-            
-            {move || {
-                if let Some(result) = move_action.value().get() {
-                    match result {
-                        Ok(_) => view! {
-                            <div class="move-feedback success">
-                                "Move submitted successfully!"
-                            </div>
-                        }.into_any(),
-                        Err(e) => view! {
-                            <div class="move-feedback error">
-                                "Error: " {format!("{}", e)}
-                            </div>
-                        }.into_any()
-                    }
-                } else {
-                    view! {}.into_any()
-                }
+            {match move_result {
+                Some(Ok(_)) => view! { <p class="status-success">"Move submitted!"</p> }.into_any(),
+                Some(Err(e)) => view! { <p class="status-error">{format!("Error: {}", e)}</p> }.into_any(),
+                None => view! {}.into_any()
             }}
         </div>
     }
 }
 
-fn particle_class(particle: Particle) -> &'static str {
-    match particle {
-        Particle::Attractor => "attractor",
-        Particle::Repulsor => "repulsor",
-        Particle::Automaton => "automaton",
-        Particle::Vacuum => "vacuum",
-    }
-}
-
-fn particle_symbol(particle: Particle, is_automaton: bool) -> &'static str {
-    if is_automaton {
-        "◉"
-    } else {
-        match particle {
-            Particle::Attractor => "⊕",
-            Particle::Repulsor => "⊖",
-            Particle::Automaton => "◉",
-            Particle::Vacuum => "",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct MoveIndicator {
-    from: Coord,
-    to: Coord,
-    player_id: u8,
-    success: bool,
-    timestamp: u64,
-}
-
-impl MoveIndicator {
-    fn new(from: Coord, to: Coord, player_id: u8, success: bool) -> Self {
-        Self {
-            from,
-            to,
-            player_id,
-            success,
-            timestamp: js_sys::Date::now() as u64,
-        }
-    }
-    
-    fn is_expired(&self, current_time: u64) -> bool {
-        current_time - self.timestamp > 3000 // 3 seconds
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ConflictMarker {
-    coord: Coord,
-    players: Vec<u8>,
-    timestamp: u64,
-}
-
-impl ConflictMarker {
-    fn new(coord: Coord, players: Vec<u8>) -> Self {
-        Self {
-            coord,
-            players,
-            timestamp: js_sys::Date::now() as u64,
-        }
-    }
-    
-    fn is_expired(&self, current_time: u64) -> bool {
-        current_time - self.timestamp > 2000 // 2 seconds
-    }
-}
-
+// Curved move arrow - similar to original game.html
 #[component]
 fn MoveArrow(
     from: Coord,
     to: Coord,
-    board_size: (u8, u8),
-    #[prop(optional)] class: Option<String>
+    color: &'static str,
 ) -> impl IntoView {
-    let (board_width, board_height) = board_size;
+    let from_x = from.x as f32 + 0.5;
+    let from_y = from.y as f32 + 0.5;
+    let to_x = to.x as f32 + 0.5;
+    let to_y = to.y as f32 + 0.5;
     
-    // Calculate positions as percentages
-    let from_x = (from.x as f32 + 0.5) / board_width as f32 * 100.0;
-    let from_y = (from.y as f32 + 0.5) / board_height as f32 * 100.0;
-    let to_x = (to.x as f32 + 0.5) / board_width as f32 * 100.0;
-    let to_y = (to.y as f32 + 0.5) / board_height as f32 * 100.0;
-    
-    // Calculate curve control point (similar to original game.html)
+    // Curve control point (like original)
     let is_vertical = (from.y as i32 - to.y as i32).abs() > (from.x as i32 - to.x as i32).abs();
+    let mid_x = (from_x + to_x) / 2.0;
+    let mid_y = (from_y + to_y) / 2.0;
+    
     let (ctrl_x, ctrl_y) = if is_vertical {
-        ((from_x + to_x) / 2.0 + 5.0, (from_y + to_y) / 2.0)
+        (mid_x + 0.5, mid_y)
     } else {
-        ((from_x + to_x) / 2.0, (from_y + to_y) / 2.0 + 5.0)
+        (mid_x, mid_y + 0.5)
     };
     
-    let path_d = format!(
-        "M {},{} Q {},{} {},{}",
-        from_x, from_y, ctrl_x, ctrl_y, to_x, to_y
-    );
-    
-    let arrow_class = class.unwrap_or_default();
+    let path_d = format!("M {} {} Q {} {} {} {}", from_x, from_y, ctrl_x, ctrl_y, to_x, to_y);
     
     view! {
-        <svg class=format!("move-arrow-svg {}", arrow_class) viewBox="0 0 100 100">
-            <defs>
-                <marker id="arrowhead" markerWidth="10" markerHeight="7" 
-                        refX="9" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
-                </marker>
-            </defs>
-            <path 
-                d=path_d
-                stroke="currentColor" 
-                stroke-width="2" 
-                fill="none" 
-                marker-end="url(#arrowhead)"
-            />
-        </svg>
+        <path 
+            d=path_d
+            stroke=color
+            stroke-width="0.1"
+            fill="none"
+            class="move-path-animated"
+        />
     }
 }
 
-#[component]
-fn ConflictMarkerView(
-    coord: Coord,
-    board_size: (u8, u8),
-    players: Vec<u8>
-) -> impl IntoView {
-    let (board_width, board_height) = board_size;
-    
-    // Calculate position as percentages
-    let x = (coord.x as f32 + 0.5) / board_width as f32 * 100.0;
-    let y = (coord.y as f32 + 0.5) / board_height as f32 * 100.0;
-    
-    let players_text = players.iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    
-    view! {
-        <div 
-            class="conflict-marker"
-            style=format!("left: {}%; top: {}%;", x, y)
-            title=format!("Conflict: Players {}", players_text)
-        >
-            <div class="conflict-pulse"></div>
-            <span class="conflict-icon">"⚠"</span>
-        </div>
-    }
-}

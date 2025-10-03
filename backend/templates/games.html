@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Games - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>Game Lobby</h2>
+
+<div style="margin: 20px 0;">
+    <p>Browse available games or use the JSON API to create and join games.</p>
+</div>
+
+{% if games.is_empty() %}
+<p style="margin: 20px 0;">No games available. 
+    {% if session_id.is_some() %}
+        <a href="/create-game">Create one!</a>
+    {% else %}
+        <a href="/login">Login</a> to create a game.
+    {% endif %}
+</p>
+{% else %}
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 12px; text-align: left;">Game ID</th>
+            <th style="padding: 12px; text-align: left;">Status</th>
+            <th style="padding: 12px; text-align: left;">Players</th>
+            <th style="padding: 12px; text-align: left;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for game in games %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 12px;"><code style="font-size: 12px;">{{ game.id }}</code></td>
+            <td style="padding: 12px;">
+                {% match game.lifecycle %}
+                    {% when GameLifecycle::Waiting %}
+                        <span style="color: #f39c12; font-weight: bold;">⏳ Waiting</span>
+                    {% when GameLifecycle::InProgress %}
+                        <span style="color: #27ae60; font-weight: bold;">▶ In Progress</span>
+                    {% when GameLifecycle::Finished %}
+                        <span style="color: #95a5a6;">✓ Finished</span>
+                {% endmatch %}
+            </td>
+            <td style="padding: 12px;">{{ game.player_count }}/{{ game.max_players }}</td>
+            <td style="padding: 12px;">
+                <a href="/game/{{ game.id }}" style="color: #667eea; text-decoration: none; margin-right: 10px;">View</a>
+                {% match game.lifecycle %}
+                    {% when GameLifecycle::Waiting %}
+                        {% if game.player_count < game.max_players as usize %}
+                            {% if session_id.is_some() %}
+                                <form method="POST" action="/game/{{ game.id }}/join" style="display: inline;">
+                                    <button type="submit" style="padding: 5px 10px; font-size: 12px; background: #27ae60;">Join</button>
+                                </form>
+                            {% endif %}
+                        {% else %}
+                            <span style="color: #95a5a6; font-size: 12px;">Full</span>
+                        {% endif %}
+                    {% when GameLifecycle::InProgress %}
+                        <span style="color: #f39c12; font-size: 12px;">Spectate</span>
+                    {% when GameLifecycle::Finished %}
+                        <span style="color: #95a5a6; font-size: 12px;">—</span>
+                {% endmatch %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div style="margin: 30px 0;">
+    <h3>API Documentation</h3>
+    <p>See the <a href="https://github.com/emberian/automatafl">GitHub repository</a> for full API documentation.</p>
+</div>
+{% endblock %}

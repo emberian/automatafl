@@ -27,16 +27,15 @@ pub fn HomePage() -> impl IntoView {
                             </A>
                         }
                     >
-                        <A href="/games" attr:class="button button-primary button-large">
-                            "View Games"
+                        <A href="/matchmaking" attr:class="button button-primary button-large">
+                            "Quick Match"
                         </A>
-                        <A href="/games/create" attr:class="button button-secondary button-large">
-                            "Create Game"
+                        <A href="/games" attr:class="button button-secondary button-large">
+                            "Browse Games"
                         </A>
-                        // Note: Matchmaking not yet implemented in backend
-                        // <A href="/matchmaking" attr:class="button button-secondary button-large">
-                        //     "Quick Match"
-                        // </A>
+                        <A href="/leaderboard" attr:class="button button-secondary button-large">
+                            "Leaderboard"
+                        </A>
                     </Show>
                 </div>
             </section>
@@ -47,37 +46,19 @@ pub fn HomePage() -> impl IntoView {
                     <div class="feature-card">
                         <div class="feature-icon">{"🎯"}</div>
                         <h3>"Strategic Gameplay"</h3>
-                        <p>"Move particles strategically to control the automaton's path and reach your goal"</p>
+                        <p>"Move particles to influence the automaton and reach your goal"</p>
                     </div>
                     
                     <div class="feature-card">
                         <div class="feature-icon">{"⚛️"}</div>
-                        <h3>"Particle Physics"</h3>
-                        <p>"Use attractors and repulsors to influence the automaton's movement"</p>
-                    </div>
-                    
-                    <div class="feature-card">
-                        <div class="feature-icon">{"🏆"}</div>
-                        <h3>"Competitive Rating"</h3>
-                        <p>"Climb the leaderboard and improve your rating through victories"</p>
+                        <h3>"Particle Mechanics"</h3>
+                        <p>"Attractors and repulsors affect the automaton each round"</p>
                     </div>
                     
                     <div class="feature-card">
                         <div class="feature-icon">{"💬"}</div>
-                        <h3>"Real-time Chat"</h3>
-                        <p>"Communicate with your opponent during matches"</p>
-                    </div>
-                    
-                    <div class="feature-card">
-                        <div class="feature-icon">{"⚡"}</div>
-                        <h3>"Quick Matchmaking"</h3>
-                        <p>"Find opponents of similar skill level automatically"</p>
-                    </div>
-                    
-                    <div class="feature-card">
-                        <div class="feature-icon">{"👁️"}</div>
-                        <h3>"Spectator Mode"</h3>
-                        <p>"Watch live games and learn from other players"</p>
+                        <h3>"In-game Chat"</h3>
+                        <p>"Talk with your opponent during matches"</p>
                     </div>
                 </div>
             </section>
@@ -138,12 +119,6 @@ pub fn HomePage() -> impl IntoView {
                         <div class="particle-visual automaton">{"◉"}</div>
                         <h3>"Automaton"</h3>
                         <p>"The piece both players try to control. Moves based on net forces from all particles"</p>
-                    </div>
-                    
-                    <div class="particle-card">
-                        <div class="particle-visual vacuum">{"○"}</div>
-                        <h3>"Vacuum"</h3>
-                        <p>"Empty space where particles can be moved"</p>
                     </div>
                 </div>
             </section>

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Session Management - Admin{% endblock %}
+
+{% block content %}
+<h2>Session Management</h2>
+
+<div style="margin: 20px 0;">
+    <a href="/admin" class="button" style="background: #95a5a6;">← Back to Admin</a>
+    <form method="POST" action="/admin/sessions/cleanup" style="display: inline; margin-left: 10px;">
+        <button type="submit" style="background: #e74c3c;">Cleanup Expired Sessions</button>
+    </form>
+</div>
+
+<h3>All Sessions ({{ sessions.len() }})</h3>
+<table style="width: 100%; font-size: 13px;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 8px; text-align: left;">Session ID</th>
+            <th style="padding: 8px; text-align: left;">Player</th>
+            <th style="padding: 8px; text-align: left;">Created</th>
+            <th style="padding: 8px; text-align: left;">Expires</th>
+            <th style="padding: 8px; text-align: left;">Status</th>
+            <th style="padding: 8px; text-align: left;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for session in sessions %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;"><code style="font-size: 11px;">{{ session.session_id }}</code></td>
+            <td style="padding: 8px;">{{ session.player_name }}</td>
+            <td style="padding: 8px;">{{ session.created_at }}</td>
+            <td style="padding: 8px;">{{ session.expires_at }}</td>
+            <td style="padding: 8px;">
+                {% if session.is_expired %}
+                    <span style="color: #e74c3c;">Expired</span>
+                {% else %}
+                    <span style="color: #27ae60;">Active</span>
+                {% endif %}
+            </td>
+            <td style="padding: 8px;">
+                <form method="POST" action="/admin/sessions/{{ session.session_id }}/delete" style="display: inline;">
+                    <button type="submit" onclick="return confirm('Delete this session?')"
+                            style="padding: 2px 6px; font-size: 11px; background: #e74c3c;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

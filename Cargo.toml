@@ -14,3 +14,10 @@ automatafl-api-types = { path = "api-types" }
 automatafl-webapp = { path = "webapp" }
 automatafl-backend = { path = "backend" }
 automatafl-backend-client = { path = "backend-client" }
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
+panic = 'abort'
+codegen-units = 1

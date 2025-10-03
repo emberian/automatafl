@@ -1,5 +1,5 @@
 // MoveControls component - handles move input and submission
-use crate::{api::ApiClient, state::AppState};
+use crate::{api::ApiClient, state::AppState, components::use_toast};
 use automatafl_api_types::GameStateResponse;
 use automatafl_logic::{Coord, MoveFeedback};
 use leptos::prelude::*;
@@ -8,13 +8,12 @@ use uuid::Uuid;
 #[component]
 pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let toast = use_toast();
     
     let (from_x, set_from_x) = signal(String::new());
     let (from_y, set_from_y) = signal(String::new());
     let (to_x, set_to_x) = signal(String::new());
     let (to_y, set_to_y) = signal(String::new());
-    let (status, set_status) = signal(String::new());
-    let (status_type, set_status_type) = signal("info".to_string()); // "success", "error", "info", "warning"
     
     // Check if it's this player's turn
     let current_player_id = app_state.current_player_id.get();
@@ -47,56 +46,50 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
             && !to_y.get().is_empty()
     };
     
+    let toast_clone = toast.clone();
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        
+
         if my_pid.is_none() {
-            set_status.set("ℹ️ You are not a player in this game".to_string());
-            set_status_type.set("info".to_string());
+            toast_clone.info("You are not a player in this game");
             return;
         }
-        
+
         if has_pending_move {
-            set_status.set("✓ You have already submitted a move this round".to_string());
-            set_status_type.set("info".to_string());
+            toast_clone.info("You have already submitted a move this round");
             return;
         }
-        
+
         // Parse coordinates
         let Ok(fx) = from_x.get().parse::<u8>() else {
-            set_status.set("❌ Invalid from X coordinate (must be a number)".to_string());
-            set_status_type.set("error".to_string());
+            toast_clone.error("Invalid from X coordinate (must be a number)");
             return;
         };
         let Ok(fy) = from_y.get().parse::<u8>() else {
-            set_status.set("❌ Invalid from Y coordinate (must be a number)".to_string());
-            set_status_type.set("error".to_string());
+            toast_clone.error("Invalid from Y coordinate (must be a number)");
             return;
         };
         let Ok(tx) = to_x.get().parse::<u8>() else {
-            set_status.set("❌ Invalid to X coordinate (must be a number)".to_string());
-            set_status_type.set("error".to_string());
+            toast_clone.error("Invalid to X coordinate (must be a number)");
             return;
         };
         let Ok(ty) = to_y.get().parse::<u8>() else {
-            set_status.set("❌ Invalid to Y coordinate (must be a number)".to_string());
-            set_status_type.set("error".to_string());
+            toast_clone.error("Invalid to Y coordinate (must be a number)");
             return;
         };
-        
-        set_status.set("⏳ Submitting move...".to_string());
-        set_status_type.set("info".to_string());
+
+        toast_clone.info("Submitting move...");
         submit_move_action.dispatch((game_id, fx, fy, tx, ty));
     };
-    
+
+    let toast_clone2 = toast.clone();
     Effect::new(move |_| {
         if let Some(result) = submit_move_action.value().get() {
             match result {
                 Ok(move_result) => {
                     match move_result.feedback {
                         MoveFeedback::Committed => {
-                            set_status.set("✅ Move committed! Waiting for other players...".to_string());
-                            set_status_type.set("success".to_string());
+                            toast_clone2.success("Move submitted! Waiting for other players...");
                             // Clear form
                             set_from_x.set(String::new());
                             set_from_y.set(String::new());
@@ -104,30 +97,24 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                             set_to_y.set(String::new());
                         }
                         MoveFeedback::MustMove => {
-                            set_status.set("❌ Source and destination must be different".to_string());
-                            set_status_type.set("error".to_string());
+                            toast_clone2.error("Source and destination must be different");
                         }
                         MoveFeedback::AxisAlignedOnly => {
-                            set_status.set("❌ Move must be along a row or column (like a Rook in chess)".to_string());
-                            set_status_type.set("error".to_string());
+                            toast_clone2.error("Move must be along a row or column (like a Rook in chess)");
                         }
                         MoveFeedback::WaitYourTurn => {
-                            set_status.set("⏳ Wait for conflict resolution to complete".to_string());
-                            set_status_type.set("warning".to_string());
+                            toast_clone2.warning("Wait for conflict resolution to complete");
                         }
                         MoveFeedback::GameOver => {
-                            set_status.set("🏁 Game is already over".to_string());
-                            set_status_type.set("info".to_string());
+                            toast_clone2.info("Game is already over");
                         }
                         MoveFeedback::SeeCoords(details) => {
-                            set_status.set(format!("❌ Invalid move: {}", details));
-                            set_status_type.set("error".to_string());
+                            toast_clone2.error(format!("Invalid move: {}", details));
                         }
                     }
                 }
                 Err(e) => {
-                    set_status.set(format!("🔥 Network error: {}", e));
-                    set_status_type.set("error".to_string());
+                    toast_clone2.error(format!("Network error: {}", e));
                 }
             }
         }
@@ -207,18 +194,6 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                             {move || if submit_move_action.pending().get() { "Submitting..." } else { "Submit Move" }}
                         </button>
                     </form>
-                    
-                    {move || {
-                        let s = status.get();
-                        let st = status_type.get();
-                        if !s.is_empty() {
-                            view! {
-                                <div class=format!("move-status status-{}", st)>{s}</div>
-                            }.into_any()
-                        } else {
-                            view! {}.into_any()
-                        }
-                    }}
                 }.into_any()
             } else {
                 view! {

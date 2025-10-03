@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Player Management - Admin{% endblock %}
+
+{% block content %}
+<h2>Player Management</h2>
+
+<div style="margin: 20px 0;">
+    <a href="/admin" class="button" style="background: #95a5a6;">← Back to Admin</a>
+</div>
+
+<h3>All Players ({{ players.len() }})</h3>
+<table style="width: 100%; font-size: 13px;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 8px; text-align: left;">ID</th>
+            <th style="padding: 8px; text-align: left;">Display Name</th>
+            <th style="padding: 8px; text-align: left;">ELO</th>
+            <th style="padding: 8px; text-align: left;">Admin</th>
+            <th style="padding: 8px; text-align: left;">Created</th>
+            <th style="padding: 8px; text-align: left;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for player in players %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;"><code style="font-size: 11px;">{{ player.id }}</code></td>
+            <td style="padding: 8px;"><strong>{{ player.displayname }}</strong></td>
+            <td style="padding: 8px;">{{ player.elo_rating }}</td>
+            <td style="padding: 8px;">
+                {% if player.is_admin %}
+                    <span style="color: #e74c3c;">✓</span>
+                {% else %}
+                    —
+                {% endif %}
+            </td>
+            <td style="padding: 8px;">{{ player.created_at }}</td>
+            <td style="padding: 8px;">
+                <a href="/admin/players/{{ player.id }}" style="color: #667eea; font-size: 12px;">Edit</a>
+                <form method="POST" action="/admin/players/{{ player.id }}/delete" style="display: inline; margin-left: 5px;">
+                    <button type="submit" onclick="return confirm('Delete {{ player.displayname }}?')" 
+                            style="padding: 2px 6px; font-size: 11px; background: #e74c3c;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+

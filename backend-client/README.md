@@ -138,6 +138,88 @@ Use a specific session token:
 automatafl-client --token <SESSION_TOKEN> game list
 ```
 
+### Admin Commands
+
+The CLI includes comprehensive admin commands for server management:
+
+#### Player Management
+```bash
+# List all players
+automatafl-client admin player list
+
+# Get player details
+automatafl-client admin player get <PLAYER_ID>
+
+# Update player (JSON data)
+automatafl-client admin player update <PLAYER_ID> '{"displayname": "newname"}'
+
+# Delete player
+automatafl-client admin player delete <PLAYER_ID>
+
+# Get/update player stats
+automatafl-client admin player stats <PLAYER_ID>
+automatafl-client admin player update-stats <PLAYER_ID> '{"elo_rating": 1500}'
+```
+
+#### Game Management
+```bash
+# List all games (admin view)
+automatafl-client admin game list
+
+# Get game details
+automatafl-client admin game get <GAME_ID>
+
+# Delete a game
+automatafl-client admin game delete <GAME_ID>
+
+# Force complete a round
+automatafl-client admin game force-complete <GAME_ID>
+
+# Set game lifecycle
+automatafl-client admin game set-lifecycle <GAME_ID> Finished
+
+# Get game events
+automatafl-client admin game events <GAME_ID>
+
+# View/delete game chat
+automatafl-client admin game chat <GAME_ID>
+automatafl-client admin game delete-chat <GAME_ID> <TIMESTAMP>
+
+# Manage snapshots
+automatafl-client admin game snapshots <GAME_ID>
+automatafl-client admin game delete-snapshot <GAME_ID> <INDEX>
+```
+
+#### Session Management
+```bash
+# List all sessions
+automatafl-client admin session list
+
+# Delete a session
+automatafl-client admin session delete <SESSION_ID>
+
+# Cleanup expired sessions
+automatafl-client admin session cleanup
+```
+
+#### Matchmaking Queue
+```bash
+# View matchmaking queue
+automatafl-client admin queue list
+
+# Remove player from queue
+automatafl-client admin queue remove <PLAYER_ID>
+```
+
+#### Database Introspection
+```bash
+# Get database statistics
+automatafl-client admin stats
+
+# List all tables
+automatafl-client admin tables
+```
+
 ## Library Usage
 
 ```rust
@@ -201,14 +283,27 @@ The client works seamlessly in both native and WASM environments.
 
 The client supports all backend endpoints:
 
+### Core Features
 - ✅ Health check
-- ✅ Registration & authentication
+- ✅ Registration & authentication  
 - ✅ Game creation, listing, joining
 - ✅ Move submission & completion
 - ✅ Chat messaging
-- ✅ Game state queries
+- ✅ Game state queries & history
 - ✅ Save/load snapshots
-- ✅ Admin endpoints (when authenticated as admin)
+- ✅ Player profiles & stats
+- ✅ Leaderboards (ELO, wins, games)
+- ✅ Matchmaking (join, leave, status)
+
+### Admin Features (when authenticated as admin)
+- ✅ Player management (list, get, update, delete)
+- ✅ Game management (list, get, delete, force complete, set lifecycle)
+- ✅ Game events & chat management
+- ✅ Snapshot management
+- ✅ Session management (list, delete, cleanup)
+- ✅ Matchmaking queue management
+- ✅ Player stats management
+- ✅ Database introspection (stats, tables)
 
 ## Development
 

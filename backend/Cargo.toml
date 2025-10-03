@@ -14,13 +14,39 @@ uuid = { version = "1", features = ["serde", "v4"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["cookie", "typed-header"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-tower-http = { version = "0.6", features = ["cors"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = [
+    "cors",
+    "compression-br",
+    "compression-gzip", 
+    "compression-zstd",
+    "request-id",
+    "timeout",
+    "trace",
+    "sensitive-headers",
+    "catch-panic",
+    "util",
+    "limit",
+] }
 
 tracing = "0.1"
 tracing-subscriber = "0.3"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["async-runtime"] }
 
-bcrypt = "0.17"
-async-trait = "0.1"
+# Password hashing
+argon2 = { version = "0.5", features = ["std"] }
+
+# Database
+surrealdb = { version = "=3.0.0-alpha.10", default-features = false, features = ["allocator", "kv-surrealkv"] }
+
+# Templating
+askama = "0.14"
+
+# State management
+dashmap = "5"
+moka = { version = "0.12", features = ["future"] }

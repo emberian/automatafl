@@ -1,15 +1,17 @@
 // SaveLoadControls component - handles game save/load functionality
-use crate::{api::ApiClient, state::AppState};
+use crate::{api::ApiClient, state::AppState, components::{use_toast, use_modal}};
 use leptos::prelude::*;
 use uuid::Uuid;
+use automatafl_api_types::SnapshotInfo;
 
 #[component]
 pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let toast = use_toast();
+    let modal = use_modal();
     
     let (snapshots, set_snapshots) = signal(Vec::<SnapshotInfo>::new());
     let (selected_snapshot, set_selected_snapshot) = signal(Option::<usize>::None);
-    let (status, set_status) = signal(String::new());
     
     let api_base_url = app_state.api_base_url.clone();
     
@@ -31,7 +33,7 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
         let base_url = api_base_url_for_snapshots.clone();
         async move {
             let client = ApiClient::new(base_url);
-            client.list_snapshots(gid).await
+            client.list_snapshots(gid).await.map_err(|e| e.to_string())
         }
     });
     
@@ -52,12 +54,12 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
         if let Some(result) = save_action.value().get() {
             match result {
                 Ok(_) => {
-                    set_status.set("✅ Game saved successfully!".to_string());
+                    toast.success("Game saved successfully!");
                     // Refresh snapshots list
                     load_snapshots_action.dispatch(game_id);
                 }
                 Err(e) => {
-                    set_status.set(format!("❌ Save failed: {}", e));
+                    toast.error(format!("Save failed: {}", e));
                 }
             }
         }
@@ -68,12 +70,10 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
         if let Some(result) = load_snapshots_action.value().get() {
             match result {
                 Ok(response) => {
-                    if let Ok(data) = serde_json::from_value::<ListSnapshotsResponse>(response) {
-                        set_snapshots.set(data.snapshots);
-                    }
+                    set_snapshots.set(response.snapshots);
                 }
                 Err(e) => {
-                    set_status.set(format!("❌ Failed to load snapshots: {}", e));
+                    toast.error(format!("Failed to load snapshots: {}", e));
                 }
             }
         }
@@ -84,11 +84,11 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
         if let Some(result) = load_action.value().get() {
             match result {
                 Ok(_) => {
-                    set_status.set("✅ Game loaded successfully!".to_string());
+                    toast.success("Game loaded successfully!");
                     set_selected_snapshot.set(None);
                 }
                 Err(e) => {
-                    set_status.set(format!("❌ Load failed: {}", e));
+                    toast.error(format!("Load failed: {}", e));
                 }
             }
         }
@@ -120,6 +120,7 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
                         <div class="loading">"Loading snapshots..."</div>
                     }>
                         {move || {
+                            let modal = modal.clone();
                             let snaps = snapshots.get();
                             if snaps.is_empty() {
                                 view! {
@@ -127,12 +128,13 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
                                 }.into_any()
                             } else {
                                 snaps.into_iter().enumerate().map(|(idx, snapshot)| {
+                                    let modal = modal.clone();
                                     let timestamp = chrono::DateTime::from_timestamp(snapshot.timestamp as i64, 0)
                                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                                         .unwrap_or_else(|| "Unknown".to_string());
-                                    
+
                                     let is_selected = selected_snapshot.get() == Some(idx);
-                                    
+
                                     view! {
                                         <div class=format!("snapshot-item {}", if is_selected { "selected" } else { "" })>
                                             <div class="snapshot-info">
@@ -155,7 +157,13 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
                                                 <Show when=move || is_selected>
                                                     <button
                                                         class="button button-small button-primary"
-                                                        on:click=move |_| { let _ = load_action.dispatch((game_id, idx)); }
+                                                        on:click=move |_| {
+                                                            modal.confirm(
+                                                                "Load Snapshot?",
+                                                                "Loading this snapshot will replace the current game state. Continue?",
+                                                                move || { load_action.dispatch((game_id, idx)); }
+                                                            );
+                                                        }
                                                         disabled=move || load_action.pending().get()
                                                     >
                                                         {move || if load_action.pending().get() { "Loading..." } else { "Load" }}
@@ -164,36 +172,15 @@ pub fn SaveLoadControls(game_id: Uuid) -> impl IntoView {
                                             </div>
                                         </div>
                                     }
-                                }).collect_view().into_any()
+                                }).collect_view()
                             }
                         }}
                     </Suspense>
                 </div>
             </div>
-            
-            {move || {
-                let s = status.get();
-                if !s.is_empty() {
-                    view! {
-                        <div class="save-load-status">{s}</div>
-                    }.into_any()
-                } else {
-                    view! {}.into_any()
-                }
-            }}
         </div>
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
-#[allow(dead_code)]
-struct SnapshotInfo {
-    index: usize,
-    timestamp: u64,
-}
-
-#[derive(Clone, Debug, serde::Deserialize)]
-struct ListSnapshotsResponse {
-    snapshots: Vec<SnapshotInfo>,
-}
+// (types now imported from automatafl_api_types at top)
 

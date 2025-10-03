@@ -249,7 +249,7 @@ impl AutomataflClient {
         }
     }
 
-    pub async fn perform_move(&self, game_id: Uuid, from: Coord, to: Coord) -> Result<MoveResult> {
+    pub async fn perform_move(&self, game_id: Uuid, from: Coord, to: Coord) -> Result<MoveResultResponse> {
         let url = format!("{}/api/v1/games/{}/move", self.base_url, game_id);
         let request = PerformMove { from, to };
         let response = self.client
@@ -317,6 +317,54 @@ impl AutomataflClient {
         }
     }
 
+    pub async fn get_game_history(&self, game_id: Uuid) -> Result<Vec<GameEvent>> {
+        let url = format!("{}/api/v1/games/{}/history", self.base_url, game_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn get_game_history_filtered(
+        &self,
+        game_id: Uuid,
+        since: Option<u64>,
+        until: Option<u64>,
+        event_kind: Option<String>,
+    ) -> Result<Vec<GameEvent>> {
+        let mut url = format!("{}/api/v1/games/{}/history?", self.base_url, game_id);
+        let mut params = vec![];
+        if let Some(s) = since {
+            params.push(format!("since={}", s));
+        }
+        if let Some(u) = until {
+            params.push(format!("until={}", u));
+        }
+        if let Some(k) = event_kind {
+            params.push(format!("event_kind={}", k));
+        }
+        url.push_str(&params.join("&"));
+
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
     // ========================================================================
     // Save/Load
     // ========================================================================
@@ -367,7 +415,7 @@ impl AutomataflClient {
     }
 
     // ========================================================================
-    // Admin
+    // Admin - Player Management
     // ========================================================================
 
     pub async fn admin_list_players(&self) -> Result<serde_json::Value> {
@@ -385,8 +433,104 @@ impl AutomataflClient {
         }
     }
 
+    pub async fn admin_get_player(&self, player_id: Uuid) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_update_player(&self, player_id: Uuid, data: serde_json::Value) -> Result<()> {
+        let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
+        let response = self.client
+            .put(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&data)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_delete_player(&self, player_id: Uuid) -> Result<()> {
+        let url = format!("{}/api/v1/admin/players/{}", self.base_url, player_id);
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_get_player_stats(&self, player_id: Uuid) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/players/{}/stats", self.base_url, player_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_update_player_stats(&self, player_id: Uuid, data: serde_json::Value) -> Result<()> {
+        let url = format!("{}/api/v1/admin/players/{}/stats", self.base_url, player_id);
+        let response = self.client
+            .put(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&data)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Admin - Game Management
+    // ========================================================================
+
     pub async fn admin_list_games(&self) -> Result<serde_json::Value> {
         let url = format!("{}/api/v1/admin/games", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_get_game(&self, game_id: Uuid) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/games/{}", self.base_url, game_id);
         let response = self.client
             .get(&url)
             .header("Authorization", self.auth_header()?)
@@ -419,6 +563,365 @@ impl AutomataflClient {
         let url = format!("{}/api/v1/admin/games/{}/force-complete", self.base_url, game_id);
         let response = self.client
             .post(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_set_game_lifecycle(&self, game_id: Uuid, lifecycle: serde_json::Value) -> Result<()> {
+        let url = format!("{}/api/v1/admin/games/{}/lifecycle", self.base_url, game_id);
+        let response = self.client
+            .put(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&lifecycle)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_get_game_events(&self, game_id: Uuid) -> Result<Vec<GameEvent>> {
+        let url = format!("{}/api/v1/admin/games/{}/events", self.base_url, game_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_get_game_chat(&self, game_id: Uuid) -> Result<Vec<ChatMessage>> {
+        let url = format!("{}/api/v1/admin/games/{}/chat", self.base_url, game_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_delete_chat_message(&self, game_id: Uuid, timestamp: u64) -> Result<()> {
+        let url = format!("{}/api/v1/admin/games/{}/chat/{}", self.base_url, game_id, timestamp);
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_list_snapshots(&self, game_id: Uuid) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/games/{}/snapshots", self.base_url, game_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_delete_snapshot(&self, game_id: Uuid, snapshot_index: usize) -> Result<()> {
+        let url = format!("{}/api/v1/admin/games/{}/snapshots/{}", self.base_url, game_id, snapshot_index);
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Admin - Session Management
+    // ========================================================================
+
+    pub async fn admin_list_sessions(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/sessions", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_delete_session(&self, session_id: Uuid) -> Result<()> {
+        let url = format!("{}/api/v1/admin/sessions/{}", self.base_url, session_id);
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_cleanup_expired_sessions(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/sessions/cleanup", self.base_url);
+        let response = self.client
+            .post(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Admin - Matchmaking
+    // ========================================================================
+
+    pub async fn admin_list_matchmaking_queue(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/matchmaking/queue", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_remove_from_matchmaking(&self, player_id: Uuid) -> Result<()> {
+        let url = format!("{}/api/v1/admin/matchmaking/queue/{}", self.base_url, player_id);
+        let response = self.client
+            .delete(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Admin - Database Introspection
+    // ========================================================================
+
+    pub async fn admin_get_database_stats(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/stats", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn admin_list_tables(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/api/v1/admin/tables", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Profile Endpoints
+    // ========================================================================
+
+    pub async fn get_player_profile(&self, player_id: Uuid) -> Result<PlayerProfile> {
+        let url = format!("{}/api/v1/players/{}", self.base_url, player_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn update_player_profile(&self, player_id: Uuid, bio: Option<String>, avatar_url: Option<String>) -> Result<()> {
+        let url = format!("{}/api/v1/players/{}", self.base_url, player_id);
+        let request = UpdateProfileRequest { bio, avatar_url };
+        let response = self.client
+            .put(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn get_player_stats(&self, player_id: Uuid) -> Result<PlayerStats> {
+        let url = format!("{}/api/v1/players/{}/stats", self.base_url, player_id);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Leaderboard Endpoints
+    // ========================================================================
+
+    pub async fn get_leaderboard_elo(&self) -> Result<LeaderboardResponse> {
+        let url = format!("{}/api/v1/leaderboard/elo", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn get_leaderboard_wins(&self) -> Result<LeaderboardResponse> {
+        let url = format!("{}/api/v1/leaderboard/wins", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn get_leaderboard_games(&self) -> Result<LeaderboardResponse> {
+        let url = format!("{}/api/v1/leaderboard/games", self.base_url);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(response.json().await?)
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    // ========================================================================
+    // Matchmaking Endpoints
+    // ========================================================================
+
+    pub async fn join_matchmaking(&self, player_count: u8, use_column_rule: bool) -> Result<()> {
+        let url = format!("{}/api/v1/matchmaking/join", self.base_url);
+        let request = JoinMatchmakingRequest { player_count, use_column_rule };
+        let response = self.client
+            .post(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn leave_matchmaking(&self) -> Result<()> {
+        let url = format!("{}/api/v1/matchmaking/leave", self.base_url);
+        let response = self.client
+            .post(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(ClientError::Api(response.text().await?))
+        }
+    }
+
+    pub async fn get_matchmaking_status(&self) -> Result<MatchmakingStatus> {
+        let url = format!("{}/api/v1/matchmaking/status", self.base_url);
+        let response = self.client
+            .get(&url)
             .header("Authorization", self.auth_header()?)
             .send()
             .await?;

@@ -52,54 +52,67 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
     
     view! {
         <div class="round-controls">
-            <h3>"Round Control"</h3>
+            <h3>"Round " {format!("{:?}", game_state.game.round)}</h3>
             
-            <div class="round-status">
-                <div class="status-item">
-                    <span class="status-label">"Moves Submitted:"</span>
-                    <span class="status-value">{pending_moves_count}" / "{total_players}</span>
+            <div class="round-progress">
+                <div class="progress-bar-container">
+                    <div 
+                        class="progress-bar-fill"
+                        style=format!("width: {}%", (pending_moves_count as f32 / total_players as f32 * 100.0))
+                    />
                 </div>
-                
-                <div class="status-item">
-                    <span class="status-label">"Round Status:"</span>
-                    <span class=format!("status-value {}", if all_moves_submitted { "ready" } else { "waiting" })>
-                        {if all_moves_submitted { "Ready to Complete" } else { "Waiting for Moves" }}
-                    </span>
+                <div class="progress-text">
+                    {pending_moves_count}" / "{total_players}" moves submitted"
                 </div>
             </div>
             
             {if is_player {
+                if let Some(mv) = my_move {
+                    view! {
+                        <div class="my-pending-move">
+                            <span class="move-status-icon">"✓"</span>
+                            <span class="move-details">
+                                "Your move: (" {mv.from.x}","  {mv.from.y}") → (" {mv.to.x}"," {mv.to.y}")"
+                            </span>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="my-pending-move awaiting">
+                            <span class="move-status-icon">"⏳"</span>
+                            <span class="move-details">"Submit your move to continue"</span>
+                        </div>
+                    }.into_any()
+                }
+            } else {
+                view! {}.into_any()
+            }}
+            
+            {if is_player && all_moves_submitted {
                 view! {
-                    <div class="round-actions">
+                    <div class="round-complete-section">
                         <button
-                            class="button button-primary"
+                            class="button button-primary button-block"
                             on:click=move |_| { let _ = complete_round_action.dispatch(game_id); }
-                            disabled=move || complete_round_action.pending().get() || !all_moves_submitted
+                            disabled=move || complete_round_action.pending().get()
                         >
-                            {move || if complete_round_action.pending().get() { "Completing..." } else { "Complete Round" }}
+                            {move || if complete_round_action.pending().get() { 
+                                "⏳ Processing..." 
+                            } else { 
+                                "▶️ Complete Round" 
+                            }}
                         </button>
-                        
-                        {if !all_moves_submitted {
-                            view! {
-                                <p class="round-hint">
-                                    "Waiting for all players to submit their moves before the round can be completed."
-                                </p>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <p class="round-hint">
-                                    "All moves submitted! Click 'Complete Round' to process moves and advance the automaton."
-                                </p>
-                            }.into_any()
-                        }}
+                        <p class="round-hint">"All moves ready! Execute the round."</p>
+                    </div>
+                }.into_any()
+            } else if !is_player {
+                view! {
+                    <div class="spectator-note">
+                        <p>"👁️ Spectating - rounds complete automatically"</p>
                     </div>
                 }.into_any()
             } else {
-                view! {
-                    <div class="spectator-info">
-                        <p>"You are spectating this game. Round completion is automatic or controlled by players."</p>
-                    </div>
-                }.into_any()
+                view! {}.into_any()
             }}
             
             {move || {
@@ -112,26 +125,6 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
                     view! {}.into_any()
                 }
             }}
-            
-            <div class="pending-moves">
-                <h4>"Your Move"</h4>
-                {if let Some(mv) = my_move {
-                    view! {
-                        <div class="pending-move">
-                            <span class="move-player">"Player " {mv.who.0}</span>
-                            <span class="move-coords">"(" {mv.from.x} "," {mv.from.y} ") → (" {mv.to.x} "," {mv.to.y} ")"</span>
-                        </div>
-                    }.into_any()
-                } else if is_player {
-                    view! {
-                        <p class="no-moves">"You haven't submitted a move yet"</p>
-                    }.into_any()
-                } else {
-                    view! {
-                        <p class="no-moves">"Spectators cannot see pending moves"</p>
-                    }.into_any()
-                }}
-            </div>
         </div>
     }
 }

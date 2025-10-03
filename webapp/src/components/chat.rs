@@ -1,11 +1,15 @@
 // ChatPanel component - displays game chat
-use crate::{api::ApiClient, state::AppState};
+use crate::{api::ApiClient, state::AppState, components::use_toast, utils::RateLimiter};
 use leptos::prelude::*;
 use uuid::Uuid;
 
 #[component]
 pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let toast = use_toast();
+    
+    // Rate limiter: 5 messages per 10 seconds
+    let rate_limiter = RateLimiter::new(5, 10000);
     
     let (message_input, set_message_input) = signal(String::new());
     
@@ -34,21 +38,37 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
         }
     });
 
+    let toast_clone = toast.clone();
     let send_message = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        
+
         let msg = message_input.get();
         if msg.trim().is_empty() {
             return;
         }
-        
+
+        // Check rate limit
+        if !rate_limiter.allow() {
+            let remaining = rate_limiter.remaining();
+            toast_clone.warning(format!("Slow down! You can send {} more messages in a few seconds.", remaining));
+            return;
+        }
+
         send_message_action.dispatch((game_id, msg));
     };
-    
+
+    let toast_clone2 = toast.clone();
     Effect::new(move |_| {
-        if let Some(Ok(_)) = send_message_action.value().get() {
-            set_message_input.set(String::new());
-            // Chat will refresh via WebSocket CHAT event triggering game refresh
+        if let Some(result) = send_message_action.value().get() {
+            match result {
+                Ok(_) => {
+                    set_message_input.set(String::new());
+                    // Chat will refresh via WebSocket CHAT event triggering game refresh
+                }
+                Err(e) => {
+                    toast_clone2.error(format!("Failed to send message: {}", e));
+                }
+            }
         }
     });
     
