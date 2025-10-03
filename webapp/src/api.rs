@@ -52,17 +52,13 @@ impl ApiClient {
     }
 
     /// Login and return response - caller should create a new client with session token
-    pub async fn login(&self, displayname: String, password: String) -> Result<LoginResponse> {
-        // Use a temporary mutable client for the login call
-        let mut temp_client = self.inner.clone();
-        temp_client.login(displayname, password).await
+    pub async fn login(&mut self, displayname: String, password: String) -> Result<LoginResponse> {
+        self.inner.login(displayname, password).await
     }
 
     /// Logout - caller should create a new client without session token after
-    pub async fn logout(&self) -> Result<()> {
-        // Use a temporary mutable client for the logout call
-        let mut temp_client = self.inner.clone();
-        temp_client.logout().await
+    pub async fn logout(&mut self) -> Result<()> {
+        self.inner.logout().await
     }
 
     // === Games ===
