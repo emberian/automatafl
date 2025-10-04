@@ -1,5 +1,6 @@
 // Modal/Dialog system for confirmations and custom dialogs
 use leptos::prelude::*;
+use leptos::prelude::window_event_listener;
 use wasm_bindgen::JsCast;
 
 // Global modal state
@@ -136,38 +137,13 @@ impl ModalContext {
 pub fn ModalContainer() -> impl IntoView {
     let modal_ctx = use_context::<ModalContext>().expect("ModalContext should be provided");
 
-    // Handle Escape key with proper cleanup
-    let modal_ctx_clone = modal_ctx.clone();
-    Effect::new(move |_| {
-        let modal_ctx = modal_ctx_clone.clone();
-        if !modal_ctx.is_open.get() {
-            return None; // No cleanup needed when modal is closed
+    // Use window_event_listener for proper automatic cleanup
+    // This is much simpler and more reliable than manual Closure management
+    let modal_ctx_for_listener = modal_ctx.clone();
+    window_event_listener(leptos::ev::keydown, move |e: web_sys::KeyboardEvent| {
+        if modal_ctx_for_listener.is_open.get() && e.key() == "Escape" {
+            modal_ctx_for_listener.close();
         }
-
-        let window = web_sys::window().expect("window should exist");
-        let document = window.document().expect("document should exist");
-
-        use std::rc::Rc;
-        use wasm_bindgen::prelude::*;
-
-        let modal_ctx_for_callback = modal_ctx.clone();
-        let callback = Rc::new(Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
-            if e.key() == "Escape" {
-                modal_ctx_for_callback.close();
-            }
-        }) as Box<dyn Fn(_)>));
-
-        let _ = document
-            .add_event_listener_with_callback("keydown", (*callback).as_ref().unchecked_ref());
-
-        // Return cleanup function that removes the event listener
-        let callback_for_cleanup = callback.clone();
-        Some(move || {
-            let _ = document.remove_event_listener_with_callback(
-                "keydown",
-                (*callback_for_cleanup).as_ref().unchecked_ref(),
-            );
-        })
     });
 
     view! {

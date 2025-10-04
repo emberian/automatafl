@@ -34,23 +34,33 @@ fn LogoutButton(app_state: AppState) -> impl IntoView {
 
 #[component]
 fn App() -> impl IntoView {
-    let app_state = AppState::new();
-    provide_context(app_state.clone());
+    // CRITICAL: Use StoredValue to ensure contexts are created ONLY ONCE.
+    // Without this, every App re-render creates new contexts with new global
+    // event listeners, causing catastrophic performance degradation (exponential
+    // listener accumulation). See: WEBAPP_REFACTORING_PLAN.md for details.
 
-    let toast_ctx = ToastContext::new();
-    provide_context(toast_ctx);
+    let app_state = StoredValue::new(AppState::new());
+    provide_context(app_state.get_value());
 
-    let modal_ctx = ModalContext::new();
-    provide_context(modal_ctx);
+    let toast_ctx = StoredValue::new(ToastContext::new());
+    provide_context(toast_ctx.get_value());
 
-    let kb_ctx = KeyboardContext::new();
-    provide_context(kb_ctx);
+    let modal_ctx = StoredValue::new(ModalContext::new());
+    provide_context(modal_ctx.get_value());
 
-    let app_state_for_nav = app_state.clone();
-    let app_state_for_nav_leader = app_state.clone();
-    let app_state_for_auth = app_state.clone();
-    let app_state_for_profile = app_state.clone();
-    let app_state_for_logout = app_state.clone();
+    let kb_ctx = StoredValue::new(KeyboardContext::new());
+    provide_context(kb_ctx.get_value());
+
+    // Get app_state for use in view (no cloning needed, it's cheap to get)
+    let app_state = app_state.get_value();
+
+    // Clone app_state for each closure that needs it (AppState is cheap to clone)
+    let app_state_nav1 = app_state.clone();
+    let app_state_nav2 = app_state.clone();
+    let app_state_profile = app_state.clone();
+    let app_state_admin = app_state.clone();
+    let app_state_auth = app_state.clone();
+    let app_state_logout = app_state.clone();
 
     view! {
         <Router>
@@ -64,22 +74,22 @@ fn App() -> impl IntoView {
                         <a href="/" class="nav-brand">"Automatafl"</a>
                         <div class="nav-links">
                             <a href="/games">"Games"</a>
-                            <Show when=move || app_state_for_nav.is_authenticated.get()>
+                            <Show when=move || app_state_nav1.is_authenticated.get()>
                                 <a href="/games/create">"Create Game"</a>
                                 <a href="/matchmaking">"Quick Match"</a>
                             </Show>
                             <a href="/leaderboard">"Leaderboard"</a>
-                            <Show when=move || app_state_for_nav_leader.is_authenticated.get()>
+                            <Show when=move || app_state_nav2.is_authenticated.get()>
                                 {{
                                     move || {
-                                        let player_id = app_state_for_profile.current_player_id.get();
+                                        let player_id = app_state_profile.current_player_id.get();
                                         player_id.map(|id| view! {
                                             <a href=format!("/users/{}", id)>"Profile"</a>
                                         })
                                     }
                                 }}
                             </Show>
-                            <Show when=move || app_state_for_profile.is_admin()>
+                            <Show when=move || app_state_admin.is_admin()>
                                 <a href="/admin">"Admin"</a>
                             </Show>
                             <a href="/health">"Status"</a>
@@ -87,13 +97,13 @@ fn App() -> impl IntoView {
                         <div class="nav-auth">
                             <ConnectionStatus />
                             <Show
-                                when=move || app_state_for_auth.is_authenticated.get()
+                                when=move || app_state_auth.is_authenticated.get()
                                 fallback=|| view! {
                                     <a href="/login" class="button button-small">"Login"</a>
                                     <a href="/register" class="button button-small button-primary">"Register"</a>
                                 }
                             >
-                                <LogoutButton app_state=app_state_for_logout.clone() />
+                                <LogoutButton app_state=app_state_logout.clone() />
                             </Show>
                         </div>
                     </div>
