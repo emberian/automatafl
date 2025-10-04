@@ -2,7 +2,6 @@
 use leptos::prelude::*;
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::prelude::*;
 
 #[derive(Clone)]
 pub struct KeyboardContext {
@@ -12,68 +11,10 @@ pub struct KeyboardContext {
 
 impl KeyboardContext {
     pub fn new() -> Self {
-        let ctx = Self {
+        Self {
             shortcuts: RwSignal::new(HashMap::new()),
             help_visible: RwSignal::new(false),
-        };
-
-        // Setup global keyboard listener
-        ctx.setup_listener();
-        ctx
-    }
-
-    fn setup_listener(&self) {
-        let window = web_sys::window().expect("window should exist");
-        let document = window.document().expect("document should exist");
-
-        let shortcuts_clone = self.shortcuts;
-        let help_visible = self.help_visible;
-
-        let callback = Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
-            // Don't capture keystrokes in input fields
-            if let Some(target) = e.target() {
-                if let Some(element) = target.dyn_ref::<web_sys::HtmlElement>() {
-                    let tag_name = element.tag_name().to_lowercase();
-                    if tag_name == "input" || tag_name == "textarea" {
-                        return;
-                    }
-                }
-            }
-
-            // Build the keyboard shortcut string
-            let mut parts = Vec::new();
-            if e.ctrl_key() || e.meta_key() {
-                parts.push("Ctrl");
-            }
-            if e.shift_key() {
-                parts.push("Shift");
-            }
-            if e.alt_key() {
-                parts.push("Alt");
-            }
-            let key = e.key();
-            parts.push(&key);
-
-            let shortcut_str = parts.join("+");
-
-            // Handle "?" for help
-            if e.key() == "?" && !e.ctrl_key() && !e.meta_key() {
-                help_visible.update(|v| *v = !*v);
-                e.prevent_default();
-                return;
-            }
-
-            // Check if we have a handler for this shortcut
-            if let Some(handler) = shortcuts_clone.get().get(&shortcut_str) {
-                handler.run(());
-                e.prevent_default();
-            }
-        }) as Box<dyn Fn(_)>);
-
-        let _ =
-            document.add_event_listener_with_callback("keydown", callback.as_ref().unchecked_ref());
-
-        callback.forget();
+        }
     }
 
     pub fn register(
@@ -102,6 +43,61 @@ impl KeyboardContext {
     pub fn hide_help(&self) {
         self.help_visible.set(false);
     }
+}
+
+/// Global keyboard event listener - add this to your app root
+/// This component sets up the global keydown listener with automatic cleanup
+#[component]
+pub fn KeyboardListener() -> impl IntoView {
+    use leptos::prelude::window_event_listener;
+
+    let kb_ctx = use_context::<KeyboardContext>().expect("KeyboardContext should be provided");
+
+    let shortcuts_clone = kb_ctx.shortcuts;
+    let help_visible = kb_ctx.help_visible;
+
+    window_event_listener(leptos::ev::keydown, move |e: web_sys::KeyboardEvent| {
+        // Don't capture keystrokes in input fields
+        if let Some(target) = e.target() {
+            if let Some(element) = target.dyn_ref::<web_sys::HtmlElement>() {
+                let tag_name = element.tag_name().to_lowercase();
+                if tag_name == "input" || tag_name == "textarea" {
+                    return;
+                }
+            }
+        }
+
+        // Build the keyboard shortcut string
+        let mut parts = Vec::new();
+        if e.ctrl_key() || e.meta_key() {
+            parts.push("Ctrl");
+        }
+        if e.shift_key() {
+            parts.push("Shift");
+        }
+        if e.alt_key() {
+            parts.push("Alt");
+        }
+        let key = e.key();
+        parts.push(&key);
+
+        let shortcut_str = parts.join("+");
+
+        // Handle "?" for help
+        if e.key() == "?" && !e.ctrl_key() && !e.meta_key() {
+            help_visible.update(|v| *v = !*v);
+            e.prevent_default();
+            return;
+        }
+
+        // Check if we have a handler for this shortcut
+        if let Some(handler) = shortcuts_clone.get().get(&shortcut_str) {
+            handler.run(());
+            e.prevent_default();
+        }
+    });
+
+    view! {}
 }
 
 /// Keyboard shortcuts help overlay

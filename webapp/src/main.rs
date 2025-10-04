@@ -7,8 +7,8 @@ mod utils;
 mod websocket;
 
 use components::{
-    ConnectionStatus, KeyboardContext, KeyboardShortcutsHelp, ModalContainer, ModalContext,
-    NetworkStatus, ToastContainer, ToastContext,
+    ConnectionStatus, KeyboardContext, KeyboardListener, KeyboardShortcutsHelp, ModalContainer,
+    ModalContext, NetworkStatus, ToastContainer, ToastContext,
 };
 use leptos::prelude::*;
 use leptos_router::components::{Route, Router, Routes};
@@ -66,6 +66,7 @@ fn App() -> impl IntoView {
         <Router>
             <ToastContainer />
             <ModalContainer />
+            <KeyboardListener />
             <KeyboardShortcutsHelp />
             <NetworkStatus />
             <main>

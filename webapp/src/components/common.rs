@@ -278,36 +278,21 @@ pub fn ErrorWithRetry(message: String, on_retry: Callback<()>) -> impl IntoView 
 /// Network status detector
 #[component]
 pub fn NetworkStatus() -> impl IntoView {
+    use leptos::prelude::window_event_listener;
+
     let (is_online, set_is_online) = signal(true);
 
-    Effect::new(move |_| {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::prelude::*;
+    // Use window_event_listener for automatic cleanup when component unmounts
+    let set_online = set_is_online.clone();
+    window_event_listener(leptos::ev::online, move |_| {
+        set_online.set(true);
+        web_sys::console::log_1(&"📡 Network connection restored".into());
+    });
 
-        // Check initial online status using document.hasFocus or a simple flag
-        // Note: navigator.onLine is not available in all web_sys versions
-        // For now, assume online by default and rely on online/offline events
-
-        let window = web_sys::window().expect("window should exist");
-
-        let online_callback = Closure::wrap(Box::new(move || {
-            set_is_online.set(true);
-            web_sys::console::log_1(&"📡 Network connection restored".into());
-        }) as Box<dyn Fn()>);
-
-        let offline_callback = Closure::wrap(Box::new(move || {
-            set_is_online.set(false);
-            web_sys::console::warn_1(&"📡 Network connection lost".into());
-        }) as Box<dyn Fn()>);
-
-        let _ = window
-            .add_event_listener_with_callback("online", online_callback.as_ref().unchecked_ref());
-        let _ = window
-            .add_event_listener_with_callback("offline", offline_callback.as_ref().unchecked_ref());
-
-        // Leak closures to keep them alive
-        online_callback.forget();
-        offline_callback.forget();
+    let set_offline = set_is_online.clone();
+    window_event_listener(leptos::ev::offline, move |_| {
+        set_offline.set(false);
+        web_sys::console::warn_1(&"📡 Network connection lost".into());
     });
 
     view! {

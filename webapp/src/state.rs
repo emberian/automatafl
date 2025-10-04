@@ -247,25 +247,29 @@ impl AppState {
     }
 
     /// Get game state signal for reactive subscriptions
+    /// Uses get_untracked() to avoid subscribing to the entire games HashMap
     pub fn get_game_signal(&self, game_id: Uuid) -> Option<RwSignal<Option<GameStateResponse>>> {
-        self.games.get().get(&game_id).map(|g| g.state)
+        self.games.get_untracked().get(&game_id).map(|g| g.state)
     }
 
     /// Get chat signal for reactive subscriptions
+    /// Uses get_untracked() to avoid subscribing to the entire games HashMap
     pub fn get_chat_signal(&self, game_id: Uuid) -> Option<RwSignal<Vec<ChatMessage>>> {
-        self.games.get().get(&game_id).map(|g| g.chat)
+        self.games.get_untracked().get(&game_id).map(|g| g.chat)
     }
 
     /// Get event log signal for reactive subscriptions
     /// Components read from this signal instead of making HTTP API calls
+    /// Uses get_untracked() to avoid subscribing to the entire games HashMap
     pub fn get_event_log_signal(&self, game_id: Uuid) -> Option<RwSignal<Vec<GameEvent>>> {
-        self.games.get().get(&game_id).map(|g| g.event_log)
+        self.games.get_untracked().get(&game_id).map(|g| g.event_log)
     }
 
     /// Get WebSocket connection signal for a specific game
+    /// Uses get_untracked() to avoid subscribing to the entire games HashMap
     pub fn get_websocket_connected_signal(&self, game_id: Uuid) -> Option<RwSignal<bool>> {
         self.games
-            .get()
+            .get_untracked()
             .get(&game_id)
             .map(|g| g.websocket_connected)
     }
@@ -360,7 +364,7 @@ impl AppState {
 
     pub fn get_move_events(&self, game_id: Uuid) -> Vec<MoveEvent> {
         self.games
-            .get()
+            .get_untracked()
             .get(&game_id)
             .map(|g| g.move_events.get())
             .unwrap_or_default()
@@ -368,7 +372,7 @@ impl AppState {
 
     pub fn get_conflict_events(&self, game_id: Uuid) -> Vec<ConflictEvent> {
         self.games
-            .get()
+            .get_untracked()
             .get(&game_id)
             .map(|g| g.conflict_events.get())
             .unwrap_or_default()
