@@ -1,4 +1,5 @@
 // GameHistory component - displays game events and history
+// NOW READS FROM REACTIVE SIGNALS - NO HTTP REQUESTS!
 use crate::state::AppState;
 use automatafl_api_types::{GameEvent, GameEventData};
 use leptos::prelude::*;
@@ -9,29 +10,26 @@ pub fn GameHistory(game_id: Uuid) -> impl IntoView {
     let app_state = use_context::<AppState>().expect("AppState should be provided");
 
     let (filter_event_kind, set_filter_event_kind) = signal(Option::<String>::None);
-    let (refresh_trigger, set_refresh_trigger) = signal(0u32);
 
-    let app_state_for_resource = app_state.clone();
-
-    let history_resource = LocalResource::new(move || {
-        let _ = refresh_trigger.get();
-        // React to history version changes (bumped on events that need history refetch)
-        let _history_version = app_state_for_resource
-            .get_history_signal(game_id)
-            .map(|sig| sig.get());
-        let filter = filter_event_kind.get();
-        let app_state = app_state_for_resource.clone();
-        async move {
-            let client = app_state.get_api_client();
-            if let Some(kind) = filter {
-                client
-                    .get_game_history_filtered(game_id, None, None, Some(kind))
-                    .await
-            } else {
-                client.get_game_history(game_id).await
-            }
-        }
-    });
+    // Get reactive event log signal - updates automatically from WebSocket!
+    // NO HTTP REQUESTS - data comes from signals updated by handle_game_event
+    let get_filtered_events = move || {
+        app_state
+            .get_event_log_signal(game_id)
+            .map(|sig| {
+                let events = sig.get();
+                // Apply filter reactively
+                if let Some(kind) = filter_event_kind.get() {
+                    events
+                        .into_iter()
+                        .filter(|e| event_matches_kind(e, &kind))
+                        .collect::<Vec<_>>()
+                } else {
+                    events
+                }
+            })
+            .unwrap_or_default()
+    };
 
     view! {
         <div class="game-history">
@@ -47,7 +45,6 @@ pub fn GameHistory(game_id: Uuid) -> impl IntoView {
                             } else {
                                 set_filter_event_kind.set(Some(value));
                             }
-                            set_refresh_trigger.update(|n| *n += 1);
                         }
                     >
                         <option value="all">"All Events"</option>
@@ -57,46 +54,38 @@ pub fn GameHistory(game_id: Uuid) -> impl IntoView {
                         <option value="CONFLICTS">"Conflicts"</option>
                         <option value="GAME_OVER">"Game Over"</option>
                     </select>
-                    <button
-                        class="button button-small"
-                        on:click=move |_| set_refresh_trigger.update(|n| *n += 1)
-                    >
-                        "🔄"
-                    </button>
                 </div>
             </div>
 
             <div class="history-events">
-                <Suspense fallback=move || view! {
-                    <div class="loading">"Loading history..."</div>
-                }>
-                    {move || {
-                        history_resource.get().map(|result| {
-                            match result {
-                                Ok(events) => {
-                                    if events.is_empty() {
-                                        view! {
-                                            <div class="history-empty">
-                                                <p>"No events yet"</p>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        events.into_iter().map(|event| {
-                                            view! { <GameEventItem event=event /> }
-                                        }).collect_view().into_any()
-                                    }
-                                }
-                                Err(e) => view! {
-                                    <div class="history-error">
-                                        <p>"Error loading history: " {format!("{}", e)}</p>
-                                    </div>
-                                }.into_any()
-                            }
-                        })
-                    }}
-                </Suspense>
+                {move || {
+                    let events = get_filtered_events();
+                    if events.is_empty() {
+                        view! {
+                            <div class="history-empty">
+                                <p>"No events yet"</p>
+                            </div>
+                        }.into_any()
+                    } else {
+                        events.into_iter().map(|event| {
+                            view! { <GameEventItem event=event /> }
+                        }).collect_view().into_any()
+                    }
+                }}
             </div>
         </div>
+    }
+}
+
+/// Helper to match events by type for filtering
+fn event_matches_kind(event: &GameEvent, kind: &str) -> bool {
+    match (kind, &event.data) {
+        ("MOVE", GameEventData::Move { .. }) => true,
+        ("AUTOMATON_STEP", GameEventData::AutomatonStep { .. }) => true,
+        ("ROUND_COMPLETE", GameEventData::RoundComplete { .. }) => true,
+        ("CONFLICTS", GameEventData::Conflicts { .. }) => true,
+        ("GAME_OVER", GameEventData::GameOver { .. }) => true,
+        _ => false,
     }
 }
 

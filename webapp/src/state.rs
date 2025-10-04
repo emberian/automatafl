@@ -17,8 +17,6 @@ pub struct GameReactiveState {
     /// Complete event log - ALL GameEvents are stored here for history panel
     /// Components read from this signal instead of fetching via HTTP
     pub event_log: RwSignal<Vec<GameEvent>>,
-    /// History refresh trigger (DEPRECATED - will be removed in Phase 3)
-    pub history_version: RwSignal<u32>,
     /// Per-game WebSocket connection status
     pub websocket_connected: RwSignal<bool>,
 }
@@ -31,7 +29,6 @@ impl Default for GameReactiveState {
             move_events: RwSignal::new(Vec::new()),
             conflict_events: RwSignal::new(Vec::new()),
             event_log: RwSignal::new(Vec::new()),
-            history_version: RwSignal::new(0),
             websocket_connected: RwSignal::new(false),
         }
     }
@@ -259,15 +256,10 @@ impl AppState {
         self.games.get().get(&game_id).map(|g| g.chat)
     }
 
-    /// Get event log signal for reactive subscriptions (NEW - replaces HTTP fetching)
-    /// Components should read from this signal instead of making API calls
+    /// Get event log signal for reactive subscriptions
+    /// Components read from this signal instead of making HTTP API calls
     pub fn get_event_log_signal(&self, game_id: Uuid) -> Option<RwSignal<Vec<GameEvent>>> {
         self.games.get().get(&game_id).map(|g| g.event_log)
-    }
-
-    /// Get history version signal (DEPRECATED - will be removed in Phase 3)
-    pub fn get_history_signal(&self, game_id: Uuid) -> Option<RwSignal<u32>> {
-        self.games.get().get(&game_id).map(|g| g.history_version)
     }
 
     /// Get WebSocket connection signal for a specific game
@@ -338,18 +330,6 @@ impl AppState {
         });
     }
 
-    /// Increment history version (for history panel refresh)
-    ///
-    /// Note: This is only used for GameLoaded event now, as all other events
-    /// update state directly. History is still fetched via HTTP as it's a
-    /// separate concern from real-time game state.
-    pub fn bump_history(&self, game_id: Uuid) {
-        self.games.update(|games| {
-            if let Some(game) = games.get_mut(&game_id) {
-                game.history_version.update(|v| *v += 1);
-            }
-        });
-    }
 
     pub fn add_move_event(&self, game_id: Uuid, event: MoveEvent) {
         self.games.update(|games| {
@@ -570,9 +550,8 @@ impl AppState {
                 web_sys::console::log_1(
                     &format!("Game loaded from snapshot {}", snapshot_index).into(),
                 );
-                // Full reset - the State event should follow with the loaded state
-                // We bump history here because we want to ensure components refetch everything
-                self.bump_history(game_id);
+                // Full reset - the State event that follows will update everything automatically
+                // No manual refresh needed - event_log is already updated above
             }
         }
     }
