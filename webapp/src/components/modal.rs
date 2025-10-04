@@ -1,6 +1,6 @@
 // Modal/Dialog system for confirmations and custom dialogs
-use leptos::prelude::*;
 use leptos::prelude::window_event_listener;
+use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 // Global modal state

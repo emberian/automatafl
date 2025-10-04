@@ -488,11 +488,14 @@ async fn init_app_state(config: &Config) -> Result<Arc<AppState>, Box<dyn std::e
 
     // Create services
     let game_service = Arc::new(services::GameService::new(game_repo, player_repo_for_game));
-    let auth_service = Arc::new(services::AuthService::new(
-        player_repo_for_auth,
-        session_repo_for_auth,
-        config.session_duration.as_secs(),
-    ).await);
+    let auth_service = Arc::new(
+        services::AuthService::new(
+            player_repo_for_auth,
+            session_repo_for_auth,
+            config.session_duration.as_secs(),
+        )
+        .await,
+    );
     let player_service = Arc::new(services::PlayerService::new(player_repo_for_player_service));
     let matchmaking_service = Arc::new(services::MatchmakingService::new(
         matchmaking_repo,

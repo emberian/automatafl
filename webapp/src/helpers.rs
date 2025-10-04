@@ -1,4 +1,11 @@
 // Helper utilities to reduce code duplication across components
+//
+// BEST PRACTICES:
+// 1. For real-time game data (moves, chat, events): Read from AppState signals, NOT HTTP resources
+// 2. For static/snapshot data (game lists, snapshots): Use HTTP resources with refresh triggers
+// 3. Resources automatically track any signals read inside them - no manual trigger() needed
+// 4. Prefer direct signal subscriptions over LocalResource when data is already in AppState
+
 use crate::{api::ApiClient, components::use_toast, state::AppState};
 use leptos::prelude::*;
 use uuid::Uuid;

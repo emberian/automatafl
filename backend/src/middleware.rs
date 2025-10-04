@@ -285,10 +285,7 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
 }
 
 fn is_csrf_exempt(method: &Method, path: &str) -> bool {
-    const EXEMPT_ROUTES: &[(&str, &str)] = &[
-        ("POST", "/login"),
-        ("POST", "/register"),
-    ];
+    const EXEMPT_ROUTES: &[(&str, &str)] = &[("POST", "/login"), ("POST", "/register")];
 
     EXEMPT_ROUTES.iter().any(|(allowed_method, allowed_path)| {
         allowed_path == &path && method.as_str().eq_ignore_ascii_case(allowed_method)

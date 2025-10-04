@@ -330,7 +330,6 @@ impl AppState {
         });
     }
 
-
     pub fn add_move_event(&self, game_id: Uuid, event: MoveEvent) {
         self.games.update(|games| {
             if let Some(game) = games.get_mut(&game_id) {
