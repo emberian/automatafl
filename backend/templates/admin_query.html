@@ -12,7 +12,7 @@
 
 <form method="POST" action="/admin/query" style="max-width: 100%;">
     <label><strong>SurrealQL Query:</strong></label>
-    <textarea name="query" rows="8" 
+    <textarea name="query" rows="8" maxlength="10000"
               style="width: 100%; font-family: 'Courier New', monospace; font-size: 13px; padding: 10px;" 
               placeholder="SELECT * FROM players LIMIT 10;" 
               required>{{ query_text }}</textarea>

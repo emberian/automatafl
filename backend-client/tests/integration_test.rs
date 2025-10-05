@@ -525,10 +525,13 @@ async fn test_complete_round() {
         .await
         .unwrap();
 
-    // Try to complete round (should auto-complete or be completable)
+    // Try to complete round - should succeed since both players submitted moves
     let result = client1.complete_round(game_id).await;
-    // Either succeeds or gives a reasonable error
-    assert!(result.is_ok() || result.is_err());
+    assert!(
+        result.is_ok(),
+        "Round completion should succeed when all players have submitted moves: {:?}",
+        result.err()
+    );
 }
 
 #[tokio::test]

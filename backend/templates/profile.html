@@ -59,11 +59,11 @@
 {% if is_own_profile %}
 <h3>Edit Profile</h3>
 <form method="POST" action="/profile/{{ player_id }}" style="max-width: 600px;">
-    <label>Bio:</label>
-    <textarea name="bio" rows="4" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit;">{% if let Some(bio_text) = bio %}{{ bio_text }}{% endif %}</textarea>
+    <label>Bio (max 500 characters):</label>
+    <textarea name="bio" rows="4" maxlength="500" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit;">{% if let Some(bio_text) = bio %}{{ bio_text }}{% endif %}</textarea>
     
-    <label style="margin-top: 15px; display: block;">Avatar URL:</label>
-    <input type="url" name="avatar_url" value="{% if let Some(avatar) = avatar_url %}{{ avatar }}{% endif %}" style="width: 100%;">
+    <label style="margin-top: 15px; display: block;">Avatar URL (HTTPS recommended, max 2048 chars):</label>
+    <input type="url" name="avatar_url" value="{% if let Some(avatar) = avatar_url %}{{ avatar }}{% endif %}" maxlength="2048" placeholder="https://example.com/avatar.png" style="width: 100%;">
     
     <button type="submit" style="margin-top: 15px;">Update Profile</button>
 </form>

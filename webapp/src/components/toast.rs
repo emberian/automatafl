@@ -101,11 +101,13 @@ pub fn ToastContainer() -> impl IntoView {
 
     view! {
         <div class="toast-container">
-            {move || {
-                toast_ctx.toasts.get().into_iter().map(|toast| {
+            <For
+                each=move || toast_ctx.toasts.get()
+                key=|toast| toast.id
+                children=move |toast| {
                     view! { <ToastItem toast=toast /> }
-                }).collect_view()
-            }}
+                }
+            />
         </div>
     }
 }
@@ -117,12 +119,16 @@ fn ToastItem(toast: Toast) -> impl IntoView {
 
     let (is_visible, set_is_visible) = signal(false);
 
-    // Trigger entrance animation
-    Effect::new(move |_| {
-        gloo_timers::callback::Timeout::new(10, move || {
-            set_is_visible.set(true);
-        })
-        .forget();
+    // Trigger entrance animation ONCE on mount
+    Effect::new_isomorphic(move |prev_value: Option<()>| {
+        // Only run on first execution (when prev_value is None)
+        if prev_value.is_none() {
+            gloo_timers::callback::Timeout::new(10, move || {
+                set_is_visible.set(true);
+            })
+            .forget();
+        }
+        ()
     });
 
     let variant_class = match toast.variant {

@@ -21,8 +21,9 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
     let optimistic_timeout: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
         Rc::new(RefCell::new(None));
 
-    // Check if it's this player's turn
-    let current_player_id = app_state.current_player_id.get();
+    // Check if it's this player's turn - READ ONCE, don't track reactively in component body
+    // CRITICAL: Get values once during component setup, not on every render
+    let current_player_id = app_state.current_player_id.get_untracked();
     let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
 
     // Check if player has already submitted a move this round
@@ -98,15 +99,16 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
     let toast_clone2 = toast.clone();
     let timeout_ref_effect = optimistic_timeout.clone();
     Effect::new(move |_| {
-        if let Some(result) = submit_move_action.value().get() {
-            // Cancel optimistic timeout on completion (success or failure)
-            if let Some(timeout) = timeout_ref_effect.borrow_mut().take() {
-                timeout.cancel();
-            }
+        submit_move_action.value().with(|result| {
+            if let Some(result) = result {
+                // Cancel optimistic timeout on completion (success or failure)
+                if let Some(timeout) = timeout_ref_effect.borrow_mut().take() {
+                    timeout.cancel();
+                }
 
-            match result {
+                match result {
                 Ok(move_result) => {
-                    match move_result.feedback {
+                    match &move_result.feedback {
                         MoveFeedback::Committed => {
                             toast_clone2.success("Move submitted! Waiting for other players...");
                             // Clear form
@@ -132,12 +134,13 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                             toast_clone2.error(format!("Invalid move: {}", details));
                         }
                     }
-                }
-                Err(e) => {
-                    toast_clone2.error(format!("Network error: {}", e));
+                    }
+                    Err(e) => {
+                        toast_clone2.error(format!("Network error: {}", e));
+                    }
                 }
             }
-        }
+        });
     });
 
     view! {
@@ -164,8 +167,8 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                                         min="0"
                                         max=game_state.game.board.size.x - 1
                                         class="coord-input"
-                                        on:input=move |ev| set_from_x.set(event_target_value(&ev))
                                         prop:value=from_x
+                                        on:input=move |ev| set_from_x.set(event_target_value(&ev))
                                     />
                                     <input
                                         type="number"
@@ -173,8 +176,8 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                                         min="0"
                                         max=game_state.game.board.size.y - 1
                                         class="coord-input"
-                                        on:input=move |ev| set_from_y.set(event_target_value(&ev))
                                         prop:value=from_y
+                                        on:input=move |ev| set_from_y.set(event_target_value(&ev))
                                     />
                                 </div>
                             </div>
@@ -190,8 +193,8 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                                         min="0"
                                         max=game_state.game.board.size.x - 1
                                         class="coord-input"
-                                        on:input=move |ev| set_to_x.set(event_target_value(&ev))
                                         prop:value=to_x
+                                        on:input=move |ev| set_to_x.set(event_target_value(&ev))
                                     />
                                     <input
                                         type="number"
@@ -199,8 +202,8 @@ pub fn MoveControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoVi
                                         min="0"
                                         max=game_state.game.board.size.y - 1
                                         class="coord-input"
-                                        on:input=move |ev| set_to_y.set(event_target_value(&ev))
                                         prop:value=to_y
+                                        on:input=move |ev| set_to_y.set(event_target_value(&ev))
                                     />
                                 </div>
                             </div>

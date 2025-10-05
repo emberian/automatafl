@@ -8,7 +8,6 @@
 
 use crate::{api::ApiClient, components::use_toast, state::AppState};
 use leptos::prelude::*;
-use uuid::Uuid;
 
 /// Helper to create a resource that uses the API client and reacts to a trigger.
 /// This is the core helper that all other resource helpers should use.
@@ -29,18 +28,6 @@ where
         let client = app_state.get_api_client();
         fetch_fn(client)
     })
-}
-
-/// Helper to create a resource that uses the API client (no trigger)
-pub fn create_api_resource<T, F, Fut>(
-    fetch_fn: F,
-) -> LocalResource<Result<T, automatafl_backend_client::ClientError>>
-where
-    T: 'static,
-    F: Fn(ApiClient) -> Fut + 'static,
-    Fut: std::future::Future<Output = Result<T, automatafl_backend_client::ClientError>> + 'static,
-{
-    create_api_resource_with_trigger(|| (), fetch_fn)
 }
 
 /// Helper to create a refreshable resource (with manual refresh trigger)
@@ -75,9 +62,8 @@ where
     let value_signal = action.value();
 
     Effect::new(move |_| {
-        // Use .version() to track action completion
-        action.version().track();
-
+        // CRITICAL: Use .with() for a single reactive read instead of separate .get() calls
+        // This prevents double-subscription and reduces re-render overhead
         value_signal.with(|maybe_result| {
             if let Some(result) = maybe_result {
                 match result {
@@ -98,83 +84,4 @@ where
     });
 
     action
-}
-
-/// Debounce a callback (useful for search inputs, chat, etc.)
-pub fn use_debounced_callback<F>(callback: F, delay_ms: u32) -> impl Fn() + Clone
-where
-    F: Fn() + Clone + 'static,
-{
-    use crate::utils::Debouncer;
-    use std::rc::Rc;
-
-    let debouncer = Rc::new(Debouncer::new(delay_ms));
-
-    move || {
-        let callback_clone = callback.clone();
-        let debouncer_clone = debouncer.clone();
-        debouncer_clone.debounce(move || callback_clone());
-    }
-}
-
-/// Format timestamp as human-readable string
-pub fn format_timestamp(timestamp: u64, format: &str) -> String {
-    chrono::DateTime::from_timestamp(timestamp as i64, 0)
-        .map(|dt| dt.format(format).to_string())
-        .unwrap_or_else(|| "Unknown".to_string())
-}
-
-/// Format timestamp as relative time ("2 minutes ago", "just now", etc.)
-pub fn format_relative_time(timestamp: u64) -> String {
-    let now = js_sys::Date::now() as u64 / 1000;
-    let diff = now.saturating_sub(timestamp);
-
-    match diff {
-        0..=60 => "just now".to_string(),
-        61..=3600 => format!(
-            "{} minute{} ago",
-            diff / 60,
-            if diff / 60 == 1 { "" } else { "s" }
-        ),
-        3601..=86400 => format!(
-            "{} hour{} ago",
-            diff / 3600,
-            if diff / 3600 == 1 { "" } else { "s" }
-        ),
-        _ => format!(
-            "{} day{} ago",
-            diff / 86400,
-            if diff / 86400 == 1 { "" } else { "s" }
-        ),
-    }
-}
-
-/// Truncate UUID for display
-pub fn truncate_uuid(uuid: Uuid, chars: usize) -> String {
-    uuid.to_string().chars().take(chars).collect::<String>() + "..."
-}
-
-/// Check if user is authenticated (common pattern)
-pub fn use_auth_check() -> bool {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    app_state.is_authenticated.get()
-}
-
-/// Get current player ID (common pattern)
-pub fn use_current_player_id() -> Option<Uuid> {
-    let app_state = use_context::<AppState>().expect("AppState should be provided");
-    app_state.current_player_id.get()
-}
-
-/// Helper to create confirmation modal with common patterns
-pub fn use_confirm_delete(
-    item_name: impl Into<String>,
-    on_confirm: impl Fn() + 'static + Send + Sync,
-) {
-    let modal = crate::components::use_modal();
-    modal.confirm_danger(
-        format!("Delete {}?", item_name.into()),
-        "This action cannot be undone.",
-        on_confirm,
-    );
 }

@@ -1,4 +1,4 @@
-use crate::db::{Db, PlayerRecord, PlayerStatsRecord, as_uuid};
+use crate::db::{Db, PlayerRecord, PlayerStatsRecord};
 use serde_json::Value;
 use surrealdb::RecordId;
 use uuid::Uuid;
@@ -117,82 +117,104 @@ impl PlayerRepository {
             .await?;
         let existing_stats: Vec<PlayerStatsRecord> = result.take(0).unwrap_or_default();
 
-        // Create a map for quick lookup
+        // Create a map for quick lookup using as_uuid helper
         let mut stats_map = std::collections::HashMap::new();
         for stats in existing_stats {
-            if let Some(player_id_str) = stats.player_id.key().to_string().strip_prefix("players/")
-            {
-                if let Ok(player_id) = Uuid::parse_str(player_id_str) {
-                    stats_map.insert(player_id, stats);
-                }
-            }
+            let player_id = crate::db::as_uuid(&stats.player_id);
+            stats_map.insert(player_id, stats);
         }
 
-        // Build a single transaction that updates all players
-        let mut statements = vec!["BEGIN TRANSACTION;".to_string()];
+        // Build transaction with properly parameterized queries
+        // SECURITY: All values are bound as parameters, not interpolated
+        self.db.query("BEGIN TRANSACTION;").await?;
 
-        for (idx, update) in updates.iter().enumerate() {
-            let existing = stats_map.get(&update.player_id);
+        let outcome =
+            async {
+                for (idx, update) in updates.iter().enumerate() {
+                    let existing = stats_map.get(&update.player_id);
 
-            // Upsert stats with existing data
-            statements.push(format!(
-                r#"
-                UPSERT player_stats SET
-                    player_id = $player_id{idx},
-                    games_played = {},
-                    games_won = {},
-                    total_playtime = {}
-                WHERE player_id = $player_id{idx};
-                "#,
-                if let Some(existing) = existing {
-                    format!("{} + 1", existing.games_played)
-                } else {
-                    "1".to_string()
-                },
-                if let Some(existing) = existing {
-                    format!(
-                        "{} + {}",
-                        existing.games_won,
+                    // Calculate new values
+                    let new_games_played = if let Some(existing) = existing {
+                        existing.games_played + 1
+                    } else {
+                        1
+                    };
+
+                    let new_games_won = if let Some(existing) = existing {
+                        existing.games_won + if update.won { 1 } else { 0 }
+                    } else {
                         if update.won { 1 } else { 0 }
-                    )
-                } else {
-                    if update.won { 1 } else { 0 }.to_string()
-                },
-                if let Some(existing) = existing {
-                    format!("{} + {}", existing.total_playtime, update.playtime)
-                } else {
-                    update.playtime.to_string()
-                },
-                idx = idx
-            ));
+                    };
 
-            // Update ELO if provided
-            if update.new_elo.is_some() {
-                statements.push(format!(
-                    "UPDATE players SET elo_rating = $elo{idx} WHERE id = $player_id{idx};",
-                    idx = idx
-                ));
+                    let new_total_playtime = if let Some(existing) = existing {
+                        existing.total_playtime + update.playtime
+                    } else {
+                        update.playtime
+                    };
+
+                    // FIXED: Use proper parameterized queries
+                    self.db
+                        .query(
+                            "UPDATE player_stats SET 
+                            games_played = $games_played,
+                            games_won = $games_won,
+                            total_playtime = $total_playtime
+                        WHERE player_id = $player_id",
+                        )
+                        .bind((
+                            "player_id",
+                            RecordId::from_table_key("players", update.player_id),
+                        ))
+                        .bind(("games_played", new_games_played))
+                        .bind(("games_won", new_games_won))
+                        .bind(("total_playtime", new_total_playtime))
+                        .await?;
+
+                    // Create stats record if it doesn't exist
+                    if existing.is_none() {
+                        self.db
+                        .query(
+                            "IF (SELECT * FROM player_stats WHERE player_id = $player_id) = [] THEN
+                                CREATE player_stats SET
+                                    player_id = $player_id,
+                                    games_played = $games_played,
+                                    games_won = $games_won,
+                                    total_playtime = $total_playtime
+                            END"
+                        )
+                        .bind(("player_id", RecordId::from_table_key("players", update.player_id)))
+                        .bind(("games_played", new_games_played))
+                        .bind(("games_won", new_games_won))
+                        .bind(("total_playtime", new_total_playtime))
+                        .await?;
+                    }
+
+                    // Update ELO if provided
+                    if let Some(new_elo) = update.new_elo {
+                        self.db
+                            .query("UPDATE players SET elo_rating = $elo WHERE id = $player_id")
+                            .bind((
+                                "player_id",
+                                RecordId::from_table_key("players", update.player_id),
+                            ))
+                            .bind(("elo", new_elo))
+                            .await?;
+                    }
+                }
+                Ok::<(), surrealdb::Error>(())
+            }
+            .await;
+
+        match outcome {
+            Ok(()) => {
+                self.db.query("COMMIT TRANSACTION;").await?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.db.query("ROLLBACK TRANSACTION;").await;
+                Err(err)
             }
         }
-
-        statements.push("COMMIT TRANSACTION;".to_string());
-
-        let query = statements.join("\n");
-        let mut request = self.db.query(query);
-
-        // Bind all parameters
-        for (idx, update) in updates.iter().enumerate() {
-            request = request
-                .bind((
-                    format!("player_id{}", idx),
-                    RecordId::from_table_key("players", update.player_id),
-                ))
-                .bind((format!("elo{}", idx), update.new_elo));
-        }
-
-        request.await?;
-
-        Ok(())
     }
 
     /// Update player profile
@@ -300,25 +322,46 @@ impl PlayerRepository {
         &self,
         limit: usize,
     ) -> Result<Vec<(PlayerRecord, PlayerStatsRecord, usize)>, surrealdb::Error> {
-        let mut result = self
-            .db
-            .query("SELECT * FROM player_stats ORDER BY games_won DESC LIMIT $limit")
-            .bind(("limit", limit as i64))
-            .await?;
+        // Use a single query with JOIN to fetch both player and stats
+        let query = r#"
+            SELECT
+                player_id,
+                games_won,
+                games_played,
+                total_playtime,
+                ->players.* AS player
+            FROM player_stats
+            ORDER BY games_won DESC
+            LIMIT $limit
+        "#;
 
-        let stats_rows: Vec<PlayerStatsRecord> = result.take(0).unwrap_or_default();
-        let mut ranked = Vec::with_capacity(stats_rows.len());
+        let mut result = self.db.query(query).bind(("limit", limit as i64)).await?;
 
-        for (index, stats) in stats_rows.into_iter().enumerate() {
-            let player_uuid = as_uuid(&stats.player_id);
-            if let Some(player) = self
-                .db
-                .select::<Option<PlayerRecord>>(("players", player_uuid))
-                .await?
-            {
-                ranked.push((player, stats, index + 1));
-            }
+        #[derive(serde::Deserialize)]
+        struct LeaderboardRow {
+            player_id: surrealdb::RecordId,
+            games_won: u32,
+            games_played: u32,
+            total_playtime: u64,
+            player: Vec<PlayerRecord>,
         }
+
+        let rows: Vec<LeaderboardRow> = result.take(0).unwrap_or_default();
+        let ranked: Vec<(PlayerRecord, PlayerStatsRecord, usize)> = rows
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                row.player.into_iter().next().map(|player| {
+                    let stats = PlayerStatsRecord {
+                        player_id: row.player_id,
+                        games_won: row.games_won,
+                        games_played: row.games_played,
+                        total_playtime: row.total_playtime,
+                    };
+                    (player, stats, index + 1)
+                })
+            })
+            .collect();
 
         Ok(ranked)
     }
@@ -328,25 +371,46 @@ impl PlayerRepository {
         &self,
         limit: usize,
     ) -> Result<Vec<(PlayerRecord, PlayerStatsRecord, usize)>, surrealdb::Error> {
-        let mut result = self
-            .db
-            .query("SELECT * FROM player_stats ORDER BY games_played DESC LIMIT $limit")
-            .bind(("limit", limit as i64))
-            .await?;
+        // Use a single query with JOIN to fetch both player and stats
+        let query = r#"
+            SELECT
+                player_id,
+                games_won,
+                games_played,
+                total_playtime,
+                ->players.* AS player
+            FROM player_stats
+            ORDER BY games_played DESC
+            LIMIT $limit
+        "#;
 
-        let stats_rows: Vec<PlayerStatsRecord> = result.take(0).unwrap_or_default();
-        let mut ranked = Vec::with_capacity(stats_rows.len());
+        let mut result = self.db.query(query).bind(("limit", limit as i64)).await?;
 
-        for (index, stats) in stats_rows.into_iter().enumerate() {
-            let player_uuid = as_uuid(&stats.player_id);
-            if let Some(player) = self
-                .db
-                .select::<Option<PlayerRecord>>(("players", player_uuid))
-                .await?
-            {
-                ranked.push((player, stats, index + 1));
-            }
+        #[derive(serde::Deserialize)]
+        struct LeaderboardRow {
+            player_id: surrealdb::RecordId,
+            games_won: u32,
+            games_played: u32,
+            total_playtime: u64,
+            player: Vec<PlayerRecord>,
         }
+
+        let rows: Vec<LeaderboardRow> = result.take(0).unwrap_or_default();
+        let ranked: Vec<(PlayerRecord, PlayerStatsRecord, usize)> = rows
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                row.player.into_iter().next().map(|player| {
+                    let stats = PlayerStatsRecord {
+                        player_id: row.player_id,
+                        games_won: row.games_won,
+                        games_played: row.games_played,
+                        total_playtime: row.total_playtime,
+                    };
+                    (player, stats, index + 1)
+                })
+            })
+            .collect();
 
         Ok(ranked)
     }

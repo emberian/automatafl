@@ -230,30 +230,34 @@ pub fn CreateGamePage() -> impl IntoView {
 
     // After game is created, join it
     Effect::new(move |_| {
-        if let Some(Ok(game_id)) = create_action.value().get() {
-            join_action.dispatch(game_id);
-        }
+        create_action.value().with(|result| {
+            if let Some(Ok(game_id)) = result {
+                join_action.dispatch(*game_id);
+            }
+        });
     });
 
     // After joining, navigate to the game
     Effect::new(move |_| {
-        if let Some(result) = join_action.value().get() {
-            match result {
-                Ok(_pid) => {
-                    // Get the game_id from create_action
-                    if let Some(Ok(game_id)) = create_action.value().get() {
-                        navigate(&format!("/games/{}", game_id), Default::default());
+        join_action.value().with(|join_result| {
+            if let Some(result) = join_result {
+                // Read create_action result inside .with() to avoid double subscription
+                create_action.value().with(|create_result| {
+                    if let Some(Ok(game_id)) = create_result {
+                        match result {
+                            Ok(_pid) => {
+                                navigate(&format!("/games/{}", game_id), Default::default());
+                            }
+                            Err(e) => {
+                                web_sys::console::error_1(&format!("Failed to join game: {}", e).into());
+                                // Still navigate to show the error
+                                navigate(&format!("/games/{}", game_id), Default::default());
+                            }
+                        }
                     }
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to join game: {}", e).into());
-                    // Still navigate to show the error
-                    if let Some(Ok(game_id)) = create_action.value().get() {
-                        navigate(&format!("/games/{}", game_id), Default::default());
-                    }
-                }
+                });
             }
-        }
+        });
     });
 
     view! {
@@ -405,18 +409,20 @@ pub fn GamePage() -> impl IntoView {
     // Update state signal when initial load completes
     let app_state_for_load = app_state.clone();
     Effect::new(move |_| {
-        if let Some(result) = initial_load_action.value().get() {
-            if let Some(gid) = game_id.get() {
-                match result {
-                    Ok(state) => {
-                        app_state_for_load.update_game_state(gid, state);
-                    }
-                    Err(e) => {
-                        web_sys::console::error_1(&format!("Failed to load game: {}", e).into());
+        initial_load_action.value().with(|result| {
+            if let Some(result) = result {
+                if let Some(gid) = game_id.get() {
+                    match result {
+                        Ok(state) => {
+                            app_state_for_load.update_game_state(gid, state.clone());
+                        }
+                        Err(e) => {
+                            web_sys::console::error_1(&format!("Failed to load game: {}", e).into());
+                        }
                     }
                 }
             }
-        }
+        });
     });
 
     // Auto-join action for when viewing a game that's waiting for players
@@ -465,20 +471,22 @@ pub fn GamePage() -> impl IntoView {
 
     // Refresh after auto-join (triggers HTTP refetch for updated player list)
     Effect::new(move |_| {
-        if let Some(result) = auto_join_action.value().get() {
-            if let Some(gid) = game_id.get() {
-                match result {
-                    Ok(_) => {
-                        toast.success("Joined game successfully!");
-                        // Re-fetch state to get updated player list
-                        initial_load_action.dispatch(gid);
-                    }
-                    Err(e) => {
-                        toast.warning(format!("Could not join: {}. You can still spectate.", e));
+        auto_join_action.value().with(|result| {
+            if let Some(result) = result {
+                if let Some(gid) = game_id.get() {
+                    match result {
+                        Ok(_) => {
+                            toast.success("Joined game successfully!");
+                            // Re-fetch state to get updated player list
+                            initial_load_action.dispatch(gid);
+                        }
+                        Err(e) => {
+                            toast.warning(format!("Could not join: {}. You can still spectate.", e));
+                        }
                     }
                 }
             }
-        }
+        });
     });
 
     // Cleanup when leaving page
@@ -514,10 +522,10 @@ pub fn GamePage() -> impl IntoView {
             {move || {
                 if initial_load_action.pending().get() {
                     view! { <SkeletonGameBoard /> }.into_any()
-                } else if let Some(state) = game_state_signal.get() {
+                } else if game_state_signal.get().is_some() {
                     let gid = game_id.get().unwrap();
                     view! {
-                        <GameView game_id=gid game_state=state />
+                        <GameView game_id=gid />
                     }.into_any()
                 } else if let Some(Err(e)) = initial_load_action.value().get() {
                     view! {
@@ -539,7 +547,14 @@ pub fn GamePage() -> impl IntoView {
 
 /// Improved game view with tabbed interface
 #[component]
-fn GameView(game_id: Uuid, game_state: automatafl_api_types::GameStateResponse) -> impl IntoView {
+fn GameView(game_id: Uuid) -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
+
+    // Read game state from signal - this makes the component reactive without recreation
+    let game_state_signal = app_state
+        .get_game_signal(game_id)
+        .expect("Game state should exist");
+
     let (active_right_tab, set_active_right_tab) = signal("chat".to_string());
     let (show_move_form, set_show_move_form) = signal(false);
 
@@ -559,71 +574,80 @@ fn GameView(game_id: Uuid, game_state: automatafl_api_types::GameStateResponse) 
 
     view! {
         <div class="game-container">
-            <div class="game-header">
-                <GameInfo game_state=game_state.clone() />
-            </div>
-            <div class="game-main">
-                <div class="game-left-panel">
-                    {{
-                        let game_state_clone = game_state.clone();
-                        move || if !show_move_form.get() {
-                            view! {
-                                <div class="game-controls-compact">
-                                    <RoundControls game_id=game_id game_state=game_state_clone.clone() />
-                                    <SaveLoadControls game_id=game_id />
+            {move || {
+                game_state_signal.get().map(|game_state| {
+                    // Extract game_state once, don't clone inside nested closures
+                    view! {
+                        <div class="game-header">
+                            <GameInfo game_state=game_state.clone() />
+                        </div>
+                        <div class="game-main">
+                            <div class="game-left-panel">
+                                {move || {
+                                    // Re-read game_state inside this reactive closure
+                                    game_state_signal.get().map(|gs| {
+                                        if !show_move_form.get() {
+                                            view! {
+                                                <div class="game-controls-compact">
+                                                    <RoundControls game_id=game_id game_state=gs.clone() />
+                                                    <SaveLoadControls game_id=game_id />
+                                                    <button
+                                                        class="button button-small button-secondary"
+                                                        on:click=move |_| set_show_move_form.set(true)
+                                                    >
+                                                        "📝 Show Move Form"
+                                                    </button>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <div class="game-controls-expanded">
+                                                    <MoveControls game_id=game_id game_state=gs.clone() />
+                                                    <RoundControls game_id=game_id game_state=gs.clone() />
+                                                    <SaveLoadControls game_id=game_id />
+                                                    <button
+                                                        class="button button-small button-secondary"
+                                                        on:click=move |_| set_show_move_form.set(false)
+                                                    >
+                                                        "Hide Move Form"
+                                                    </button>
+                                                </div>
+                                            }.into_any()
+                                        }
+                                    })
+                                }}
+                            </div>
+                            <div class="game-center">
+                                <GameBoard game_id=game_id />
+                            </div>
+                            <div class="game-right-panel">
+                                <div class="right-panel-tabs">
                                     <button
-                                        class="button button-small button-secondary"
-                                        on:click=move |_| set_show_move_form.set(true)
+                                        class=move || format!("tab {}", if active_right_tab.get() == "chat" { "active" } else { "" })
+                                        on:click=move |_| set_active_right_tab.set("chat".to_string())
                                     >
-                                        "📝 Show Move Form"
+                                        "💬 Chat"
+                                    </button>
+                                    <button
+                                        class=move || format!("tab {}", if active_right_tab.get() == "history" { "active" } else { "" })
+                                        on:click=move |_| set_active_right_tab.set("history".to_string())
+                                    >
+                                        "📜 History"
                                     </button>
                                 </div>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <div class="game-controls-expanded">
-                                    <MoveControls game_id=game_id game_state=game_state_clone.clone() />
-                                    <RoundControls game_id=game_id game_state=game_state_clone.clone() />
-                                    <SaveLoadControls game_id=game_id />
-                                    <button
-                                        class="button button-small button-secondary"
-                                        on:click=move |_| set_show_move_form.set(false)
-                                    >
-                                        "Hide Move Form"
-                                    </button>
+                                <div class="right-panel-content">
+                                    <Show when=move || active_right_tab.get() == "chat">
+                                        <ChatPanel game_id=game_id />
+                                    </Show>
+                                    <Show when=move || active_right_tab.get() == "history">
+                                        <GameHistory game_id=game_id />
+                                    </Show>
                                 </div>
-                            }.into_any()
-                        }
-                    }}
-                </div>
-                <div class="game-center">
-                    <GameBoard game_id=game_id game_state=game_state.clone() />
-                </div>
-                <div class="game-right-panel">
-                    <div class="right-panel-tabs">
-                        <button
-                            class=move || format!("tab {}", if active_right_tab.get() == "chat" { "active" } else { "" })
-                            on:click=move |_| set_active_right_tab.set("chat".to_string())
-                        >
-                            "💬 Chat"
-                        </button>
-                        <button
-                            class=move || format!("tab {}", if active_right_tab.get() == "history" { "active" } else { "" })
-                            on:click=move |_| set_active_right_tab.set("history".to_string())
-                        >
-                            "📜 History"
-                        </button>
-                    </div>
-                    <div class="right-panel-content">
-                        <Show when=move || active_right_tab.get() == "chat">
-                            <ChatPanel game_id=game_id />
-                        </Show>
-                        <Show when=move || active_right_tab.get() == "history">
-                            <GameHistory game_id=game_id />
-                        </Show>
-                    </div>
-                </div>
-            </div>
+                            </div>
+                        </div>
+                    }
+                })
+            }}
         </div>
     }
 }

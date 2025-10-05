@@ -282,6 +282,8 @@ pub struct AppState {
     pub matchmaking_service: Arc<services::MatchmakingService>,
     /// Administrative facade aggregating operations
     pub admin_service: Arc<services::AdminService>,
+    /// WebSocket connection tracker per game
+    pub ws_connections: Arc<tokio::sync::RwLock<std::collections::HashMap<Uuid, usize>>>,
 }
 
 pub type ServerState = axum::extract::State<Arc<AppState>>;
@@ -740,6 +742,40 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
     let connection_timeout = state.config.websocket.timeout;
     let ping_interval = state.config.websocket.ping_interval;
     let max_message_size = state.config.websocket.max_message_size;
+    let max_connections_per_game = state.config.websocket.max_connections_per_game;
+
+    // Check and enforce connection limit per game
+    {
+        let mut connections = state.ws_connections.write().await;
+        let current_count = connections.entry(game_uuid).or_insert(0);
+
+        if *current_count >= max_connections_per_game {
+            tracing::warn!(
+                game_id = %game_uuid,
+                current = *current_count,
+                max = max_connections_per_game,
+                "WebSocket connection limit reached for game"
+            );
+            // Close the socket with an error message
+            let mut socket = socket;
+            let _ = socket
+                .send(axum::extract::ws::Message::Close(Some(
+                    axum::extract::ws::CloseFrame {
+                        code: 1008, // Policy Violation
+                        reason: "Connection limit reached for this game".into(),
+                    },
+                )))
+                .await;
+            return;
+        }
+
+        *current_count += 1;
+        tracing::debug!(
+            game_id = %game_uuid,
+            count = *current_count,
+            "WebSocket connection established"
+        );
+    }
 
     // Record WebSocket connection start
     metrics::gauge!(
@@ -998,6 +1034,23 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, game_uuid: U
     }
 
     tracing::info!("WebSocket connection closed for game {}", game_uuid);
+
+    // Decrement connection count for this game
+    {
+        let mut connections = state.ws_connections.write().await;
+        if let Some(count) = connections.get_mut(&game_uuid) {
+            *count = count.saturating_sub(1);
+            tracing::debug!(
+                game_id = %game_uuid,
+                remaining = *count,
+                "WebSocket connection released"
+            );
+            // Clean up if no connections remain
+            if *count == 0 {
+                connections.remove(&game_uuid);
+            }
+        }
+    }
 
     // Record WebSocket metrics
     metrics::counter!(

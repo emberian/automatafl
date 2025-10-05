@@ -123,6 +123,20 @@ pub async fn admin_update_player(
     Path(player_id): Path<Uuid>,
     Json(req): Json<AdminUpdatePlayerRequest>,
 ) -> Result<StatusCode, AppError> {
+    // Validate fields before updating (reuse validation from PlayerService)
+    if let Some(ref displayname) = req.displayname {
+        crate::validation::validate_displayname(displayname)
+            .map_err(|e| AppError::ValidationError(e.to_string()))?;
+    }
+    if let Some(ref bio) = req.bio {
+        crate::validation::validate_bio(bio)
+            .map_err(|e| AppError::ValidationError(e.to_string()))?;
+    }
+    if let Some(ref avatar_url) = req.avatar_url {
+        crate::validation::validate_avatar_url(avatar_url)
+            .map_err(|e| AppError::ValidationError(e.to_string()))?;
+    }
+
     state
         .admin_service
         .update_player_fields(

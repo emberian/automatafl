@@ -227,30 +227,36 @@ pub fn ConnectionStatus() -> impl IntoView {
     view! {
         <div class="connection-status">
             {move || {
-                // Show connection status for the active game, if any
+                // Get active game ID (subscribes to active_game_id changes only)
                 let active_game_id = app_state.active_game_id.get();
-                let connected = active_game_id
-                    .and_then(|game_id| app_state.get_websocket_connected_signal(game_id))
-                    .map(|sig| sig.get())
-                    .unwrap_or(false);
 
-                // Only show if there's an active game
-                active_game_id.map(|_| {
-                    if connected {
+                active_game_id.and_then(|game_id| {
+                    // Get the websocket signal for this specific game ONCE
+                    // CRITICAL: Use get_untracked to avoid subscribing to the HashMap
+                    app_state.get_websocket_connected_signal(game_id).map(|ws_signal| {
+                        // Create a derived view that subscribes to websocket status ONLY
                         view! {
-                            <div class="status-indicator status-connected" title="Connected to server">
-                                <span class="status-dot"></span>
-                                <span class="status-text">"Live"</span>
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <div class="status-indicator status-disconnected" title="Reconnecting...">
-                                <span class="status-dot pulsing"></span>
-                                <span class="status-text">"Reconnecting..."</span>
-                            </div>
-                        }.into_any()
-                    }
+                            {move || {
+                                let connected = ws_signal.get();
+
+                                if connected {
+                                    view! {
+                                        <div class="status-indicator status-connected" title="Connected to server">
+                                            <span class="status-dot"></span>
+                                            <span class="status-text">"Live"</span>
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="status-indicator status-disconnected" title="Reconnecting...">
+                                            <span class="status-dot pulsing"></span>
+                                            <span class="status-text">"Reconnecting..."</span>
+                                        </div>
+                                    }.into_any()
+                                }
+                            }}
+                        }
+                    })
                 })
             }}
         </div>
@@ -283,15 +289,14 @@ pub fn NetworkStatus() -> impl IntoView {
     let (is_online, set_is_online) = signal(true);
 
     // Use window_event_listener for automatic cleanup when component unmounts
-    let set_online = set_is_online.clone();
+    // CRITICAL: Don't clone signals - capture them directly in closures
     window_event_listener(leptos::ev::online, move |_| {
-        set_online.set(true);
+        set_is_online.set(true);
         web_sys::console::log_1(&"📡 Network connection restored".into());
     });
 
-    let set_offline = set_is_online.clone();
     window_event_listener(leptos::ev::offline, move |_| {
-        set_offline.set(false);
+        set_is_online.set(false);
         web_sys::console::warn_1(&"📡 Network connection lost".into());
     });
 

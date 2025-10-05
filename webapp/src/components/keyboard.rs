@@ -91,7 +91,8 @@ pub fn KeyboardListener() -> impl IntoView {
         }
 
         // Check if we have a handler for this shortcut
-        if let Some(handler) = shortcuts_clone.get().get(&shortcut_str) {
+        // Use get_untracked() to avoid reactivity overhead in event handler
+        if let Some(handler) = shortcuts_clone.get_untracked().get(&shortcut_str) {
             handler.run(());
             e.prevent_default();
         }
@@ -192,6 +193,7 @@ pub fn use_keyboard_shortcut(
     });
 }
 
+#[allow(dead_code)]
 pub fn use_keyboard() -> KeyboardContext {
     use_context::<KeyboardContext>().expect("KeyboardContext should be provided")
 }

@@ -5,10 +5,7 @@ use automatafl_api_types::{GameEventData, GameLifecycle, GameListItem};
 use automatafl_logic::{Game, Pid};
 use futures::{Stream, StreamExt};
 use serde_json::Value;
-use std::{
-    collections::{HashMap, HashSet},
-    pin::Pin,
-};
+use std::{collections::HashMap, pin::Pin};
 use surrealdb::RecordId;
 use uuid::Uuid;
 
@@ -162,7 +159,7 @@ impl GameRepository {
         let timestamp = crate::common::timestamp();
 
         // Create typed event records
-        #[derive(Serialize)]
+        #[derive(Serialize, Clone)]
         struct EventRecord {
             game_id: RecordId,
             timestamp: u64,
@@ -183,23 +180,37 @@ impl GameRepository {
             })
             .collect::<Result<Vec<_>, surrealdb::Error>>()?;
 
-        // Execute atomic transaction
-        let query = r#"
-            BEGIN TRANSACTION;
-            UPDATE games SET game_state = $game_state, lifecycle = $lifecycle WHERE id = $id;
-            IF array::len($events) > 0 THEN
-                INSERT INTO game_events $events;
-            END;
-            COMMIT TRANSACTION;
-        "#;
+        // Execute atomic transaction with explicit error handling
+        self.db.query("BEGIN TRANSACTION;").await?;
 
-        self.db
-            .query(query)
-            .bind(("game_state", game_state_json))
-            .bind(("lifecycle", lifecycle_json))
-            .bind(("id", RecordId::from_table_key("games", game_id)))
-            .bind(("events", event_records))
-            .await?;
+        let outcome = async {
+            self.db
+                .query("UPDATE games SET game_state = $game_state, lifecycle = $lifecycle WHERE id = $id")
+                .bind(("game_state", game_state_json.clone()))
+                .bind(("lifecycle", lifecycle_json.clone()))
+                .bind(("id", RecordId::from_table_key("games", game_id)))
+                .await?;
+
+            if !event_records.is_empty() {
+                self.db
+                    .query("INSERT INTO game_events $events")
+                    .bind(("events", event_records.clone()))
+                    .await?;
+            }
+
+            Ok::<(), surrealdb::Error>(())
+        }
+        .await;
+
+        match outcome {
+            Ok(()) => {
+                self.db.query("COMMIT TRANSACTION;").await?;
+            }
+            Err(err) => {
+                let _ = self.db.query("ROLLBACK TRANSACTION;").await;
+                return Err(err);
+            }
+        }
 
         // Return persisted events
         Ok(events
@@ -269,14 +280,15 @@ impl GameRepository {
     ) -> Result<Vec<GameListItem>, surrealdb::Error> {
         // Single query to fetch all games for a player with player counts
         // This eliminates the N+1 query problem
+        // FIXED: Removed SQL-style AS aliasing - SurrealDB doesn't support it
         let query = r#"
             SELECT
-                g.id, g.lifecycle, g.created_at, g.created_by,
-                g.player_count as max_players,
-                (SELECT count() FROM game_players WHERE game_id = g.id GROUP ALL)[0].count as current_players
-            FROM games AS g
-            WHERE g.id IN (SELECT game_id FROM game_players WHERE player_id = $player_id)
-            ORDER BY g.created_at DESC
+                id, lifecycle, created_at, created_by,
+                player_count as max_players,
+                (SELECT count() FROM game_players WHERE game_id = $parent.id GROUP ALL)[0].count as current_players
+            FROM games
+            WHERE id IN (SELECT game_id FROM game_players WHERE player_id = $player_id)
+            ORDER BY created_at DESC
             LIMIT $limit;
         "#;
 

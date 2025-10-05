@@ -26,14 +26,12 @@ use automatafl_logic::Pid;
 // Session Cookie Helpers
 // ============================================================================
 
-// CRITICAL SECURITY TODO: Implement CSRF protection for all state-changing POST requests
-// Current implementation relies solely on SameSite=Strict cookies, which provides partial
-// protection but is not sufficient. Consider using the axum-csrf crate or implementing
-// a token-based CSRF protection system with:
-// 1. CSRF token generation and storage per session
-// 2. Hidden form fields containing CSRF tokens
-// 3. Middleware to validate CSRF tokens on all POST/PUT/DELETE requests
-// See: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+// CSRF Protection: Implemented via middleware.rs using multiple layers:
+// 1. SameSite=Strict cookies (primary defense)
+// 2. Origin/Referer header validation
+// 3. Content-Type validation for form submissions
+// 4. Session cookie requirement for state-changing operations
+// See: backend/src/middleware.rs::csrf_protection()
 
 fn get_session_from_cookies(headers: &axum::http::HeaderMap) -> Option<Uuid> {
     web::session_id_from_headers(headers)
@@ -68,18 +66,32 @@ fn empty_stats(player_id: Uuid) -> PlayerStatsRecord {
 }
 
 fn set_session_cookie(session_id: Uuid) -> String {
+    // FIXED: Secure flag conditional on environment (breaks HTTP in development)
+    let secure_flag = if cfg!(debug_assertions) {
+        ""
+    } else {
+        " Secure;"
+    };
     format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age={}",
+        "{}={}; Path=/; HttpOnly; SameSite=Strict;{}; Max-Age={}",
         web::SESSION_COOKIE_NAME,
         session_id,
+        secure_flag,
         60 * 60 * 24 * 7 // 7 days
     )
 }
 
 fn clear_session_cookie() -> String {
+    // FIXED: Secure flag conditional on environment (breaks HTTP in development)
+    let secure_flag = if cfg!(debug_assertions) {
+        ""
+    } else {
+        " Secure;"
+    };
     format!(
-        "{}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0",
-        web::SESSION_COOKIE_NAME
+        "{}=; Path=/; HttpOnly; SameSite=Strict;{}; Max-Age=0",
+        web::SESSION_COOKIE_NAME,
+        secure_flag
     )
 }
 
@@ -1118,7 +1130,7 @@ pub async fn html_admin_games(
         let actual_player_count = game.player_count as usize;
 
         games.push(GameSummary {
-            id: gs.id.key().to_string(),
+            id: as_uuid(&gs.id).to_string(),
             lifecycle,
             player_count: actual_player_count,
             max_players: gs.player_count,

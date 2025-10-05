@@ -253,26 +253,28 @@ fn ProfileEditSection(
     });
 
     let _ = Effect::new(move |_| {
-        if let Some(result) = update_action.value().get() {
-            match result {
-                Ok(_) => {
-                    set_status.set("✅ Profile updated successfully!".to_string());
-                    set_is_editing.set(false);
-                    // Trigger page refresh after a delay
-                    set_timeout(
-                        move || {
-                            if let Some(window) = web_sys::window() {
-                                let _ = window.location().reload();
-                            }
-                        },
-                        std::time::Duration::from_secs(1),
-                    );
-                }
-                Err(e) => {
-                    set_status.set(format!("❌ Failed to update profile: {}", e));
+        update_action.value().with(|result| {
+            if let Some(result) = result {
+                match result {
+                    Ok(_) => {
+                        set_status.set("✅ Profile updated successfully!".to_string());
+                        set_is_editing.set(false);
+                        // Trigger page refresh after a delay
+                        set_timeout(
+                            move || {
+                                if let Some(window) = web_sys::window() {
+                                    let _ = window.location().reload();
+                                }
+                            },
+                            std::time::Duration::from_secs(1),
+                        );
+                    }
+                    Err(e) => {
+                        set_status.set(format!("❌ Failed to update profile: {}", e));
+                    }
                 }
             }
-        }
+        });
     });
 
     view! {

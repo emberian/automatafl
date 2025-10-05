@@ -332,7 +332,7 @@ fn is_allowed_referer(referer: &str) -> bool {
 // ============================================================================
 
 /// Add comprehensive security headers to all responses
-pub async fn security_headers(mut req: Request, next: Next) -> Response {
+pub async fn security_headers(req: Request, next: Next) -> Response {
     // Extract path before consuming request
     let is_api_request = req.uri().path().starts_with("/api/");
 

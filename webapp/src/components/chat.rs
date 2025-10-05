@@ -57,26 +57,32 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
 
     let toast_clone2 = toast.clone();
     Effect::new(move |_| {
-        if let Some(result) = send_message_action.value().get() {
-            match result {
-                Ok(_) => {
-                    set_message_input.set(String::new());
-                    // Chat will refresh via WebSocket CHAT event triggering game refresh
-                    // Scroll to bottom after sending
-                    if let Some(elem) = chat_messages_ref.get() {
-                        let _ = elem.set_scroll_top(elem.scroll_height());
+        send_message_action.value().with(|result| {
+            if let Some(result) = result {
+                match result {
+                    Ok(_) => {
+                        set_message_input.set(String::new());
+                        // Chat will refresh via WebSocket CHAT event triggering game refresh
+                        // Scroll to bottom after sending
+                        if let Some(elem) = chat_messages_ref.get() {
+                            let _ = elem.set_scroll_top(elem.scroll_height());
+                        }
+                    }
+                    Err(e) => {
+                        toast_clone2.error(format!("Failed to send message: {}", e));
                     }
                 }
-                Err(e) => {
-                    toast_clone2.error(format!("Failed to send message: {}", e));
-                }
             }
-        }
+        });
     });
 
     // Auto-scroll to bottom when new messages arrive
-    Effect::new(move |_| {
-        if messages_memo.get().is_some() {
+    // CRITICAL: Use previous value to detect actual changes, not just any get()
+    Effect::new(move |prev_len: Option<usize>| {
+        let current_len = messages_memo.get().map(|msgs| msgs.len()).unwrap_or(0);
+
+        // Only scroll if message count changed (new message arrived)
+        if prev_len.map(|p| p != current_len).unwrap_or(true) {
             gloo_timers::callback::Timeout::new(100, move || {
                 if let Some(elem) = chat_messages_ref.get() {
                     let _ = elem.set_scroll_top(elem.scroll_height());
@@ -84,6 +90,8 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
             })
             .forget();
         }
+
+        current_len
     });
 
     view! {
@@ -133,8 +141,8 @@ pub fn ChatPanel(game_id: Uuid) -> impl IntoView {
                     type="text"
                     class="chat-input"
                     placeholder="Type a message..."
-                    on:input=move |ev| set_message_input.set(event_target_value(&ev))
                     prop:value=message_input
+                    on:input=move |ev| set_message_input.set(event_target_value(&ev))
                 />
                 <button
                     type="submit"

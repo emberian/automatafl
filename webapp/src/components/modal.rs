@@ -17,6 +17,7 @@ pub struct ModalContext {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum ModalVariant {
     Default,
     Danger,
@@ -141,7 +142,8 @@ pub fn ModalContainer() -> impl IntoView {
     // This is much simpler and more reliable than manual Closure management
     let modal_ctx_for_listener = modal_ctx.clone();
     window_event_listener(leptos::ev::keydown, move |e: web_sys::KeyboardEvent| {
-        if modal_ctx_for_listener.is_open.get() && e.key() == "Escape" {
+        // Use get_untracked() to avoid reactivity overhead in event handler
+        if modal_ctx_for_listener.is_open.get_untracked() && e.key() == "Escape" {
             modal_ctx_for_listener.close();
         }
     });
@@ -157,23 +159,23 @@ pub fn ModalContainer() -> impl IntoView {
 fn ModalDialog() -> impl IntoView {
     let modal_ctx = use_context::<ModalContext>().expect("ModalContext should be provided");
 
-    let modal_ctx_for_backdrop = modal_ctx.clone();
-    let modal_ctx_for_class = modal_ctx.clone();
-    let modal_ctx_for_title = modal_ctx.clone();
-    let modal_ctx_for_body = modal_ctx.clone();
-    let modal_ctx_for_button_class = modal_ctx.clone();
-    let modal_ctx_for_confirm_text = modal_ctx.clone();
-    let modal_ctx_for_has_cancel = modal_ctx.clone();
-    let modal_ctx_close = modal_ctx.clone();
+    // Clone once for each distinct closure that needs it
+    let modal_ctx_backdrop = modal_ctx.clone();
     let modal_ctx_confirm = modal_ctx.clone();
-    let modal_ctx_cancel = modal_ctx.clone();
+    let modal_ctx_cancel_base = modal_ctx.clone();
+    let modal_ctx_variant_class = modal_ctx.clone();
+    let modal_ctx_title = modal_ctx.clone();
+    let modal_ctx_close_button = modal_ctx.clone();
+    let modal_ctx_body = modal_ctx.clone();
+    let modal_ctx_confirm_button_class = modal_ctx.clone();
+    let modal_ctx_confirm_text = modal_ctx.clone();
 
     let handle_backdrop_click = move |e: leptos::ev::MouseEvent| {
         // Only close if clicking directly on the backdrop, not its children
         if let Some(target) = e.target() {
             if let Some(element) = target.dyn_ref::<web_sys::HtmlElement>() {
                 if element.class_list().contains("modal-backdrop") {
-                    modal_ctx_for_backdrop.close();
+                    modal_ctx_backdrop.close();
                 }
             }
         }
@@ -186,12 +188,13 @@ fn ModalDialog() -> impl IntoView {
         modal_ctx_confirm.close();
     };
 
+    let modal_ctx_for_has_cancel = modal_ctx.clone();
     let has_cancel = Signal::derive(move || modal_ctx_for_has_cancel.on_cancel.get().is_some());
 
     view! {
         <div class="modal-backdrop" on:click=handle_backdrop_click>
             <div class=move || {
-                let variant = modal_ctx_for_class.variant.get();
+                let variant = modal_ctx_variant_class.variant.get();
                 let variant_class = match variant {
                     ModalVariant::Default => "modal-default",
                     ModalVariant::Danger => "modal-danger",
@@ -201,38 +204,47 @@ fn ModalDialog() -> impl IntoView {
                 format!("modal-dialog {}", variant_class)
             }>
                 <div class="modal-header">
-                    <h2 class="modal-title">{move || modal_ctx_for_title.title.get()}</h2>
+                    <h2 class="modal-title">{move || modal_ctx_title.title.get()}</h2>
                     <button
                         class="modal-close"
-                        on:click=move |_| modal_ctx_close.close()
+                        on:click=move |_| modal_ctx_close_button.close()
                         aria-label="Close"
                     >
                         "×"
                     </button>
                 </div>
                 <div class="modal-body">
-                    <p>{move || modal_ctx_for_body.body.get()}</p>
+                    <p>{move || modal_ctx_body.body.get()}</p>
                 </div>
                 <div class="modal-footer">
-                    {move || {
-                        let modal_ctx_cancel_btn = modal_ctx_cancel.clone();
-                        has_cancel.get().then(|| view! {
-                            <button
-                                class="button button-secondary"
-                                on:click=move |_| {
-                                    if let Some(cb) = modal_ctx_cancel_btn.on_cancel.get() {
-                                        cb.run(());
+                    <Show when=move || has_cancel.get()>
+                        {let modal_ctx_for_children = modal_ctx_cancel_base.clone();
+                        move || {
+                            let action_ctx = modal_ctx_for_children.clone();
+                            let close_ctx = modal_ctx_for_children.clone();
+                            let text_ctx = modal_ctx_for_children.clone();
+                            view! {
+                                <button
+                                    class="button button-secondary"
+                                    on:click={
+                                        let action_ctx = action_ctx.clone();
+                                        let close_ctx = close_ctx.clone();
+                                        move |_| {
+                                            if let Some(cb) = action_ctx.on_cancel.get() {
+                                                cb.run(());
+                                            }
+                                            close_ctx.close();
+                                        }
                                     }
-                                    modal_ctx_cancel_btn.close();
-                                }
-                            >
-                                {move || modal_ctx_cancel_btn.cancel_text.get()}
-                            </button>
-                        })
-                    }}
+                                >
+                                    {move || text_ctx.cancel_text.get()}
+                                </button>
+                            }
+                        }}
+                    </Show>
                     <button
                         class=move || {
-                            let variant = modal_ctx_for_button_class.variant.get();
+                            let variant = modal_ctx_confirm_button_class.variant.get();
                             let confirm_button_class = match variant {
                                 ModalVariant::Danger => "button-danger",
                                 ModalVariant::Warning => "button-warning",
@@ -243,7 +255,7 @@ fn ModalDialog() -> impl IntoView {
                         }
                         on:click=handle_confirm
                     >
-                        {move || modal_ctx_for_confirm_text.confirm_text.get()}
+                        {move || modal_ctx_confirm_text.confirm_text.get()}
                     </button>
                 </div>
             </div>

@@ -250,7 +250,9 @@ impl Default for WebSocketConfig {
     fn default() -> Self {
         Self {
             ping_interval: Duration::from_secs(30),
-            timeout: Duration::from_secs(60),
+            // FIXED: Increased timeout from 60s to 5 minutes for better reliability
+            // on slow/mobile networks. Conservative timeout prevents premature disconnections.
+            timeout: Duration::from_secs(300),
             max_message_size: 64 * 1024, // 64KB
             max_connections_per_game: 10,
         }

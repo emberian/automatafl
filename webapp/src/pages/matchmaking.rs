@@ -58,32 +58,36 @@ pub fn MatchmakingPage() -> impl IntoView {
 
     // Handle join result
     Effect::new(move |_| {
-        if let Some(result) = join_action.value().get() {
-            match result {
-                Ok(_) => {
-                    set_error_message.set(None);
-                    set_poll_trigger.update(|n| *n += 1);
-                }
-                Err(e) => {
-                    set_error_message.set(Some(format!("Failed to join queue: {}", e)));
+        join_action.value().with(|result| {
+            if let Some(result) = result {
+                match result {
+                    Ok(_) => {
+                        set_error_message.set(None);
+                        set_poll_trigger.update(|n| *n += 1);
+                    }
+                    Err(e) => {
+                        set_error_message.set(Some(format!("Failed to join queue: {}", e)));
+                    }
                 }
             }
-        }
+        });
     });
 
     // Handle leave result
     Effect::new(move |_| {
-        if let Some(result) = leave_action.value().get() {
-            match result {
-                Ok(_) => {
-                    set_error_message.set(None);
-                    set_poll_trigger.update(|n| *n += 1);
-                }
-                Err(e) => {
-                    set_error_message.set(Some(format!("Failed to leave queue: {}", e)));
+        leave_action.value().with(|result| {
+            if let Some(result) = result {
+                match result {
+                    Ok(_) => {
+                        set_error_message.set(None);
+                        set_poll_trigger.update(|n| *n += 1);
+                    }
+                    Err(e) => {
+                        set_error_message.set(Some(format!("Failed to leave queue: {}", e)));
+                    }
                 }
             }
-        }
+        });
     });
 
     let on_join = move |_| {

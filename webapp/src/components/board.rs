@@ -8,11 +8,14 @@ use uuid::Uuid;
 #[component]
 pub fn GameBoard(
     game_id: Uuid,
-    game_state: GameStateResponse,
     #[prop(optional)] on_move: Option<Callback<(Coord, Coord)>>,
 ) -> impl IntoView {
-    let board = game_state.game.board;
     let app_state = use_context::<AppState>().expect("AppState should be provided");
+
+    // Get reactive game state signal
+    let game_state_signal = app_state
+        .get_game_signal(game_id)
+        .expect("Game state should exist");
 
     // Single selection state for clean click-to-move
     let (selected_cell, set_selected_cell) = signal(Option::<Coord>::None);
@@ -20,13 +23,21 @@ pub fn GameBoard(
     // Optimistic move tracking (show move immediately before server confirms)
     let (optimistic_move, set_optimistic_move) = signal(Option::<(Coord, Coord)>::None);
 
-    // Derived state from app_state
-    let current_player_id = app_state.current_player_id.get();
-    let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
-    let has_pending_move = my_pid
-        .map(|pid| game_state.game.pending_moves.iter().any(|mv| mv.who == pid))
-        .unwrap_or(false);
-    let can_interact = my_pid.is_some() && !has_pending_move;
+    // Derived reactive state - recomputes when game_state or player changes
+    // CRITICAL: Create Memo ONCE outside the render loop to avoid recreation on every render
+    let can_interact = StoredValue::new(Memo::new(move |_| {
+        if let Some(game_state) = game_state_signal.get() {
+            let current_player_id = app_state.current_player_id.get();
+            let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
+            let has_pending_move = my_pid
+                .map(|pid| game_state.game.pending_moves.iter().any(|mv| mv.who == pid))
+                .unwrap_or(false);
+            my_pid.is_some() && !has_pending_move
+        } else {
+            false
+        }
+    }));
+    let can_interact = can_interact.get_value();
 
     // Move submission action
     let app_state_for_move = app_state.clone();
@@ -40,8 +51,9 @@ pub fn GameBoard(
     });
 
     // Clean click handler with optimistic update
+    let can_interact_for_click = can_interact.clone();
     let handle_cell_click = move |coord: Coord| {
-        if !can_interact {
+        if !can_interact_for_click.get() {
             return;
         }
 
@@ -70,128 +82,139 @@ pub fn GameBoard(
 
     // Clear optimistic move on server response
     Effect::new(move |_| {
-        if move_action.value().get().is_some() {
-            set_optimistic_move.set(None);
-        }
+        move_action.value().with(|result| {
+            if result.is_some() {
+                set_optimistic_move.set(None);
+            }
+        });
     });
 
     // Get visual indicators from app state
+    // CRITICAL: Create Memos ONCE outside the render loop
     let app_state_for_move_events = app_state.clone();
-    let move_events = Memo::new(move |_| {
+    let move_events = StoredValue::new(Memo::new(move |_| {
         let events = app_state_for_move_events.get_move_events(game_id);
         let now = js_sys::Date::now() as u64;
         events
             .into_iter()
             .filter(|e| now - e.timestamp < 3000)
             .collect::<Vec<_>>()
-    });
+    }));
+    let move_events = move_events.get_value();
 
     let app_state_for_conflict_events = app_state.clone();
-    let conflict_events = Memo::new(move |_| {
+    let conflict_events = StoredValue::new(Memo::new(move |_| {
         let events = app_state_for_conflict_events.get_conflict_events(game_id);
         let now = js_sys::Date::now() as u64;
         events
             .into_iter()
             .filter(|e| now - e.timestamp < 2000)
             .collect::<Vec<_>>()
-    });
+    }));
+    let conflict_events = conflict_events.get_value();
 
     view! {
         <div class="game-board-container">
-            // SVG-based board with traditional piece rendering
-            <svg
-                class="game-board-svg"
-                viewBox=format!("0 0 {} {}", board.size.x, board.size.y)
-                style=format!("width: {}em; height: {}em;", board.size.x as f32 * 3.5, board.size.y as f32 * 3.5)
-            >
-                <defs>
-                    <PieceDefs />
-                    <marker id="arrowhead" markerWidth="10" markerHeight="7"
-                            refX="9" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
-                    </marker>
-                </defs>
+            {move || {
+                game_state_signal.get().map(|game_state| {
+                    let board = &game_state.game.board;
+                    view! {
+                        // SVG-based board with traditional piece rendering
+                        <svg
+                            class="game-board-svg"
+                            viewBox=format!("0 0 {} {}", board.size.x, board.size.y)
+                            style=format!("width: {}em; height: {}em;", board.size.x as f32 * 3.5, board.size.y as f32 * 3.5)
+                        >
+                            <defs>
+                                <PieceDefs />
+                                <marker id="arrowhead" markerWidth="10" markerHeight="7"
+                                        refX="9" refY="3.5" orient="auto">
+                                    <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
+                                </marker>
+                            </defs>
 
-                // Board cells and pieces
-                {(0..board.size.y).map(|y| {
-                    (0..board.size.x).map(|x| {
-                        let coord = Coord { x, y };
-                        let cell = board.particles[(x as usize, y as usize)];
-                        let is_automaton = board.automaton_location == coord;
-                        let is_goal = game_state.game.goals.iter().any(|(c, _)| *c == coord);
-                        let goal_player = game_state.game.goals.iter()
-                            .find(|(c, _)| *c == coord)
-                            .map(|(_, pid)| pid.0);
-                        let is_selected = selected_cell.get() == Some(coord);
+                            // Board cells and pieces
+                            {(0..board.size.y).map(|y| {
+                                (0..board.size.x).map(|x| {
+                                    let coord = Coord { x, y };
+                                    let cell = board.particles[(x as usize, y as usize)];
+                                    let is_automaton = board.automaton_location == coord;
+                                    let is_goal = game_state.game.goals.iter().any(|(c, _)| *c == coord);
+                                    let goal_player = game_state.game.goals.iter()
+                                        .find(|(c, _)| *c == coord)
+                                        .map(|(_, pid)| pid.0);
+                                    let is_selected = selected_cell.get() == Some(coord);
 
-                        view! {
-                            <BoardCell
-                                coord=coord
-                                particle=cell.what
-                                is_automaton=is_automaton
-                                is_goal=is_goal
-                                goal_player=goal_player
-                                is_selected=is_selected
-                                can_interact=can_interact
-                                on_click=handle_cell_click
-                            />
-                        }
-                    }).collect::<Vec<_>>()
-                }).collect::<Vec<_>>()}
+                                    view! {
+                                        <BoardCell
+                                            coord=coord
+                                            particle=cell.what
+                                            is_automaton=is_automaton
+                                            is_goal=is_goal
+                                            goal_player=goal_player
+                                            is_selected=is_selected
+                                            can_interact=can_interact.get()
+                                            on_click=handle_cell_click
+                                        />
+                                    }
+                                }).collect::<Vec<_>>()
+                            }).collect::<Vec<_>>()}
 
-                // Optimistic move indicator
-                {move || {
-                    optimistic_move.get().map(|(from, to)| {
-                        view! {
-                            <MoveArrow
-                                from=from
-                                to=to
-                                color="#888"
-                                class="optimistic-move"
-                            />
-                        }
-                    })
-                }}
+                            // Optimistic move indicator
+                            {move || {
+                                optimistic_move.get().map(|(from, to)| {
+                                    view! {
+                                        <MoveArrow
+                                            from=from
+                                            to=to
+                                            color="#888"
+                                            class="optimistic-move"
+                                        />
+                                    }
+                                })
+                            }}
 
-                // Confirmed move indicators
-                {move || {
-                    move_events.get().iter().map(|event| {
-                        let success_color = if event.success { "#070" } else { "#f00" };
-                        view! {
-                            <MoveArrow
-                                from=event.from
-                                to=event.to
-                                color=success_color
-                            />
-                        }
-                    }).collect_view()
-                }}
+                            // Confirmed move indicators
+                            {move || {
+                                move_events.get().iter().map(|event| {
+                                    let success_color = if event.success { "#070" } else { "#f00" };
+                                    view! {
+                                        <MoveArrow
+                                            from=event.from
+                                            to=event.to
+                                            color=success_color
+                                        />
+                                    }
+                                }).collect_view()
+                            }}
 
-                // Conflict markers
-                {move || {
-                    conflict_events.get().iter().map(|event| {
-                        view! {
-                            <circle
-                                cx=event.coord.x as f32 + 0.5
-                                cy=event.coord.y as f32 + 0.5
-                                r="0.45"
-                                fill="rgba(200, 0, 0, 0.6)"
-                                class="conflict-pulse"
-                            />
-                        }
-                    }).collect_view()
-                }}
-            </svg>
+                            // Conflict markers
+                            {move || {
+                                conflict_events.get().iter().map(|event| {
+                                    view! {
+                                        <circle
+                                            cx=event.coord.x as f32 + 0.5
+                                            cy=event.coord.y as f32 + 0.5
+                                            r="0.45"
+                                            fill="rgba(200, 0, 0, 0.6)"
+                                            class="conflict-pulse"
+                                        />
+                                    }
+                                }).collect_view()
+                            }}
+                        </svg>
 
-            // Status display
-            <BoardStatus
-                has_pending_move=has_pending_move
-                can_interact=can_interact
-                my_pid=my_pid.map(|pid| pid.0)
-                selected_cell=selected_cell.get()
-                on_cancel=move || set_selected_cell.set(None)
-                move_result=move_action.value().get()
-            />
+                        // Status display
+                        <BoardStatus
+                            game_state=game_state
+                            can_interact=can_interact.get()
+                            selected_cell=selected_cell.get()
+                            on_cancel=move || set_selected_cell.set(None)
+                            move_result=move_action.value().get()
+                        />
+                    }
+                })
+            }}
         </div>
     }
 }
@@ -296,15 +319,21 @@ fn BoardCell(
 // Status display component
 #[component]
 fn BoardStatus(
-    has_pending_move: bool,
+    game_state: GameStateResponse,
     can_interact: bool,
-    my_pid: Option<u8>,
     selected_cell: Option<Coord>,
     on_cancel: impl Fn() + 'static + Copy,
     move_result: Option<
         Result<automatafl_api_types::MoveResultResponse, automatafl_backend_client::ClientError>,
     >,
 ) -> impl IntoView {
+    let app_state = use_context::<AppState>().expect("AppState should be provided");
+    let current_player_id = app_state.current_player_id.get();
+    let my_pid = current_player_id.and_then(|id| game_state.player_ids.get(&id).copied());
+    let has_pending_move = my_pid
+        .map(|pid| game_state.game.pending_moves.iter().any(|mv| mv.who == pid))
+        .unwrap_or(false);
+
     view! {
         <div class="board-status">
             {if has_pending_move {

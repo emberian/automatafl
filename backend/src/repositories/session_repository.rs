@@ -48,9 +48,10 @@ impl SessionRepository {
 
     /// Delete all sessions belonging to a player
     pub async fn delete_by_player(&self, player_id: Uuid) -> Result<(), surrealdb::Error> {
+        // FIXED: Use RecordId instead of string
         self.db
             .query("DELETE sessions WHERE player_id = $player_id")
-            .bind(("player_id", player_id.to_string()))
+            .bind(("player_id", RecordId::from_table_key("players", player_id)))
             .await?;
         Ok(())
     }

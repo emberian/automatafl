@@ -805,11 +805,15 @@ impl GameService {
         use crate::db;
 
         // Get all players in the game
+        // FIXED: Use RecordId instead of string
         let mut result = self
             .game_repo
             .db
             .query("SELECT * FROM game_players WHERE game_id = $game_id")
-            .bind(("game_id", game_id.to_string()))
+            .bind((
+                "game_id",
+                surrealdb::RecordId::from_table_key("games", game_id),
+            ))
             .await?;
 
         let game_players: Vec<db::GamePlayerRecord> = result.take(0)?;
@@ -941,12 +945,24 @@ impl GameService {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<GameEvent, ServiceError>> + Send>>, ServiceError>
     {
         let stream = self.game_repo.live_event_stream(game_id).await?;
-        let mapped = stream.map(|result| match result {
-            Ok(record) => Ok(GameEvent {
-                data: serde_json::from_value(record.event).unwrap(),
-                timestamp: Some(record.timestamp),
-            }),
-            Err(err) => Err(ServiceError::from(err)),
+        // FIXED: Handle deserialization errors gracefully instead of unwrap()
+        // Capture game_id by move for the closure
+        let mapped = stream.filter_map(move |result| async move {
+            match result {
+                Ok(record) => {
+                    match serde_json::from_value(record.event) {
+                        Ok(data) => Some(Ok(GameEvent {
+                            data,
+                            timestamp: Some(record.timestamp),
+                        })),
+                        Err(e) => {
+                            tracing::warn!(game_id = %game_id, error = %e, "Failed to deserialize live event, skipping");
+                            None
+                        }
+                    }
+                }
+                Err(err) => Some(Err(ServiceError::from(err))),
+            }
         });
         Ok(Box::pin(mapped))
     }

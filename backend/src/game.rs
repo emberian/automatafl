@@ -25,7 +25,10 @@ pub async fn list_games(State(state): ServerState) -> Json<Vec<GameListItem>> {
         .game_service
         .list_games_with_player_counts()
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|err| {
+            tracing::error!(error = %err, "Failed to list games");
+            Vec::new()
+        });
 
     Json(games)
 }

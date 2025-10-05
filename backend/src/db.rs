@@ -9,9 +9,16 @@ use uuid::Uuid;
 
 pub type Db = Arc<Surreal<Any>>;
 
+/// Extract UUID from RecordId
+/// SAFETY: This unwrap is safe because we only use RecordIds created with
+/// RecordId::from_table_key(table, uuid) which guarantees the key is a UUID
 pub fn as_uuid(id: &RecordId) -> Uuid {
     let key = id.key().into_inner_ref();
-    key.clone().into_value().into_uuid().unwrap().into()
+    key.clone()
+        .into_value()
+        .into_uuid()
+        .expect("RecordId should contain UUID when created from from_table_key")
+        .into()
 }
 
 /// Convert a slice of RecordIds to UUIDs efficiently
@@ -90,6 +97,13 @@ async fn migrate(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
         tracing::info!("Applying database migration v3...");
         apply_v3(db).await?;
         record_migration(db, "v3").await?;
+        applied_any = true;
+    }
+
+    if !versions.iter().any(|v| v == "v4") {
+        tracing::info!("Applying database migration v4...");
+        apply_v4(db).await?;
+        record_migration(db, "v4").await?;
         applied_any = true;
     }
 
@@ -242,6 +256,21 @@ async fn apply_v3(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
     db.query(
         "
         DEFINE FIELD player_id ON TABLE chat_messages TYPE record<players>;
+    ",
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn apply_v4(db: &Surreal<Any>) -> Result<(), surrealdb::Error> {
+    // Add performance indexes for frequently queried columns
+    db.query(
+        "
+        DEFINE INDEX IF NOT EXISTS created_at_idx ON TABLE games COLUMNS created_at;
+        DEFINE INDEX IF NOT EXISTS lifecycle_idx ON TABLE games COLUMNS lifecycle;
+        DEFINE INDEX IF NOT EXISTS expires_at_idx ON TABLE sessions COLUMNS expires_at;
+        DEFINE INDEX IF NOT EXISTS queued_at_idx ON TABLE matchmaking_queue COLUMNS queued_at;
     ",
     )
     .await?;

@@ -24,7 +24,6 @@
 //! while returning clean errors to callers.
 
 use crate::db::Db;
-use serde::Serialize;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -107,6 +106,8 @@ pub async fn create_game_with_players(
     player_count: u8,
     player_uuids: Vec<(uuid::Uuid, u8)>, // (player_id, pid)
 ) -> Result<(), TransactionError> {
+    use surrealdb::RecordId;
+
     let game_state_json = serde_json::to_string(game_state)?;
     let lifecycle_json = serde_json::to_string(lifecycle)?;
     let timestamp = crate::common::timestamp();
@@ -114,30 +115,44 @@ pub async fn create_game_with_players(
     // Start transaction
     db.query("BEGIN TRANSACTION;").await?;
 
-    // Create game with parameterized query
-    db.query(
-        "CREATE games SET id = $id, game_state = $game_state, lifecycle = $lifecycle, \
-         created_at = $created_at, created_by = $created_by, player_count = $player_count",
-    )
-    .bind(("id", game_id.to_string()))
-    .bind(("game_state", game_state_json))
-    .bind(("lifecycle", lifecycle_json))
-    .bind(("created_at", timestamp))
-    .bind(("created_by", creator_id.to_string()))
-    .bind(("player_count", player_count))
-    .await?;
+    let outcome = async {
+        // FIXED: Use RecordId instead of string conversion
+        // Create game with parameterized query
+        db.query(
+            "CREATE games SET id = $id, game_state = $game_state, lifecycle = $lifecycle, \
+             created_at = $created_at, created_by = $created_by, player_count = $player_count",
+        )
+        .bind(("id", RecordId::from_table_key("games", game_id)))
+        .bind(("game_state", game_state_json))
+        .bind(("lifecycle", lifecycle_json))
+        .bind(("created_at", timestamp))
+        .bind(("created_by", RecordId::from_table_key("players", creator_id)))
+        .bind(("player_count", player_count))
+        .await?;
 
-    // Add all players with parameterized queries
-    for (player_uuid, pid) in player_uuids {
-        db.query("CREATE game_players SET game_id = $game_id, player_id = $player_id, player_pid = $player_pid")
-            .bind(("game_id", game_id.to_string()))
-            .bind(("player_id", player_uuid.to_string()))
-            .bind(("player_pid", pid))
-            .await?;
+        // Add all players with parameterized queries using RecordId
+        for (player_uuid, pid) in player_uuids {
+            db.query("CREATE game_players SET game_id = $game_id, player_id = $player_id, player_pid = $player_pid")
+                .bind(("game_id", RecordId::from_table_key("games", game_id)))
+                .bind(("player_id", RecordId::from_table_key("players", player_uuid)))
+                .bind(("player_pid", pid))
+                .await?;
+        }
+        
+        Ok::<(), surrealdb::Error>(())
     }
+    .await;
 
-    // Commit transaction
-    db.query("COMMIT TRANSACTION;").await?;
-
-    Ok(())
+    match outcome {
+        Ok(()) => {
+            // Commit transaction
+            db.query("COMMIT TRANSACTION;").await?;
+            Ok(())
+        }
+        Err(err) => {
+            // Ensure rollback on any error
+            let _ = db.query("ROLLBACK TRANSACTION;").await;
+            Err(TransactionError::DbError(err))
+        }
+    }
 }

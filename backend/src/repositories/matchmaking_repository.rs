@@ -57,10 +57,10 @@ impl MatchmakingRepository {
     /// Remove a batch of players from the queue
     pub async fn remove_players(&self, player_ids: &[Uuid]) -> Result<(), surrealdb::Error> {
         for player_id in player_ids {
-            let _ = self
-                .db
+            // Don't swallow errors - propagate them so callers know if deletion failed
+            self.db
                 .delete::<Option<MatchmakingQueueRecord>>(("matchmaking_queue", *player_id))
-                .await;
+                .await?;
         }
         Ok(())
     }

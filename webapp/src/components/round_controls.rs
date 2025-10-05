@@ -26,16 +26,18 @@ pub fn RoundControls(game_id: Uuid, game_state: GameStateResponse) -> impl IntoV
     });
 
     Effect::new(move |_| {
-        if let Some(result) = complete_round_action.value().get() {
-            match result {
-                Ok(_) => {
-                    set_status.set("✅ Round completed successfully!".to_string());
-                }
-                Err(e) => {
-                    set_status.set(format!("❌ Failed to complete round: {}", e));
+        complete_round_action.value().with(|result| {
+            if let Some(result) = result {
+                match result {
+                    Ok(_) => {
+                        set_status.set("✅ Round completed successfully!".to_string());
+                    }
+                    Err(e) => {
+                        set_status.set(format!("❌ Failed to complete round: {}", e));
+                    }
                 }
             }
-        }
+        });
     });
 
     // Check game state for round completion readiness

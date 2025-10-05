@@ -74,15 +74,47 @@ impl AuthService {
             session_repo,
             session_duration,
         };
+
+        // Create admin account if it doesn't exist
+        // FIXED: Handle missing ADMIN_PASSWORD gracefully with proper error message
         if this
             .player_repo
             .find_by_displayname("admin".to_string())
             .await
             .is_ok_and(|o| o.is_none())
         {
-            this.register("admin".to_string(), "adminnn".to_string(), true)
-                .await
-                .expect("failed to register admin:admin");
+            match std::env::var("ADMIN_PASSWORD") {
+                Ok(admin_password) => {
+                    match this
+                        .register("admin".to_string(), admin_password, true)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!("Admin account created successfully");
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                "Failed to create admin account: {}. Admin features will not be available.",
+                                err
+                            );
+                            tracing::error!("This is a critical error if you need admin access.");
+                        }
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "ADMIN_PASSWORD environment variable not set. Admin account will not be created."
+                    );
+                    tracing::warn!(
+                        "To create an admin account, set ADMIN_PASSWORD and restart the server."
+                    );
+                    tracing::warn!(
+                        "Admin features will not be available until an admin account exists."
+                    );
+                }
+            }
+        } else {
+            tracing::info!("Admin account already exists, skipping creation");
         }
         this
     }
@@ -182,12 +214,13 @@ impl AuthService {
 }
 
 fn validate_password(password: &str) -> Result<(), AuthServiceError> {
-    if password.len() < 7 {
+    // FIXED: Strengthened password requirements for production
+    if password.len() < 12 {
         return Err(AuthServiceError::ValidationError(
-            "Password must be at least 7 characters long".to_string(),
+            "Password must be at least 12 characters long".to_string(),
         ));
     }
-    if password.len() > 64 {
+    if password.len() > 128 {
         return Err(AuthServiceError::ValidationError(
             "Password must not exceed 128 characters".to_string(),
         ));
@@ -197,6 +230,18 @@ fn validate_password(password: &str) -> Result<(), AuthServiceError> {
             "Password cannot contain control characters".to_string(),
         ));
     }
+
+    // Check for complexity - at least one uppercase, lowercase, digit
+    let has_upper = password.chars().any(|c| c.is_uppercase());
+    let has_lower = password.chars().any(|c| c.is_lowercase());
+    let has_digit = password.chars().any(|c| c.is_numeric());
+
+    if !has_upper || !has_lower || !has_digit {
+        return Err(AuthServiceError::ValidationError(
+            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".to_string(),
+        ));
+    }
+
     Ok(())
 }
 

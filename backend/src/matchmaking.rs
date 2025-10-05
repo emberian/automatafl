@@ -1,6 +1,6 @@
 //! Matchmaking and leaderboard endpoints
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{Json, extract::State, http::StatusCode};
 use uuid::Uuid;
@@ -12,13 +12,6 @@ use crate::common::{AppError, AuthPlayer, ServerState, timestamp};
 use crate::db::as_uuid;
 use crate::middleware;
 use crate::services::{MatchmakingServiceError, PlayerServiceError, QueueEntry};
-
-// ============================================================================
-// ELO Rating System
-// ============================================================================
-
-// Re-export EloChange from api_types
-pub use automatafl_api_types::EloChange;
 
 // ============================================================================
 // Leaderboard Endpoints

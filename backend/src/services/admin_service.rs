@@ -7,7 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    common::{GameLifecycleState, timestamp},
+    common::timestamp,
     db::{
         ChatMessageRecord, GameEventRecord, GameRecord, PlayerRecord, PlayerStatsRecord,
         SessionRecord, SnapshotRecord, as_uuid,

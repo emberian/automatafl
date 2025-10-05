@@ -8,11 +8,10 @@ pub fn LoginPage() -> impl IntoView {
     let navigate = use_navigate();
     let toast = use_toast();
 
-    // Redirect if already logged in
-    let app_state_for_redirect = app_state.clone();
+    // Redirect if already logged in - only track is_authenticated signal
     let navigate_for_redirect = navigate.clone();
     Effect::new(move |_| {
-        if app_state_for_redirect.is_authenticated.get() {
+        if app_state.is_authenticated.get() {
             navigate_for_redirect("/", Default::default());
         }
     });
@@ -35,8 +34,8 @@ pub fn LoginPage() -> impl IntoView {
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
 
-        let displayname_val = displayname.get();
-        let password_val = password.get();
+        let displayname_val = displayname.get_untracked();
+        let password_val = password.get_untracked();
 
         if displayname_val.is_empty() || password_val.is_empty() {
             set_error.set(Some("Display name and password are required".to_string()));
@@ -47,26 +46,27 @@ pub fn LoginPage() -> impl IntoView {
         login_action.dispatch((displayname_val, password_val));
     };
 
-    let app_state_for_login = app_state.clone();
-    let navigate_for_login = navigate.clone();
-    let toast_for_login = toast.clone();
     Effect::new(move |_| {
-        match login_action.value().get() {
-            Some(Ok(login_response)) => {
-                app_state_for_login.login(
-                    login_response.session_id,
-                    login_response.player_id,
-                    login_response.is_admin,
-                );
-                toast_for_login.success("Login successful! Redirecting...");
-                navigate_for_login("/", Default::default());
+        // CRITICAL: Call .with() to subscribe to value changes in a single reactive read
+        // Previously this was creating TWO subscriptions (value() + get()) causing double-renders
+        login_action.value().with(|result| {
+            match result {
+                Some(Ok(login_response)) => {
+                    app_state.login(
+                        login_response.session_id,
+                        login_response.player_id,
+                        login_response.is_admin,
+                    );
+                    toast.success("Login successful! Redirecting...");
+                    navigate("/", Default::default());
+                }
+                Some(Err(e)) => {
+                    toast.error(format!("Login failed: {}", e));
+                    set_error.set(None); // Clear inline error if present
+                }
+                None => {}
             }
-            Some(Err(e)) => {
-                toast_for_login.error(format!("Login failed: {}", e));
-                set_error.set(None); // Clear inline error if present
-            }
-            None => {}
-        }
+        });
     });
 
     view! {
@@ -82,8 +82,8 @@ pub fn LoginPage() -> impl IntoView {
                             id="displayname"
                             class="form-input"
                             placeholder="Enter your display name"
-                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
                             prop:value=displayname
+                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
                         />
                     </div>
 
@@ -94,8 +94,8 @@ pub fn LoginPage() -> impl IntoView {
                             id="password"
                             class="form-input"
                             placeholder="Enter your password"
-                            on:input=move |ev| set_password.set(event_target_value(&ev))
                             prop:value=password
+                            on:input=move |ev| set_password.set(event_target_value(&ev))
                         />
                     </div>
 
@@ -106,7 +106,7 @@ pub fn LoginPage() -> impl IntoView {
                     <button
                         type="submit"
                         class="submit-button"
-                        disabled=move || login_action.pending().get()
+                        disabled=login_action.pending()
                     >
                         {move || if login_action.pending().get() { "Logging in..." } else { "Login" }}
                     </button>
@@ -126,11 +126,10 @@ pub fn RegisterPage() -> impl IntoView {
     let navigate = use_navigate();
     let toast = use_toast();
 
-    // Redirect if already logged in
-    let app_state_for_redirect = app_state.clone();
+    // Redirect if already logged in - only track is_authenticated signal
     let navigate_for_redirect = navigate.clone();
     Effect::new(move |_| {
-        if app_state_for_redirect.is_authenticated.get() {
+        if app_state.is_authenticated.get() {
             navigate_for_redirect("/", Default::default());
         }
     });
@@ -140,9 +139,8 @@ pub fn RegisterPage() -> impl IntoView {
     let (confirm_password, set_confirm_password) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
 
-    let app_state_for_register_action = app_state.clone();
     let register_action = Action::new_local(move |(dn, pw): &(String, String)| {
-        let app_state = app_state_for_register_action.clone();
+        let app_state = app_state.clone();
         let dn = dn.clone();
         let pw = pw.clone();
         async move {
@@ -154,9 +152,9 @@ pub fn RegisterPage() -> impl IntoView {
     let on_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
 
-        let displayname_val = displayname.get();
-        let password_val = password.get();
-        let confirm_password_val = confirm_password.get();
+        let displayname_val = displayname.get_untracked();
+        let password_val = password.get_untracked();
+        let confirm_password_val = confirm_password.get_untracked();
 
         // Validation
         if displayname_val.is_empty() || password_val.is_empty() {
@@ -187,26 +185,30 @@ pub fn RegisterPage() -> impl IntoView {
 
     let navigate_clone = navigate.clone();
     Effect::new(move |_| {
-        match register_action.value().get() {
-            Some(Ok(_register_response)) => {
-                toast.success("Account created successfully! Redirecting to login...");
-                set_error.set(None);
+        // CRITICAL: Call .with() to subscribe to value changes in a single reactive read
+        // Previously this was creating TWO subscriptions (value() + get()) causing double-renders
+        register_action.value().with(|result| {
+            match result {
+                Some(Ok(_register_response)) => {
+                    toast.success("Account created successfully! Redirecting to login...");
+                    set_error.set(None);
 
-                // Redirect to login after 2 seconds
-                let nav = navigate_clone.clone();
-                set_timeout(
-                    move || {
-                        nav("/login", Default::default());
-                    },
-                    std::time::Duration::from_secs(2),
-                );
+                    // Redirect to login after 2 seconds
+                    let nav = navigate_clone.clone();
+                    set_timeout(
+                        move || {
+                            nav("/login", Default::default());
+                        },
+                        std::time::Duration::from_secs(2),
+                    );
+                }
+                Some(Err(e)) => {
+                    toast.error(format!("Registration failed: {}", e));
+                    set_error.set(None);
+                }
+                None => {}
             }
-            Some(Err(e)) => {
-                toast.error(format!("Registration failed: {}", e));
-                set_error.set(None);
-            }
-            None => {}
-        }
+        });
     });
 
     view! {
@@ -223,8 +225,8 @@ pub fn RegisterPage() -> impl IntoView {
                             id="displayname"
                             class="form-input"
                             placeholder="Choose a display name (min 3 characters)"
-                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
                             prop:value=displayname
+                            on:input=move |ev| set_displayname.set(event_target_value(&ev))
                         />
                         <small class="form-hint">"This will be your name in games"</small>
                     </div>
@@ -236,8 +238,8 @@ pub fn RegisterPage() -> impl IntoView {
                             id="password"
                             class="form-input"
                             placeholder="Create a password (min 6 characters)"
-                            on:input=move |ev| set_password.set(event_target_value(&ev))
                             prop:value=password
+                            on:input=move |ev| set_password.set(event_target_value(&ev))
                         />
                     </div>
 
@@ -248,8 +250,8 @@ pub fn RegisterPage() -> impl IntoView {
                             id="confirm-password"
                             class="form-input"
                             placeholder="Re-enter your password"
-                            on:input=move |ev| set_confirm_password.set(event_target_value(&ev))
                             prop:value=confirm_password
+                            on:input=move |ev| set_confirm_password.set(event_target_value(&ev))
                         />
                     </div>
 
@@ -260,7 +262,7 @@ pub fn RegisterPage() -> impl IntoView {
                     <button
                         type="submit"
                         class="submit-button"
-                        disabled=move || register_action.pending().get()
+                        disabled=register_action.pending()
                     >
                         {move || if register_action.pending().get() { "Creating Account..." } else { "Register" }}
                     </button>

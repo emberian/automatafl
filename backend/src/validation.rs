@@ -59,9 +59,15 @@ pub fn validate_username(username: &str) -> Result<(), AppError> {
     }
 
     // Must start with alphanumeric
-    if !username.chars().next().unwrap().is_alphanumeric() {
+    if let Some(first_char) = username.chars().next() {
+        if !first_char.is_alphanumeric() {
+            return Err(AppError::ValidationError(
+                "Username must start with a letter or number".to_string(),
+            ));
+        }
+    } else {
         return Err(AppError::ValidationError(
-            "Username must start with a letter or number".to_string(),
+            "Username cannot be empty".to_string(),
         ));
     }
 
@@ -89,6 +95,7 @@ pub fn validate_bio(bio: &str) -> Result<(), AppError> {
 }
 
 /// Validate avatar URL
+/// In production, only HTTPS is allowed to prevent mixed content warnings
 pub fn validate_avatar_url(url: &str) -> Result<(), AppError> {
     if url.is_empty() {
         return Ok(()); // Empty is OK (optional field)
@@ -100,11 +107,22 @@ pub fn validate_avatar_url(url: &str) -> Result<(), AppError> {
         ));
     }
 
-    // Basic URL validation
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AppError::ValidationError(
-            "Avatar URL must start with http:// or https://".to_string(),
-        ));
+    // Production: require HTTPS for security (prevent mixed content)
+    // Development: allow HTTP for testing
+    if cfg!(debug_assertions) {
+        // Development: allow both HTTP and HTTPS
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(AppError::ValidationError(
+                "Avatar URL must start with http:// or https://".to_string(),
+            ));
+        }
+    } else {
+        // Production: HTTPS only
+        if !url.starts_with("https://") {
+            return Err(AppError::ValidationError(
+                "Avatar URL must use HTTPS (https://) in production".to_string(),
+            ));
+        }
     }
 
     Ok(())

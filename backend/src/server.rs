@@ -437,7 +437,7 @@ fn setup_middleware(app: Router<Arc<AppState>>, _config: &Config) -> Router<Arc<
                 // Development: Allow localhost origins
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-                        origin.as_bytes().starts_with(b"http://localhost.:")
+                        origin.as_bytes().starts_with(b"http://localhost:")
                             || origin.as_bytes().starts_with(b"http://127.0.0.1:")
                     }))
                     .allow_methods([
@@ -520,6 +520,7 @@ async fn init_app_state(config: &Config) -> Result<Arc<AppState>, Box<dyn std::e
         player_service,
         matchmaking_service,
         admin_service,
+        ws_connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
     Ok(app_state)
@@ -551,6 +552,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn background tasks
     let matchmaking_handle = tokio::spawn(matchmaking::matchmaking_task(app_state.clone()));
     let rate_limiter_cleanup = middleware::spawn_rate_limiter_cleanup();
+    let session_cleanup_handle = spawn_session_cleanup_task(app_state.clone());
 
     let addr = config.bind_address;
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -568,9 +570,48 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Cleanup background tasks
     matchmaking_handle.abort();
     rate_limiter_cleanup.abort();
+    session_cleanup_handle.abort();
 
     tracing::info!("Server shutdown complete");
     Ok(())
+}
+
+/// Spawn background task to automatically cleanup expired sessions
+/// CRITICAL: Without this, expired sessions accumulate causing memory leaks
+fn spawn_session_cleanup_task(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Run cleanup every hour
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+
+        tracing::info!("Session cleanup task started (runs every hour)");
+
+        loop {
+            interval.tick().await;
+
+            let now = crate::common::timestamp();
+            match state.auth_service.cleanup_expired(now).await {
+                Ok(deleted_count) => {
+                    if deleted_count > 0 {
+                        tracing::info!(
+                            "Session cleanup: removed {} expired sessions",
+                            deleted_count
+                        );
+
+                        metrics::counter!("sessions_cleaned_total", &[("reason", "expired")])
+                            .increment(deleted_count);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Session cleanup task failed: {}", e);
+                    metrics::counter!(
+                        "session_cleanup_errors_total",
+                        &[("error", "cleanup_failed")]
+                    )
+                    .increment(1);
+                }
+            }
+        }
+    })
 }
 
 /// Handle graceful shutdown signals
