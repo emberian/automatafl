@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn test_sequential_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
 
         let mut generator = SequentialGen::new(
             vec![
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn test_weighted_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
 
         let mut generator = WeightedGen::with_seed(
             vec![
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn test_round_robin_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
 
         let mut generator = RoundRobinGen::new(vec![
             Box::new(RandomMoveGen::new(42)),
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn test_filtered_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
 
         // Filter to only allow moves by player 0
         let mut generator = FilteredGen::new(

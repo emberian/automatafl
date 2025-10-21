@@ -1,7 +1,13 @@
 use automatafl_logic::*;
 
 fn main() {
-    let mut game = Game::new(Board::stock_two_player(), 2, true);
+    let mut game = Game::new(
+        Board::stock_two_player(),
+        2,
+        true,
+        MergeResolutionMode::BunchedStacking,
+        CycleBehaviorMode::RotatePieces,
+    );
     let mut line = String::new();
     let stdin = std::io::stdin();
     while !game.winner.is_some() {

@@ -187,21 +187,21 @@ fn bench_game_creation(c: &mut Criterion) {
     group.bench_function("new_game_small", |b| {
         b.iter(|| {
             let board = Board::stock_testing();
-            Game::new(black_box(board), black_box(2), black_box(true))
+            Game::new_default_modes(black_box(board), black_box(2), black_box(true))
         })
     });
 
     group.bench_function("new_game_large", |b| {
         b.iter(|| {
             let board = Board::stock_two_player();
-            Game::new(black_box(board), black_box(2), black_box(true))
+            Game::new_default_modes(black_box(board), black_box(2), black_box(true))
         })
     });
 
     group.bench_function("new_game_with_goals", |b| {
         b.iter(|| {
             let board = Board::stock_two_player();
-            let mut game = Game::new(black_box(board), black_box(2), black_box(true));
+            let mut game = Game::new_default_modes(black_box(board), black_box(2), black_box(true));
             game.goals.push((Coord { x: 0, y: 0 }, Pid(0)));
             game.goals.push((Coord { x: 10, y: 10 }, Pid(1)));
             game
@@ -220,7 +220,7 @@ fn bench_game_propose_move(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 let m = Move {
@@ -240,7 +240,7 @@ fn bench_game_propose_move(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 let m = Move {
@@ -260,7 +260,7 @@ fn bench_game_propose_move(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 let m = Move {
@@ -280,7 +280,7 @@ fn bench_game_propose_move(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 let m = Move {
@@ -306,7 +306,7 @@ fn bench_automaton_operations(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 game.update_automaton();
@@ -320,7 +320,7 @@ fn bench_automaton_operations(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_two_player();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 game.update_automaton();
@@ -334,7 +334,7 @@ fn bench_automaton_operations(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, false)
+                Game::new_default_modes(board, 2, false)
             },
             |mut game| {
                 game.update_automaton();
@@ -356,7 +356,7 @@ fn bench_conflict_resolution(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let mut game = Game::new(board, 2, true);
+                let mut game = Game::new_default_modes(board, 2, true);
                 game.propose_move(Move {
                     who: Pid(0),
                     from: Coord { x: 0, y: 0 },
@@ -382,7 +382,7 @@ fn bench_conflict_resolution(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let mut game = Game::new(board, 2, true);
+                let mut game = Game::new_default_modes(board, 2, true);
                 game.propose_move(Move {
                     who: Pid(0),
                     from: Coord { x: 0, y: 0 },
@@ -408,7 +408,7 @@ fn bench_conflict_resolution(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let mut game = Game::new(board, 2, true);
+                let mut game = Game::new_default_modes(board, 2, true);
                 game.propose_move(Move {
                     who: Pid(0),
                     from: Coord { x: 0, y: 0 },
@@ -441,7 +441,7 @@ fn bench_apply_moves(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let game = Game::new(board, 2, true);
+                let game = Game::new_default_modes(board, 2, true);
                 let moves = smallvec::smallvec![Move {
                     who: Pid(0),
                     from: Coord { x: 0, y: 0 },
@@ -462,7 +462,7 @@ fn bench_apply_moves(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let game = Game::new(board, 2, true);
+                let game = Game::new_default_modes(board, 2, true);
                 let moves = smallvec::smallvec![
                     Move {
                         who: Pid(0),
@@ -495,7 +495,7 @@ fn bench_apply_moves(c: &mut Criterion) {
                 board.place(Coord { x: 1, y: 3 }, Particle::Repulsor);
                 board.place(Coord { x: 2, y: 3 }, Particle::Repulsor);
 
-                let game = Game::new(board, 2, true);
+                let game = Game::new_default_modes(board, 2, true);
                 let moves = smallvec::smallvec![Move {
                     who: Pid(0),
                     from: Coord { x: 0, y: 3 },
@@ -530,7 +530,7 @@ fn bench_complete_round(c: &mut Criterion) {
                         } else {
                             Board::stock_two_player()
                         };
-                        let mut game = Game::new(board, 2, true);
+                        let mut game = Game::new_default_modes(board, 2, true);
                         game.propose_move(Move {
                             who: Pid(0),
                             from: Coord { x: 0, y: 0 },
@@ -570,7 +570,7 @@ fn bench_incomplete_round(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                let mut game = Game::new(board, 2, true);
+                let mut game = Game::new_default_modes(board, 2, true);
                 // Only one player submits
                 game.propose_move(Move {
                     who: Pid(0),
@@ -599,7 +599,7 @@ fn bench_full_game(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 for round in 0..5 {
@@ -643,7 +643,7 @@ fn bench_full_game(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_testing();
-                Game::new(board, 2, true)
+                Game::new_default_modes(board, 2, true)
             },
             |mut game| {
                 for round in 0..10 {
@@ -702,13 +702,13 @@ fn bench_clone_operations(c: &mut Criterion) {
 
     group.bench_function("clone_game_small", |b| {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
         b.iter(|| black_box(&game).clone())
     });
 
     group.bench_function("clone_game_large", |b| {
         let board = Board::stock_two_player();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
         b.iter(|| black_box(&game).clone())
     });
 
@@ -793,7 +793,7 @@ fn bench_multi_player_scenarios(c: &mut Criterion) {
     group.bench_function("create_32_player_game", |b| {
         b.iter(|| {
             let board = create_large_board(127, 127, 32, 0.3, 42);
-            Game::new(black_box(board), black_box(32), black_box(true))
+            Game::new_default_modes(black_box(board), black_box(32), black_box(true))
         })
     });
 
@@ -801,7 +801,7 @@ fn bench_multi_player_scenarios(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_large_board(64, 64, 32, 0.3, 42);
-                let game = Game::new(board, 32, true);
+                let game = Game::new_default_modes(board, 32, true);
                 let move_gen = RandomMoveGen::new(42);
                 (game, move_gen)
             },
@@ -820,7 +820,7 @@ fn bench_multi_player_scenarios(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_large_board(64, 64, 32, 0.3, 42);
-                let mut game = Game::new(board, 32, true);
+                let mut game = Game::new_default_modes(board, 32, true);
                 let mut move_gen = RandomMoveGen::new(42);
                 let moves = move_gen.generate_moves(&game);
                 for m in moves {
@@ -848,7 +848,7 @@ fn bench_stress_test_scenarios(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_stress_test_board(StressTestScenario::MaxChain, 31);
-                let game = Game::new(board, 4, true);
+                let game = Game::new_default_modes(board, 4, true);
                 let mut move_gen = ChainMakingGen::new(42);
                 let moves = move_gen.generate_moves(&game);
                 (game, moves)
@@ -865,7 +865,7 @@ fn bench_stress_test_scenarios(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_stress_test_board(StressTestScenario::DenseConflictZone, 31);
-                let mut game = Game::new(board, 8, true);
+                let mut game = Game::new_default_modes(board, 8, true);
                 let mut move_gen = ConflictSeekingGen::new(42);
                 let moves = move_gen.generate_moves(&game);
                 for m in moves {
@@ -885,7 +885,7 @@ fn bench_stress_test_scenarios(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_stress_test_board(StressTestScenario::NestedCycles, 31);
-                let game = Game::new(board, 4, true);
+                let game = Game::new_default_modes(board, 4, true);
                 let mut move_gen = ChainMakingGen::new(42);
                 let moves = move_gen.generate_moves(&game);
                 (game, moves)
@@ -906,27 +906,27 @@ fn bench_move_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("move_generation");
 
     let board = create_large_board(64, 64, 8, 0.3, 42);
-    let game = Game::new(board, 8, true);
+    let game = Game::new_default_modes(board, 8, true);
 
     group.bench_function("random_move_gen", |b| {
         let mut move_gen = RandomMoveGen::new(42);
         b.iter(|| move_gen.generate_moves(black_box(&game)))
     });
 
-    group.bench_function("conflict_seeking_gen", |b| {
-        let mut move_gen = ConflictSeekingGen::new(42);
-        b.iter(|| move_gen.generate_moves(black_box(&game)))
-    });
+    // group.bench_function("conflict_seeking_gen", |b| {
+    //     let mut move_gen = ConflictSeekingGen::new(42);
+    //     b.iter(|| move_gen.generate_moves(black_box(&game)))
+    // });
 
-    group.bench_function("chain_making_gen", |b| {
-        let mut move_gen = ChainMakingGen::new(42);
-        b.iter(|| move_gen.generate_moves(black_box(&game)))
-    });
+    // group.bench_function("chain_making_gen", |b| {
+    //     let mut move_gen = ChainMakingGen::new(42);
+    //     b.iter(|| move_gen.generate_moves(black_box(&game)))
+    // });
 
-    group.bench_function("goal_oriented_gen", |b| {
-        let mut move_gen = GoalOrientedGen::new(42);
-        b.iter(|| move_gen.generate_moves(black_box(&game)))
-    });
+    // group.bench_function("goal_oriented_gen", |b| {
+    //     let mut move_gen = GoalOrientedGen::new(42);
+    //     b.iter(|| move_gen.generate_moves(black_box(&game)))
+    // });
 
     group.finish();
 }
@@ -940,7 +940,7 @@ fn bench_extended_game_simulation(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = Board::stock_two_player();
-                let game = Game::new(board, 2, true);
+                let game = Game::new_default_modes(board, 2, true);
                 let move_gen = RandomMoveGen::new(42);
                 (game, move_gen)
             },
@@ -962,7 +962,7 @@ fn bench_extended_game_simulation(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let board = create_large_board(64, 64, 8, 0.3, 42);
-                let game = Game::new(board, 8, true);
+                let game = Game::new_default_modes(board, 8, true);
                 let move_gen = RandomMoveGen::new(42);
                 (game, move_gen)
             },

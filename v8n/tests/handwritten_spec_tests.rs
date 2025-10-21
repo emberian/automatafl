@@ -30,13 +30,13 @@ fn expect_automaton_move(game: &mut Game, by: Delta) -> AutMoveTest {
 }
 
 fn testing_game() -> Game {
-    Game::new(Board::stock_testing_empty(), 2, true)
+    Game::new_default_modes(Board::stock_testing_empty(), 2, true)
 }
 
 #[test]
 fn automaton_stays_put() -> AutMoveTest {
     let board = Board::stock_two_player();
-    let mut game = Game::new(board, 2, true);
+    let mut game = Game::new_default_modes(board, 2, true);
     expect_automaton_move(&mut game, Delta::ZERO)
 }
 
@@ -143,7 +143,7 @@ fn trapped_all_sides() -> AutMoveTest {
 
 #[test]
 fn conflict_resolution_basic() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     // Place pieces for conflict
     game.board.place(Coord { x: 1, y: 2 }, Particle::Attractor);
@@ -188,7 +188,7 @@ fn conflict_resolution_basic() {
 
 #[test]
 fn conflict_resolution_source_conflict() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -224,7 +224,7 @@ fn conflict_resolution_source_conflict() {
 
 #[test]
 fn conflict_resolution_locked_players() {
-    let mut game = Game::new(Board::stock_testing(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 3, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -305,7 +305,7 @@ fn conflict_resolution_locked_players() {
 
 #[test]
 fn conflict_resolution_resubmit() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -369,7 +369,7 @@ fn conflict_resolution_resubmit() {
 
 #[test]
 fn move_cycle_basic() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -402,7 +402,7 @@ fn move_cycle_basic() {
 
 #[test]
 fn locked_players_cleared_after_success() {
-    let mut game = Game::new(Board::stock_testing(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 3, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -470,7 +470,7 @@ fn locked_players_cleared_after_success() {
 
 #[test]
 fn pending_moves_cleared_after_successful_round() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -579,7 +579,7 @@ fn automaton_unbalanced_tiebreaker_prefers_closer_repulsor_as_threat() -> AutMov
 
 #[test]
 fn automaton_unbalanced_tiebreaker_prefers_closer_repulsor() -> AutMoveTest {
-    let mut game = Game::new(Board::stock_testing_empty_6(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty_6(), 2, true);
     let loc = game.board.automaton_location;
 
     game.board
@@ -597,7 +597,7 @@ fn automaton_unbalanced_tiebreaker_prefers_closer_repulsor() -> AutMoveTest {
 
 #[test]
 fn automaton_unbalanced_tiebreaker_flees_nearest_threat() -> AutMoveTest {
-    let mut game = Game::new(Board::stock_testing_empty_7(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty_7(), 2, true);
     let loc = game.board.automaton_location;
 
     // X-Axis: Attractor at dist 3, Repulsor at dist 2 (nearer threat)
@@ -633,7 +633,7 @@ fn automaton_flees_adjacent_repulsor() -> AutMoveTest {
 
 #[test]
 fn move_cycle_2_swaps() {
-    let mut game = Game::new(Board::stock_testing(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing(), 2, true);
 
     let p0 = Pid(0);
     let p1 = Pid(1);
@@ -667,16 +667,17 @@ fn move_cycle_2_swaps() {
         .all(|(_, res)| matches!(res, MoveResult::Applied));
     assert!(all_succeeded, "All moves in a 2-cycle should succeed");
 
-    // The board state should be changed.
+    // NEW SEMANTICS: 2-cycles compose to {A→A}, pieces stay in place
+    // Moves succeed but no material displacement occurs
     assert_eq!(
         game.board.particles[c1.ix()].what,
-        Particle::Repulsor,
-        "c1 should now have Repulsor"
+        Particle::Attractor,
+        "c1 should stay Attractor (2-cycle composition)"
     );
     assert_eq!(
         game.board.particles[c2.ix()].what,
-        Particle::Attractor,
-        "c2 should now have Attractor"
+        Particle::Repulsor,
+        "c2 should stay Repulsor (2-cycle composition)"
     );
 }
 
@@ -697,7 +698,7 @@ fn automaton_avoids_crashing_into_closer_bipolar_attractor() -> AutMoveTest {
 
 #[test]
 fn automaton_column_rule_prefers_y() -> AutMoveTest {
-    let mut game = Game::new(Board::stock_testing_empty_6(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty_6(), 2, true);
     let loc = game.board.automaton_location;
 
     // Both axes have an identical "TowardAttractor" decision of equal priority.
@@ -718,7 +719,7 @@ fn move_chain_into_empty_cycle_no_move() {
     // Moves are: A -> B, B -> C, C -> B
     // The piece at A wants to move to B, but B is part of an empty-square cycle.
     // Per the rules, the piece at A should not move.
-    let mut game = Game::new(Board::stock_testing_empty(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 3, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
     let p2 = Pid(2);
@@ -774,7 +775,7 @@ fn move_cycle_3_swap() {
     // P1: B -> C
     // P2: C -> A
     // This should result in the pieces rotating positions without conflict.
-    let mut game = Game::new(Board::stock_testing_empty(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 3, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
     let p2 = Pid(2);
@@ -834,7 +835,7 @@ fn move_cycle_3_swap() {
 
 #[test]
 fn identical_moves_are_not_a_conflict() {
-    let mut game = Game::new(Board::stock_testing_empty(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 2, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
 
@@ -863,7 +864,7 @@ fn identical_moves_are_not_a_conflict() {
 
 #[test]
 fn identical_moves_can_be_part_of_larger_conflict() {
-    let mut game = Game::new(Board::stock_testing_empty(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 3, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
     let p2 = Pid(2);
@@ -901,7 +902,7 @@ fn identical_moves_can_be_part_of_larger_conflict() {
 
 #[test]
 fn destination_conflict_requires_multiple_pieces() {
-    let mut game = Game::new(Board::stock_testing_empty(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 3, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
     let p2 = Pid(2);
@@ -948,7 +949,7 @@ fn destination_conflict_requires_multiple_pieces() {
 
 #[test]
 fn destination_conflict_triggers_with_multiple_pieces() {
-    let mut game = Game::new(Board::stock_testing_empty(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 2, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
 
@@ -986,7 +987,7 @@ fn destination_conflict_triggers_with_multiple_pieces() {
 #[test]
 fn move_chain_of_pieces() {
     // A -> B -> C. Piece at A should end at C.
-    let mut game = Game::new(Board::stock_testing_empty(), 3, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 3, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
     let p2 = Pid(2); // Unused, just to satisfy player count
@@ -1033,7 +1034,7 @@ fn move_chain_of_pieces() {
 fn move_piece_into_and_out_of_empty_square() {
     // A -> B -> C. Only A has a piece. B is empty.
     // Piece at A should end up at C.
-    let mut game = Game::new(Board::stock_testing_empty(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty(), 2, true);
     let p0 = Pid(0);
     let p1 = Pid(1);
 
@@ -1070,7 +1071,7 @@ fn move_piece_into_and_out_of_empty_square() {
 
 #[test]
 fn automaton_unbalanced_tiebreaker_flees_nearest_threat_explicit() -> AutMoveTest {
-    let mut game = Game::new(Board::stock_testing_empty_7(), 2, true);
+    let mut game = Game::new_default_modes(Board::stock_testing_empty_7(), 2, true);
     let loc = game.board.automaton_location;
 
     // Both attractors are at distance 3.

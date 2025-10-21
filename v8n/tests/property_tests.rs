@@ -107,7 +107,7 @@ proptest! {
         dir in 0usize..4,
     ) {
         let board = Board::stock_testing();
-        let mut game = Game::new(board.clone(), 2, true);
+        let mut game = Game::new_default_modes(board.clone(), 2, true);
 
         let from = Coord { x: fx, y: fy };
         let directions = [Delta::XP, Delta::XN, Delta::YP, Delta::YN];
@@ -140,7 +140,7 @@ proptest! {
         dy in 1u8..3,
     ) {
         let board = Board::stock_testing();
-        let mut game = Game::new(board, 2, true);
+        let mut game = Game::new_default_modes(board, 2, true);
 
         let from = Coord { x: fx, y: fy };
         let to = Coord { x: fx.saturating_add(dx), y: fy.saturating_add(dy) };
@@ -166,7 +166,7 @@ proptest! {
         ty in 10u8..100,
     ) {
         let board = Board::stock_testing();
-        let mut game = Game::new(board, 2, true);
+        let mut game = Game::new_default_modes(board, 2, true);
 
         let from = Coord { x: fx, y: fy };
         let to = Coord { x: tx, y: ty };
@@ -193,7 +193,7 @@ proptest! {
     #[test]
     fn game_preserves_board_size(width in 5u8..32, height in 5u8..32, players in 2u8..8) {
         let board = create_large_board(width, height, players, 0.3, 42);
-        let game = Game::new(board.clone(), players, true);
+        let game = Game::new_default_modes(board.clone(), players, true);
 
         prop_assert_eq!(game.board.size.x, width);
         prop_assert_eq!(game.board.size.y, height);
@@ -212,7 +212,7 @@ proptest! {
     #[test]
     fn game_starts_fresh(width in 5u8..32, height in 5u8..32, players in 2u8..8) {
         let board = create_large_board(width, height, players, 0.3, 42);
-        let game = Game::new(board, players, true);
+        let game = Game::new_default_modes(board, players, true);
         prop_assert_eq!(game.round, RoundState::Fresh);
     }
 
@@ -220,7 +220,7 @@ proptest! {
     #[test]
     fn no_locked_players_at_start(width in 5u8..32, height in 5u8..32, players in 2u8..8) {
         let board = create_large_board(width, height, players, 0.3, 42);
-        let game = Game::new(board, players, true);
+        let game = Game::new_default_modes(board, players, true);
         prop_assert!(game.locked_players.is_empty());
     }
 
@@ -228,7 +228,7 @@ proptest! {
     #[test]
     fn no_pending_moves_at_start(width in 5u8..32, height in 5u8..32, players in 2u8..8) {
         let board = create_large_board(width, height, players, 0.3, 42);
-        let game = Game::new(board, players, true);
+        let game = Game::new_default_modes(board, players, true);
         prop_assert!(game.pending_moves.is_empty());
     }
 }
@@ -245,7 +245,7 @@ proptest! {
         seed in 0u64..1000,
     ) {
         let board = create_large_board(31, 31, players, 0.3, seed);
-        let game = Game::new(board, players, true);
+        let game = Game::new_default_modes(board, players, true);
 
         let mut generator = RandomMoveGen::new(seed);
         let moves = generator.generate_moves(&game);
@@ -262,7 +262,7 @@ proptest! {
         seed in 0u64..1000,
     ) {
         let board = create_large_board(31, 31, players, 0.3, seed);
-        let game = Game::new(board, players, true);
+        let game = Game::new_default_modes(board, players, true);
 
         let mut generator = ChainMakingGen::new(seed);
         let moves = generator.generate_moves(&game);
@@ -279,7 +279,7 @@ proptest! {
     #[test]
     fn sequential_generator_tries_all(seed in 0u64..1000) {
         let board = create_large_board(31, 31, 2, 0.3, seed);
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
 
         let mut generator = SequentialGen::new(
             vec![

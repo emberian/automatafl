@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_random_move_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
         let mut generator = RandomMoveGen::new(42);
 
         let moves = generator.generate_moves(&game);
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn test_chain_making_gen() {
         let board = Board::stock_testing();
-        let game = Game::new(board, 2, true);
+        let game = Game::new_default_modes(board, 2, true);
         let mut generator = ChainMakingGen::new(42);
 
         let moves = generator.generate_moves(&game);

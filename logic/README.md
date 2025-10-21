@@ -100,6 +100,9 @@ If none of the higher priorities above apply, no movement is considered for that
 
 - Hyperautomatafl: 3 or more dimensions
 - Multiautomatafl: more than one automaton
+- Polyautomatafl: multiple particles in one square
 - Flingautomatafl: make the grid continuous and model momentum
+- Mergeautomatafl: permit certain "merge" events with various mechanics (annihilation, particle-type based, bunch before merge, detect during conflict, sequentially schedule)
+- Forkautomatafl: particles enter superposition when forked, have various effects, apply over nondeterminism monad and victory become multiway causality?
 - More interesting particle influence. Maybe they exert different forces on different dimensions? Maybe you can rotate groups of particles?
 - More interesting particle movement. Maybe you can move any particle anywhere, barring conflict. Maybe have different particles have chess rules for them.

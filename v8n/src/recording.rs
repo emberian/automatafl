@@ -142,7 +142,7 @@ impl GameRecording {
     /// This validates that the recording is internally consistent
     /// and returns the final game state after all rounds have been played.
     pub fn replay(&self) -> Result<Game, ReplayError> {
-        let mut game = Game::new(
+        let mut game = Game::new_default_modes(
             self.initial_board.clone(),
             self.player_count,
             self.use_column_rule,

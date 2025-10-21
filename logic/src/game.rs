@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::*;
+use petgraph::algo::tarjan_scc;
+use petgraph::graph::DiGraph;
 use serde::{Deserialize, Serialize};
 use vec_map::VecMap;
 
@@ -17,11 +19,19 @@ pub struct Game {
     pub goals: SmallVec<[(Coord, Pid); 4]>,
     pub player_count: u8,
     pub use_column_rule: bool,
+    pub merge_resolution_mode: MergeResolutionMode,
+    pub cycle_behavior_mode: CycleBehaviorMode,
 }
 
 impl Game {
-    /// Create a new game using the given board.
-    pub fn new(board: Board, player_count: u8, use_column_rule: bool) -> Game {
+    /// Create a new game using the given board with explicit mode configuration.
+    pub fn new(
+        board: Board,
+        player_count: u8,
+        use_column_rule: bool,
+        merge_resolution_mode: MergeResolutionMode,
+        cycle_behavior_mode: CycleBehaviorMode,
+    ) -> Game {
         Game {
             winner: None,
             locked_players: SmallVec::new(),
@@ -31,7 +41,21 @@ impl Game {
             goals: SmallVec::new(),
             player_count,
             use_column_rule,
+            merge_resolution_mode,
+            cycle_behavior_mode,
         }
+    }
+
+    /// Create a new game with default modes (BunchedStacking, RotatePieces).
+    /// Convenience method for backward compatibility and simple use cases.
+    pub fn new_default_modes(board: Board, player_count: u8, use_column_rule: bool) -> Game {
+        Game::new(
+            board,
+            player_count,
+            use_column_rule,
+            MergeResolutionMode::DetectAndConflict,
+            CycleBehaviorMode::RotatePieces,
+        )
     }
 
     /// Propose a move, returning some feedback about it, and true if the state
@@ -115,15 +139,19 @@ impl Game {
         }
 
         // Destination conflicts: Multiple unique, non-vacuum sources to one destination.
-        for (_, moves) in &moves_to {
-            let unique_sources = moves
-                .iter()
-                .filter(|m| !self.board.is_vacuum(m.from))
-                .map(|m| m.from)
-                .collect::<HashSet<_>>();
+        // ONLY check this if merge_resolution_mode is DetectAndConflict
+        // Other modes (Annihilate, BunchBeforeMerge, BunchedStacking) handle merges during apply_moves
+        if self.merge_resolution_mode == MergeResolutionMode::DetectAndConflict {
+            for (_, moves) in &moves_to {
+                let unique_sources = moves
+                    .iter()
+                    .filter(|m| !self.board.is_vacuum(m.from))
+                    .map(|m| m.from)
+                    .collect::<HashSet<_>>();
 
-            if unique_sources.len() > 1 {
-                conflicted_coords.insert(moves[0].to);
+                if unique_sources.len() > 1 {
+                    conflicted_coords.insert(moves[0].to);
+                }
             }
         }
 
@@ -152,19 +180,25 @@ impl Game {
         moves_to_apply: SmallVec<[Move; 2]>,
     ) -> SmallVec<[(Move, MoveResult); 2]> {
         let mut results = SmallVec::<[(Move, MoveResult); 2]>::new();
-
         self.board.clear_marks();
+
+        // --- Phase 1: Pre-computation and Graph Building ---
+
+        // Mark all source squares as passable for occlusion checks
         for m in &moves_to_apply {
             self.board.mark_passable(m.from);
         }
 
-        let mut move_graph = vec_map::VecMap::new();
-        let mut initial_pieces = vec_map::VecMap::new();
+        let mut graph = DiGraph::<Coord, ()>::new();
+        let mut coord_to_node = VecMap::new();
+        let mut initial_piece_coords = VecMap::new();
 
+        // Build the graph from valid, non-occluded moves
         for &m in &moves_to_apply {
             let delta = m.to - m.from;
             let axis = delta.axial_unit();
             let mut is_occluded = false;
+            // Check for pieces blocking the path
             for offset in 1..delta.displacement() {
                 let c = m.from + axis.scale(offset as isize);
                 if self.board.particles[c.ix()].occludes() {
@@ -175,114 +209,241 @@ impl Game {
             }
 
             if !is_occluded {
-                let from_key = m.from.to_key(self.board.size.x);
-                move_graph.insert(from_key, m.to);
+                // Add nodes for `from` and `to` if they don't exist
+                let from_node = *coord_to_node
+                    .entry(m.from.to_key(self.board.size.x))
+                    .or_insert_with(|| graph.add_node(m.from));
+                let to_node = *coord_to_node
+                    .entry(m.to.to_key(self.board.size.x))
+                    .or_insert_with(|| graph.add_node(m.to));
+
+                graph.add_edge(from_node, to_node, ());
+
+                // Record the piece at the source, if any
                 if !self.board.is_vacuum(m.from) {
-                    initial_pieces.insert(from_key, self.board.particles[m.from.ix()].what);
+                    initial_piece_coords
+                        .insert(m.from.to_key(self.board.size.x), self.board.particles[m.from.ix()].what);
                 }
             }
         }
 
-        let mut final_placements = vec_map::VecMap::new();
-        let mut resolved_keys: HashSet<usize> = std::collections::HashSet::new();
+        // --- Phase 2: Graph Decomposition into Strongly Connected Components (SCCs) ---
+        let sccs = tarjan_scc(&graph);
 
-        for (start_key, &_particle) in &initial_pieces {
-            if resolved_keys.contains(&start_key) {
+        // Track where each piece wants to go, along with path information
+        #[derive(Debug, Clone)]
+        struct PieceJourney {
+            particle: Particle,
+            source: Coord,
+            destination: Coord,
+            path: Vec<Coord>, // Full path from source to destination (inclusive)
+            path_length: usize,
+        }
+
+        let mut piece_journeys: Vec<PieceJourney> = Vec::new();
+        let mut resolved_piece_coords = HashSet::new();
+        let mut empty_cycle_coords = HashSet::new();
+
+        // --- Phase 3: Process Cycles (SCCs with size > 1 or self-loops) ---
+        for scc in &sccs {
+            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.find_edge(scc[0], scc[0]).is_some());
+            if !is_cycle {
                 continue;
             }
 
-            // 1. Trace the full path to find its structure (chain, cycle, etc.).
-            let mut path: SmallVec<[usize; 4]> = smallvec::smallvec![start_key];
-            let mut current_key = start_key;
-            let cycle_start_index = loop {
-                if let Some(next_coord) = move_graph.get(current_key) {
-                    let next_key = next_coord.to_key(self.board.size.x);
-                    if let Some(index) = path.iter().position(|&k: &usize| k == next_key) {
-                        break Some(index); // Cycle detected
-                    }
-                    path.push(next_key);
-                    current_key = next_key;
-                } else {
-                    break None; // End of a simple chain
-                }
-            };
+            let scc_coords: HashSet<Coord> = scc.iter().map(|&node| graph[node]).collect();
+            let pieces_in_cycle: Vec<Coord> = initial_piece_coords
+                .keys()
+                .map(|k| Coord { x: (k % self.board.size.x as usize) as u8, y: (k / self.board.size.x as usize) as u8 })
+                .filter(|c| scc_coords.contains(c))
+                .collect();
 
-            // Mark all squares in this path sequence as handled.
-            for k in &path {
-                resolved_keys.insert(*k);
-            }
-
-            // 2. Apply rules based on the path's structure.
-            if let Some(index) = cycle_start_index {
-                // Path has a chain leading into a cycle.
-                let chain_part = &path[..index];
-                let cycle_part = &path[index..];
-
-                // Rule: A piece moving into a cycle of ONLY empty squares does not move.
-                let is_empty_cycle = !cycle_part.iter().any(|k| initial_pieces.contains_key(*k));
-                if let Some(last_piece_idx) = chain_part
-                    .iter()
-                    .rposition(|k| initial_pieces.contains_key(*k))
-                {
-                    if is_empty_cycle {
-                        let key = chain_part[last_piece_idx];
-                        final_placements.insert(key, initial_pieces[&key]); // Piece stays put.
-                    }
-                }
-
-                // Rule: Pieces that start inside a cycle rotate.
-                for i in 0..cycle_part.len() {
-                    let from_k = cycle_part[i];
-                    if let Some(&p) = initial_pieces.get(from_k) {
-                        let to_k = cycle_part[(i + 1) % cycle_part.len()];
-                        final_placements.insert(to_k, p);
-                    }
-                }
-
-                // Rule: Pieces in the chain move towards the cycle.
-                for i in 0..chain_part.len() {
-                    let from_k = chain_part[i];
-                    if final_placements.contains_key(from_k) {
-                        continue;
-                    } // Already handled.
-
-                    if let Some(&p) = initial_pieces.get(from_k) {
-                        // Destination is the next piece in the chain, or the start of the cycle.
-                        let mut dest_k = cycle_part[0];
-                        for j in (i + 1)..chain_part.len() {
-                            if initial_pieces.contains_key(chain_part[j]) {
-                                dest_k = chain_part[j];
-                                break;
-                            }
-                        }
-                        final_placements.insert(dest_k, p);
-                    }
+            if pieces_in_cycle.is_empty() {
+                // Rule: This is an empty cycle. It cannot pull pieces in.
+                for coord in scc_coords {
+                    empty_cycle_coords.insert(coord);
                 }
             } else {
-                // Path is a simple chain with no cycles.
-                for i in 0..path.len() {
-                    let from_k = path[i];
-                    if let Some(&p) = initial_pieces.get(from_k) {
-                        // Destination is the next piece in the chain, or the end of the chain.
-                        let mut dest_k = *path.last().unwrap();
-                        for j in (i + 1)..path.len() {
-                            if initial_pieces.contains_key(path[j]) {
-                                dest_k = path[j];
-                                break;
+                // Rule: This is a populated cycle.
+                // Determine cycle behavior based on cycle length and configuration.
+
+                let is_two_cycle = scc.len() == 2;
+                let should_rotate = !is_two_cycle && self.cycle_behavior_mode == CycleBehaviorMode::RotatePieces;
+
+                for start_coord in pieces_in_cycle {
+                    let piece = self.board.particles[start_coord.ix()].what;
+                    let dest_coord = if should_rotate {
+                        // >2-cycle with RotatePieces mode: advance one position
+                        let start_node = coord_to_node[&start_coord.to_key(self.board.size.x)];
+                        let dest_node = graph.neighbors(start_node).next().unwrap();
+                        graph[dest_node]
+                    } else {
+                        // 2-cycle (always stay) OR >2-cycle with NoMovement mode: piece stays in place
+                        start_coord
+                    };
+
+                    let path = if dest_coord == start_coord {
+                        vec![start_coord]
+                    } else {
+                        vec![start_coord, dest_coord]
+                    };
+
+                    piece_journeys.push(PieceJourney {
+                        particle: piece,
+                        source: start_coord,
+                        destination: dest_coord,
+                        path: path.clone(),
+                        path_length: path.len() - 1,
+                    });
+                    resolved_piece_coords.insert(start_coord);
+                }
+            }
+        }
+
+        // --- Phase 4: Process Chains and pieces moving into cycles ---
+        for (start_coord_key, &particle) in &initial_piece_coords {
+             let start_coord = Coord {
+                x: (start_coord_key % self.board.size.x as usize) as u8,
+                y: (start_coord_key / self.board.size.x as usize) as u8,
+            };
+            if resolved_piece_coords.contains(&start_coord) {
+                continue; // Already handled in a cycle
+            }
+
+            let mut path = vec![start_coord];
+            let mut current_node = coord_to_node[&start_coord_key];
+
+            loop {
+                if let Some(next_node) = graph.neighbors(current_node).next() {
+                    let next_coord = graph[next_node];
+
+                    // Rule: Stop if we hit a square that is the start of another moving piece.
+                    if initial_piece_coords.contains_key(next_coord.to_key(self.board.size.x)) {
+                         path.push(next_coord);
+                         break;
+                    }
+
+                    // Rule: Stop if moving into an empty cycle; nullifies the move.
+                    if empty_cycle_coords.contains(&next_coord) {
+                        path = vec![start_coord]; // Piece stays put
+                        break;
+                    }
+
+                    path.push(next_coord);
+                    current_node = next_node;
+                } else {
+                    // End of a chain
+                    break;
+                }
+            }
+
+            let final_coord = *path.last().unwrap();
+            piece_journeys.push(PieceJourney {
+                particle,
+                source: start_coord,
+                destination: final_coord,
+                path: path.clone(),
+                path_length: path.len() - 1,
+            });
+        }
+
+        // --- Phase 4.5: Merge Resolution ---
+        // Group journeys by destination to detect merges
+        let mut journeys_by_dest: HashMap<usize, Vec<PieceJourney>> = HashMap::new();
+        for journey in piece_journeys {
+            journeys_by_dest
+                .entry(journey.destination.to_key(self.board.size.x))
+                .or_insert_with(Vec::new)
+                .push(journey);
+        }
+
+        // Build final placements, resolving merges based on mode
+        let mut final_placements = VecMap::new();
+        let mut occupied_squares: HashSet<usize> = HashSet::new(); // Track squares occupied during bunching
+
+        for (dest_key, mut journeys) in journeys_by_dest {
+            if journeys.len() == 1 {
+                // No collision - piece moves to destination
+                final_placements.insert(dest_key, journeys[0].particle);
+                occupied_squares.insert(dest_key);
+            } else {
+                // Multiple pieces want same destination - apply merge resolution mode
+                match self.merge_resolution_mode {
+                    MergeResolutionMode::Annihilate => {
+                        // All pieces destroyed - don't add any to final_placements
+                    }
+                    MergeResolutionMode::BunchBeforeMerge => {
+                        // Exactly like BunchedStacking, but merge point acts impassable
+                        // Mark the merge point as occupied BEFORE processing
+                        occupied_squares.insert(dest_key);
+
+                        // Sort by path length: shortest first ("push through" order)
+                        journeys.sort_by_key(|j| j.path_length);
+
+                        // Process each journey in order, placing pieces as far as possible
+                        // (but they can never reach the merge point since it's marked occupied)
+                        for journey in journeys {
+                            let mut placed = false;
+                            for coord in journey.path.iter().rev() {
+                                let coord_key = coord.to_key(self.board.size.x);
+                                if !occupied_squares.contains(&coord_key) {
+                                    final_placements.insert(coord_key, journey.particle);
+                                    occupied_squares.insert(coord_key);
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                            // If entire path occupied, piece stays at source
+                            if !placed && !journey.path.is_empty() {
+                                let source_key = journey.source.to_key(self.board.size.x);
+                                final_placements.insert(source_key, journey.particle);
+                                occupied_squares.insert(source_key);
                             }
                         }
-                        final_placements.insert(dest_k, p);
+                    }
+                    MergeResolutionMode::BunchedStacking => {
+                        // Sort by path length: shortest first ("push through" order)
+                        journeys.sort_by_key(|j| j.path_length);
+
+                        // Process each journey in order, placing pieces as far as possible
+                        for journey in journeys {
+                            // Try to place at each position along path, starting from destination
+                            let mut placed = false;
+                            for coord in journey.path.iter().rev() {
+                                let coord_key = coord.to_key(self.board.size.x);
+                                if !occupied_squares.contains(&coord_key) {
+                                    final_placements.insert(coord_key, journey.particle);
+                                    occupied_squares.insert(coord_key);
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                            // If entire path occupied, piece doesn't move (stays at source, which should be in path[0])
+                            if !placed && !journey.path.is_empty() {
+                                let source_key = journey.source.to_key(self.board.size.x);
+                                final_placements.insert(source_key, journey.particle);
+                                occupied_squares.insert(source_key);
+                            }
+                        }
+                    }
+                    MergeResolutionMode::DetectAndConflict => {
+                        // This should have been caught in resolve_conflicts
+                        // If we get here, treat as annihilate
                     }
                 }
             }
         }
-        for key in initial_pieces.keys() {
-            let coord = Coord {
+
+        // --- Phase 6: Update Board State ---
+        // Clear all original piece locations
+        for key in initial_piece_coords.keys() {
+             let coord = Coord {
                 x: (key % self.board.size.x as usize) as u8,
                 y: (key / self.board.size.x as usize) as u8,
             };
             self.board.place(coord, Particle::Vacuum);
         }
+        // Place pieces in their final destinations
         for (key, particle) in final_placements {
             let coord = Coord {
                 x: (key % self.board.size.x as usize) as u8,
@@ -291,11 +452,12 @@ impl Game {
             self.board.place(coord, particle);
         }
 
-        // Report success for all moves that weren't occluded.
+        // --- Phase 7: Report Final Results ---
         moves_to_apply.into_iter().for_each(|m| {
+            // If the move was occluded, its result is already present.
             let is_occluded = results.iter().any(|(res_m, _)| res_m == &m);
             if !is_occluded {
-                if initial_pieces.contains_key(m.from.to_key(self.board.size.x)) {
+                if initial_piece_coords.contains_key(m.from.to_key(self.board.size.x)) {
                     results.push((m, MoveResult::Applied));
                 } else {
                     results.push((m, MoveResult::NoSource));

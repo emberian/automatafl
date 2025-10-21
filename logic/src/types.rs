@@ -80,6 +80,40 @@ pub enum CompleteRoundFeedback {
     WaitingForPlayers(usize),
 }
 
+/// How to handle merging pathways (multiple chains converging on same destination)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MergeResolutionMode {
+    /// Detect merging pathways in conflict phase and reject them
+    /// Extends the weakest precondition to treat merges as conflicts
+    DetectAndConflict,
+
+    /// Allow merges, but annihilate all pieces that converge
+    /// (Useful for tactical "denial" plays: "If I can't have it, nobody can")
+    Annihilate,
+
+    /// Pieces stop one square BEFORE the merge point if it would cause collision
+    /// Merge point M remains empty when multiple chains converge on it
+    BunchBeforeMerge,
+
+    /// Pieces "stack up" along chains, stopping when they hit another piece
+    /// (@Grissess): Process in reverse path order - each piece moves as far as it can
+    /// First piece along longest path gets M, others compress behind
+    BunchedStacking,
+}
+
+/// How pieces behave when moves form cycles of length >2
+/// Note: 2-cycles always stay in place (unambiguous), 1-cycles forbidden by propose_move
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CycleBehaviorMode {
+    /// Pieces advance one position around cycles of length >2
+    /// (@ember): "Every edge fired once"
+    RotatePieces,
+
+    /// All moves succeed but pieces remain in place even for >2-cycles
+    /// Useful for maintaining board state during automaton step
+    NoMovement,
+}
+
 /// Player ID within a single game
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Pid(pub u8);

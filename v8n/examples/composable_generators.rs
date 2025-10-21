@@ -10,7 +10,7 @@ fn main() {
 
     // Create a test board
     let board = create_large_board(31, 31, 4, 0.3, 42);
-    let game = Game::new(board, 4, true);
+    let game = Game::new_default_modes(board, 4, true);
 
     // Example 1: Sequential fallback
     println!("1. Sequential Generator (tries chain-making, falls back to random)");
