@@ -35,8 +35,10 @@ All players secretly write down a move, which is a sequence of two coordinates (
 
 *Before* moves "resolve", players must check for *conflicts*  a conflict occurs if:
 
-* Multiple players specify the same source, and a piece is at that source; or
+* Multiple players specify the same source; or
 * Multiple players specify the same destination.
+
+Except two players specifying an identical (same sources, same targets) move is not a conflict.
 
 In the event of a conflict, all players involved in the conflict must invalidate their previous move and prepare another move. It is illegal to specify as a source or destination the *exact* coordinate which was conflicted upon (that is, in a source conflict, that piece becomes immovable; in a destination conflict, that square can no longer be moved to); this is often indicated with a temporary marker, such as overturning a conflicted source piece, or putting a coin on the conflicted destination. After all involved players have prepared their respective moves, they are revealed simultaneously, and, if needed, the conflict resolution will recurse (from "before moves resolve" above), possibly with only a subset of involved players.
 
@@ -54,9 +56,11 @@ If all went well, the board is in a new state where a number of pieces not great
 
 The Automaton position is the most important position for all of the following considerations. In particular, it suffices to determine the four nearest pieces along each positive and negative axis and their distances, or the absence of such pieces. When multiple axes conflict, the movement rule closer to first on this list (with the *lower* priority number) overrides; if the same movement rule applies, refer to that rule's text for how to resolve the conflict. In particular, the Automaton only ever moves by at most one step in a cardinal direction. After the Automaton moves, the Win Condition is checked; if no one has yet won, the game resumes from the next turn's Move Entry Phase.
 
+Note that the Automaton can never move into an occupied square. Thus the empty spaces referred to in the below checks.
+
 ##### Priority 1: Opposing Pairs
 
-The single highest priority for the Automaton is to move toward an attractor piece and away from a repulsor *on the same axis* as long as there is *an empty space* in the direction of the attractor (otherwise the axis is invalidated, and the other axis considered). Should both axes have opposing pairs, the Automaton prefers to move along the axis toward the closer attractor; if the attractor are equidistant, the Automaton prefers to move along the axis away from the closer repulsor. Should *that* be equivalent too, the *column rule* is applied <small>(arguably a bug with the initial prototype, but we're going to stick with it I guess)</small> whereupon the Automaton prefers to move along the column instead of the row. <small>Since it is a dubious rule, some people have suggested having the Automaton "freeze" for that step altogether, and thus this is a selectable preference in every game. Seriously just play with the column rule though, it's fine.</small>
+The single highest priority for the Automaton is to move toward an attractor piece and away from a repulsor *on the same axis* as long as there is *an empty space* in the direction of the attractor (otherwise the axis is invalidated, and the other axis considered). Should both axes have opposing pairs, the Automaton prefers to move along the axis toward the closer attractor; if the attractor are equidistant, the Automaton prefers to move along the axis away from the closer repulsor ("flee the nearest threat"). Should *that* be equivalent too, the *column rule* is applied <small>(arguably a bug with the initial prototype, but we're going to stick with it I guess)</small> whereupon the Automaton prefers to move along the column instead of the row. <small>Since it is a dubious rule, some people have suggested having the Automaton "freeze" for that step altogether, and thus this is a selectable preference in every game. Seriously just play with the column rule though, it's fine.</small>
 
 ##### Priority 2: From Repulsor
 

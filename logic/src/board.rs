@@ -132,6 +132,32 @@ impl Board {
         }
     }
 
+    /// Empty 6x6 board containing a lonely automaton.
+    pub fn stock_testing_empty_6() -> Board {
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        };
+        let d = Cell {
+            what: Particle::Automaton,
+            ..o
+        };
+        Board {
+            particles: arr2(&[
+                [o, o, o, o, o, o],
+                [o, o, o, o, o, o],
+                [o, o, d, o, o, o],
+                [o, o, o, o, o, o],
+                [o, o, o, o, o, o],
+                [o, o, o, o, o, o],
+            ]),
+            size: Coord { x: 6, y: 6 },
+            automaton_location: Coord { x: 2, y: 2 },
+            conflict_list: SmallVec::new(),
+            passable_list: SmallVec::new(),
+        }
+    }
     /// Place a particle on the board.
     ///
     /// If the particle isn't the automaton, this increases the matter on the
@@ -186,7 +212,7 @@ impl Board {
         debug_assert_ne!(axis, Delta::ZERO);
 
         for i in 1isize.. {
-            let co = from + axis * i;
+            let co = from + axis.scale(i);
             if !self.inbounds(co) {
                 return Raycast {
                     what: Particle::Vacuum,
@@ -285,7 +311,7 @@ impl Board {
 
         let axis = delta.axial_unit();
         for offset in 1..=delta.displacement() {
-            let c = from + axis * offset as isize;
+            let c = from + axis.scale(offset as isize);
             if self.particles[c.ix()].occludes() {
                 return OccupiedAt(c);
             }

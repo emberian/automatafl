@@ -314,6 +314,7 @@ impl Game {
             let this_pair = (m.from, m.to);
             if seen_pairs.contains(&this_pair) {
                 // multiple players specifying the same move is OK!
+                locked_moves.push(m);
                 continue;
             }
             seen_pairs.push(this_pair);

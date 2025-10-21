@@ -17,6 +17,8 @@
 mod board;
 mod game;
 mod impls;
+#[cfg(test)]
+mod tests;
 mod types;
 
 pub use board::*;
@@ -28,4 +30,3 @@ use tracing::{error, info, instrument, trace};
 use ndarray::arr2;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
-use std::iter::FromIterator;

@@ -9,7 +9,7 @@ authors.workspace = true
 
 [dependencies]
 displaydoc = "0.2"
-smallvec = { version = "1.15", features = ["serde"] }
+smallvec = { version = "1.15", features = ["serde", "drain_filter"] }
 vec_map = { version = "0.8", features = ["serde"] }
 ndarray = { version = "0.16", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

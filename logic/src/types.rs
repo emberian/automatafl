@@ -95,8 +95,8 @@ pub struct Coord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Delta {
-    pub dx: i8,
-    pub dy: i8,
+    pub dx: i16,
+    pub dy: i16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

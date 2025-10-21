@@ -63,17 +63,19 @@ impl Game {
         let res = if self.round == RoundState::GameOver {
             GameOver
         } else if self.locked_players.contains(&m.who) {
-            WaitYourTurn //                XXX XXX XXX  ~~(v)~~ XXX XXX XXX
-        } else if !consider(&mut cfs, &self.board, m.from) | !consider(&mut cfs, &self.board, m.to)
-        {
-            //      load bearing non-short-circuiting  ~~~(^)~~~ to accumulate both coord results!
-            SeeCoords(cfs)
+            WaitYourTurn
         } else if m.from == m.to {
             MustMove
         } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
             AxisAlignedOnly
         } else {
-            Committed
+            let from_ok = consider(&mut cfs, &self.board, m.from);
+            let to_ok = consider(&mut cfs, &self.board, m.to);
+            if from_ok && to_ok {
+                Committed
+            } else {
+                SeeCoords(cfs)
+            }
         };
 
         if res == Committed {
@@ -102,6 +104,7 @@ impl Game {
             let this_pair = (m.from, m.to);
             if seen_pairs.contains(&this_pair) {
                 // multiple players specifying the same move is OK!
+                locked_moves.push(m);
                 continue;
             }
             seen_pairs.push(this_pair);
@@ -109,7 +112,6 @@ impl Game {
             // See if there's a source conflict...
             if seen_from.contains(&m.from) {
                 trace!("marking source conflict on {coord}", coord = m.from);
-                conflict_moves.push(m);
                 self.board.mark_conflict(m.from);
                 conflict = true;
             } else {
@@ -119,7 +121,6 @@ impl Game {
             // Or a dest conflict...
             if seen_to.contains(&m.to) {
                 trace!("marking dest conflict on {coord}", coord = m.to);
-                conflict_moves.push(m);
                 self.board.mark_conflict(m.to);
                 conflict = true;
             } else {
@@ -130,15 +131,10 @@ impl Game {
                 conflict_moves.push(m);
                 // We conflicted with some previous move, pull them out of the
                 // locked list and into the conflict list.
-                locked_moves = SmallVec::from_iter(locked_moves.into_iter().filter_map(|p| {
-                    if p.from == m.from || p.to == m.to {
-                        trace!("caused conflict with player {pid:?}", pid = p.who);
-                        conflict_moves.push(p);
-                        None
-                    } else {
-                        Some(p)
-                    }
-                }));
+                for p in locked_moves.drain_filter(|p| p.from == m.from || p.to == m.to) {
+                    trace!("caused conflict with player {pid:?}", pid = p.who);
+                    conflict_moves.push(p);
+                }
             } else {
                 // We'll consider this move locked unless someone else conflicts with it.
                 locked_moves.push(m);
@@ -161,19 +157,16 @@ impl Game {
 
         match self.resolve_conflicts() {
             Ok(mut moves_to_apply) => {
-                // Lift the moved pieces off the board and mark paths as passable
+                // "Lift the moved pieces off the board" and mark paths as passable
 
                 for m in &moves_to_apply {
                     self.board.mark_passable(m.from);
-                    self.board.mark_passable(m.to); // Align with Python: mark destination too
                 }
 
                 let mut results = SmallVec::with_capacity(moves_to_apply.len());
 
                 while moves_to_apply.len() != 0 {
                     let mut made_progress = false;
-                    // FIXME: does this terminate? how does the python even work? it appears to
-                    // depend critically on passable not mucking with the particle type
                     moves_to_apply.retain(|m| {
                         if self.board.is_vacuum(m.from) {
                             true
@@ -186,7 +179,7 @@ impl Game {
 
                     if !made_progress {
                         for m in moves_to_apply.drain(..) {
-                            results.push((m, MoveResult::NoSource))
+                            results.push((m, MoveResult::NoSource));
                         }
                     }
                 }
@@ -205,7 +198,7 @@ impl Game {
                     }
                     None => {
                         self.board.clear_marks();
-                        self.locked_players.clear(); // Clear locked players for next round
+                        self.locked_players.clear();
                         self.round = RoundState::Fresh;
                     }
                 }

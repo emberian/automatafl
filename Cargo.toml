@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["logic"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Ember Arlynx <ember@lunar.town>", "Graham Northup <grissess@nexusg.org>"]
+license = "Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+automatafl-logic = { path = "logic" }
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
+panic = 'abort'
+codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
