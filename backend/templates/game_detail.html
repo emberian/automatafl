@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Game {{ game_id }} - AutomataFL{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center;">
+    <h2>Game Details</h2>
+    {% match game_state.lifecycle %}
+        {% when GameLifecycle::InProgress %}
+            <span class="auto-refresh">⟳ Auto-refreshing...</span>
+            <meta http-equiv="refresh" content="5">
+        {% when GameLifecycle::Waiting %}
+        {% when GameLifecycle::Finished %}
+    {% endmatch %}
+</div>
+
+<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    <div style="margin: 10px 0;"><strong>Game ID:</strong> <code>{{ game_id }}</code></div>
+    <div style="margin: 10px 0;">
+        <strong>Status:</strong> 
+        {% match game_state.lifecycle %}
+            {% when GameLifecycle::Waiting %}
+                <span style="color: #f39c12;">Waiting for Players</span>
+            {% when GameLifecycle::InProgress %}
+                <span style="color: #27ae60;">In Progress</span>
+            {% when GameLifecycle::Finished %}
+                <span style="color: #95a5a6;">Finished</span>
+        {% endmatch %}
+    </div>
+    <div style="margin: 10px 0;"><strong>Round:</strong> {{ game_state.game.round }}</div>
+    {% if let Some(winner) = game_state.game.winner %}
+    <div style="margin: 10px 0;"><strong>Winner:</strong> Player {{ winner.0 }}</div>
+    {% endif %}
+</div>
+
+<h3>Players</h3>
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 12px; text-align: left;">PID</th>
+            <th style="padding: 12px; text-align: left;">Name</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for (pid, name) in player_names %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 12px;">
+                Player {{ pid.0 }}
+                {% if let Some(my_pid) = player_pid %}
+                    {% if my_pid.0 == pid.0 %}
+                        <span style="color: #667eea; font-weight: bold;"> (You)</span>
+                    {% endif %}
+                {% endif %}
+            </td>
+            <td style="padding: 12px;">{{ name }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h3>Board State</h3>
+<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; overflow-x: auto;">
+    <div style="font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.4; white-space: pre;">Board: {{ game_state.game.board.size.x }}x{{ game_state.game.board.size.y }}
+Automaton: ({{ game_state.game.board.automaton_location.x }}, {{ game_state.game.board.automaton_location.y }})
+Round State: {{ game_state.game.round }}
+
+Legend: A=Automaton, +=Attractor, -=Repulsor, .=Empty</div>
+</div>
+
+{% if is_player %}
+    {% match game_state.lifecycle %}
+        {% when GameLifecycle::Waiting %}
+            <div style="background: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0;">
+                <strong>Waiting for players...</strong> The game will start when all players join.
+            </div>
+        {% when GameLifecycle::InProgress %}
+            <h3>Make Your Move</h3>
+            
+            {% if let Some(pending) = pending_move %}
+                <div style="background: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0;">
+                    <strong>Move Committed:</strong> From ({{ pending.from.x }}, {{ pending.from.y }}) to ({{ pending.to.x }}, {{ pending.to.y }})
+                    <form method="POST" action="/game/{{ game_id }}/move" style="display: inline; margin-left: 10px;">
+                        <button type="submit" style="padding: 5px 10px; font-size: 12px;">Change Move</button>
+                    </form>
+                </div>
+                
+                {% if all_moves_ready %}
+                    <form method="POST" action="/game/{{ game_id }}/complete" style="margin: 20px 0;">
+                        <button type="submit" style="background: #27ae60; font-size: 16px;">Complete Round →</button>
+                    </form>
+                {% else %}
+                    <div style="background: #fffbf0; padding: 15px; margin: 20px 0; border-left: 4px solid #f39c12;">
+                        Waiting for other players to commit their moves...
+                    </div>
+                {% endif %}
+            {% else %}
+                <form method="POST" action="/game/{{ game_id }}/move" style="max-width: 500px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                        <div>
+                            <label>From X (0-10):</label>
+                            <input type="number" name="from_x" min="0" max="10" required>
+                        </div>
+                        <div>
+                            <label>From Y (0-10):</label>
+                            <input type="number" name="from_y" min="0" max="10" required>
+                        </div>
+                        <div>
+                            <label>To X (0-10):</label>
+                            <input type="number" name="to_x" min="0" max="10" required>
+                        </div>
+                        <div>
+                            <label>To Y (0-10):</label>
+                            <input type="number" name="to_y" min="0" max="10" required>
+                        </div>
+                    </div>
+                    <button type="submit">Commit Move</button>
+                </form>
+            {% endif %}
+            
+            <div style="background: #e7f3ff; padding: 15px; margin: 20px 0; border-left: 4px solid #2196f3;">
+                <strong>💡 Tip:</strong> Moves must be along a row or column (like a Rook in chess).
+                <br>Page auto-refreshes every 5 seconds during gameplay.
+            </div>
+        {% when GameLifecycle::Finished %}
+            <div style="background: #f8f9fa; padding: 20px; margin: 20px 0; text-align: center;">
+                <h3 style="margin: 0;">Game Over!</h3>
+                {% if let Some(winner) = game_state.game.winner %}
+                    {% if let Some(my_pid) = player_pid %}
+                        {% if winner.0 == my_pid.0 %}
+                            <p style="font-size: 24px; color: #27ae60; margin: 10px 0;">🎉 You Won!</p>
+                        {% else %}
+                            <p style="font-size: 18px; color: #e74c3c; margin: 10px 0;">Player {{ winner.0 }} won</p>
+                        {% endif %}
+                    {% endif %}
+                {% endif %}
+            </div>
+    {% endmatch %}
+{% else %}
+    {% match game_state.lifecycle %}
+        {% when GameLifecycle::Waiting %}
+            <form method="POST" action="/game/{{ game_id }}/join" style="margin: 20px 0;">
+                <button type="submit" style="background: #27ae60; font-size: 16px;">Join Game</button>
+            </form>
+        {% when GameLifecycle::InProgress %}
+            <div style="background: #fffbf0; border-left: 4px solid #f39c12; padding: 15px; margin: 20px 0;">
+                <strong>Spectator Mode:</strong> This game is in progress. You are viewing as a spectator.
+            </div>
+        {% when GameLifecycle::Finished %}
+            <div style="background: #f8f9fa; padding: 15px; margin: 20px 0;">
+                Game has finished. View results above.
+            </div>
+    {% endmatch %}
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button">Back to Dashboard</a>
+    <a href="/games" class="button" style="background: #95a5a6;">All Games</a>
+</div>
+{% endblock %}
+

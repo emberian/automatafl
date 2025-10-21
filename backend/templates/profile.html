@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}{{ displayname }}'s Profile - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>{{ displayname }}'s Profile</h2>
+
+<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+    {% if let Some(avatar) = avatar_url %}
+    <img src="{{ avatar }}" alt="Avatar" style="width: 100px; height: 100px; border-radius: 50%; margin-bottom: 15px;">
+    {% endif %}
+    
+    <div style="margin: 15px 0;">
+        <strong>Player ID:</strong> <code>{{ player_id }}</code>
+    </div>
+    
+    <div style="margin: 15px 0;">
+        <strong>ELO Rating:</strong> {{ elo_rating }}
+    </div>
+    
+    <div style="margin: 15px 0;">
+        <strong>Member Since:</strong> {{ created_at }}
+    </div>
+    
+    {% if let Some(bio_text) = bio %}
+    <div style="margin: 15px 0;">
+        <strong>Bio:</strong>
+        <p style="margin: 5px 0;">{{ bio_text }}</p>
+    </div>
+    {% endif %}
+</div>
+
+<h3>Statistics</h3>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+        <strong>Games Played:</strong> {{ stats.games_played }}
+    </div>
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+        <strong>Games Won:</strong> {{ stats.games_won }}
+    </div>
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+        <strong>Win Rate:</strong> 
+        {% if stats.games_played > 0 %}
+            {{ (stats.games_won * 100 / stats.games_played) }}%
+        {% else %}
+            0%
+        {% endif %}
+    </div>
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+        <strong>Total Playtime:</strong>
+        {% if stats.total_playtime >= 3600 %}
+            {{ stats.total_playtime / 3600 }}.{{ (stats.total_playtime % 3600) / 360 }} hours
+        {% else %}
+            {{ stats.total_playtime / 60 }} minutes
+        {% endif %}
+    </div>
+</div>
+
+{% if is_own_profile %}
+<h3>Edit Profile</h3>
+<form method="POST" action="/profile/{{ player_id }}" style="max-width: 600px;">
+    <label>Bio (max 500 characters):</label>
+    <textarea name="bio" rows="4" maxlength="500" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit;">{% if let Some(bio_text) = bio %}{{ bio_text }}{% endif %}</textarea>
+    
+    <label style="margin-top: 15px; display: block;">Avatar URL (HTTPS recommended, max 2048 chars):</label>
+    <input type="url" name="avatar_url" value="{% if let Some(avatar) = avatar_url %}{{ avatar }}{% endif %}" maxlength="2048" placeholder="https://example.com/avatar.png" style="width: 100%;">
+    
+    <button type="submit" style="margin-top: 15px;">Update Profile</button>
+</form>
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button">Back to Dashboard</a>
+</div>
+{% endblock %}
+

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Create Game - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>Create New Game</h2>
+
+<p style="margin: 20px 0;">
+    Hello, <strong>{{ displayname }}</strong>! Create a new game and invite others to join.
+</p>
+
+<form method="POST" action="/create-game">
+    <label for="player_count">Number of Players:</label>
+    <select id="player_count" name="player_count" required>
+        <option value="2" selected>2 Players</option>
+        <option value="3">3 Players</option>
+        <option value="4">4 Players</option>
+    </select>
+    
+    <label>
+        <input type="checkbox" name="use_column_rule" value="true">
+        Use Column Rule
+    </label>
+    
+    <button type="submit">Create Game</button>
+</form>
+
+<div style="margin-top: 30px;">
+    <h3>Game Rules</h3>
+    <p style="line-height: 1.8;">
+        AutomataFL is a turn-based strategy game where players guide pieces across a board
+        while an automaton moves according to set rules. The goal is to reach your target
+        positions before your opponents!
+    </p>
+    
+    <ul style="margin: 15px 0; line-height: 1.8;">
+        <li><strong>Standard Mode:</strong> Players move pieces freely</li>
+        <li><strong>Column Rule:</strong> Restricts moves to specific patterns for added challenge</li>
+    </ul>
+</div>
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button" style="background: #95a5a6;">Cancel</a>
+</div>
+{% endblock %}
+

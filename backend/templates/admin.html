@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Panel - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>🔧 Admin Panel</h2>
+
+<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+    <strong>Admin Access:</strong> You have full administrative privileges. This is your system manhole.
+</div>
+
+<h3>Database Statistics</h3>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+        <div style="font-size: 36px; font-weight: bold; color: #667eea;">{{ stats.total_players }}</div>
+        <div style="color: #6c757d; margin-top: 5px;">Total Players</div>
+        <a href="/admin/players" style="font-size: 12px; color: #667eea;">Manage →</a>
+    </div>
+    
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+        <div style="font-size: 36px; font-weight: bold; color: #27ae60;">{{ stats.total_games }}</div>
+        <div style="color: #6c757d; margin-top: 5px;">Total Games</div>
+        <a href="/admin/games" style="font-size: 12px; color: #27ae60;">Manage →</a>
+    </div>
+    
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+        <div style="font-size: 36px; font-weight: bold; color: #f39c12;">{{ stats.active_sessions }}</div>
+        <div style="color: #6c757d; margin-top: 5px;">Active Sessions</div>
+        <a href="/admin/sessions" style="font-size: 12px; color: #f39c12;">Manage →</a>
+    </div>
+    
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center;">
+        <div style="font-size: 36px; font-weight: bold; color: #e74c3c;">{{ stats.queue_size }}</div>
+        <div style="color: #6c757d; margin-top: 5px;">Matchmaking Queue</div>
+        <a href="/admin/queue" style="font-size: 12px; color: #e74c3c;">View →</a>
+    </div>
+</div>
+
+<h3>Administrative Tools</h3>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin: 20px 0;">
+    <a href="/admin/players" class="button" style="width: 100%; background: #667eea; text-align: left; padding: 15px;">
+        <strong>👥 Player Management</strong><br>
+        <span style="font-size: 12px; opacity: 0.9;">View, edit, delete players</span>
+    </a>
+    
+    <a href="/admin/games" class="button" style="width: 100%; background: #27ae60; text-align: left; padding: 15px;">
+        <strong>🎮 Game Management</strong><br>
+        <span style="font-size: 12px; opacity: 0.9;">Force complete, delete games</span>
+    </a>
+    
+    <a href="/admin/sessions" class="button" style="width: 100%; background: #f39c12; text-align: left; padding: 15px;">
+        <strong>🔑 Session Management</strong><br>
+        <span style="font-size: 12px; opacity: 0.9;">View and clear sessions</span>
+    </a>
+    
+    <a href="/admin/query" class="button" style="width: 100%; background: #e74c3c; text-align: left; padding: 15px;">
+        <strong>🔍 Database Query</strong><br>
+        <span style="font-size: 12px; opacity: 0.9;">Execute SurrealQL queries</span>
+    </a>
+    
+    <a href="/admin/events" class="button" style="width: 100%; background: #9b59b6; text-align: left; padding: 15px;">
+        <strong>📊 Event Logs</strong><br>
+        <span style="font-size: 12px; opacity: 0.9;">View game events</span>
+    </a>
+    
+    <form method="POST" action="/admin/sessions/cleanup" style="width: 100%;">
+        <button type="submit" style="width: 100%; background: #95a5a6; text-align: left; padding: 15px;">
+            <strong>🧹 Cleanup Expired</strong><br>
+            <span style="font-size: 12px; opacity: 0.9;">Remove old sessions</span>
+        </button>
+    </form>
+</div>
+
+<h3>REST API Reference</h3>
+<details style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin: 20px 0;">
+    <summary style="cursor: pointer; font-weight: bold; padding: 5px;">View API Endpoints</summary>
+    <div style="font-family: monospace; font-size: 13px; margin-top: 15px; line-height: 1.8;">
+        <strong>Player Management:</strong><br>
+        GET /api/v1/admin/players<br>
+        GET /api/v1/admin/players/:id<br>
+        PUT /api/v1/admin/players/:id<br>
+        DELETE /api/v1/admin/players/:id<br>
+        <br>
+        <strong>Game Management:</strong><br>
+        GET /api/v1/admin/games<br>
+        GET /api/v1/admin/games/:id<br>
+        DELETE /api/v1/admin/games/:id<br>
+        POST /api/v1/admin/games/:id/force-complete<br>
+        PUT /api/v1/admin/games/:id/lifecycle<br>
+        <br>
+        <strong>Session Management:</strong><br>
+        GET /api/v1/admin/sessions<br>
+        DELETE /api/v1/admin/sessions/:id<br>
+        POST /api/v1/admin/sessions/cleanup<br>
+        <br>
+        <strong>Database Introspection:</strong><br>
+        GET /api/v1/admin/stats<br>
+        GET /api/v1/admin/tables<br>
+        GET /api/v1/admin/games/:id/events<br>
+        GET /api/v1/admin/games/:id/chat<br>
+        GET /api/v1/admin/matchmaking/queue<br>
+    </div>
+</details>
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button" style="background: #95a5a6;">Back to Dashboard</a>
+</div>
+{% endblock %}
+

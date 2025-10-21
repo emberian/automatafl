@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Matchmaking - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>Matchmaking</h2>
+
+<p style="margin: 20px 0;">
+    Welcome, <strong>{{ displayname }}</strong>! Find opponents and jump into a game.
+</p>
+
+{% if in_queue %}
+<meta http-equiv="refresh" content="5">
+<div style="background: #d4edda; border: 2px solid #c3e6cb; border-radius: 8px; padding: 20px; margin: 20px 0;">
+    <h3 style="color: #155724; margin: 0 0 10px;">You're in the queue! <span class="auto-refresh">⟳</span></h3>
+    <p style="margin: 0;">Searching for opponents... You'll be matched automatically when players are found.</p>
+    <p style="margin-top: 10px; font-size: 12px; opacity: 0.8;">Page auto-refreshes every 5 seconds</p>
+
+    <form method="POST" action="/matchmaking/leave" style="margin-top: 15px;">
+        <button type="submit" style="background: #dc3545;">Leave Queue</button>
+    </form>
+</div>
+{% else %}
+<div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0;">
+    <h3 style="margin: 0 0 15px;">Join Matchmaking Queue</h3>
+    
+    <form method="POST" action="/matchmaking/join" style="max-width: 400px;">
+        <input type="hidden" name="player_count" value="2">
+        <input type="hidden" name="use_column_rule" value="false">
+
+        <p style="margin: 15px 0;">
+            Click below to join the queue. You'll be matched with opponents of similar skill level.
+        </p>
+
+        <button type="submit">Join Queue</button>
+    </form>
+</div>
+
+<div style="margin: 30px 0;">
+    <h3>How Matchmaking Works</h3>
+    <ul style="line-height: 2;">
+        <li>Join the queue and wait for opponents</li>
+        <li>System matches you with players of similar ELO rating</li>
+        <li>Game starts automatically when all players are found</li>
+        <li>You'll need to connect via the WebApp to play</li>
+    </ul>
+</div>
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button" style="background: #95a5a6;">Back to Dashboard</a>
+</div>
+{% endblock %}
+

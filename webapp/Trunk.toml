@@ -1,0 +1,10 @@
+[build]
+public_url = "/"
+filehash = false
+dist = "dist"
+
+[watch]
+ignore = ["dist"]
+
+[serve]
+port = 8080

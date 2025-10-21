@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Game Management - Admin{% endblock %}
+
+{% block content %}
+<h2>Game Management</h2>
+
+<div style="margin: 20px 0;">
+    <a href="/admin" class="button" style="background: #95a5a6;">← Back to Admin</a>
+</div>
+
+<div style="display: flex; gap: 10px; margin: 20px 0;">
+    <a href="/admin/games?filter=all" class="button" style="background: {% if filter == "all" %}#667eea{% else %}#95a5a6{% endif %};">All</a>
+    <a href="/admin/games?filter=waiting" class="button" style="background: {% if filter == "waiting" %}#f39c12{% else %}#95a5a6{% endif %};">Waiting</a>
+    <a href="/admin/games?filter=in_progress" class="button" style="background: {% if filter == "in_progress" %}#27ae60{% else %}#95a5a6{% endif %};">In Progress</a>
+    <a href="/admin/games?filter=finished" class="button" style="background: {% if filter == "finished" %}#667eea{% else %}#95a5a6{% endif %};">Finished</a>
+</div>
+
+<h3>All Games ({{ games.len() }})</h3>
+<table style="width: 100%; font-size: 13px;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 8px; text-align: left;">Game ID</th>
+            <th style="padding: 8px; text-align: left;">Status</th>
+            <th style="padding: 8px; text-align: left;">Players</th>
+            <th style="padding: 8px; text-align: left;">Round</th>
+            <th style="padding: 8px; text-align: left;">Created</th>
+            <th style="padding: 8px; text-align: left;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for game in games %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;"><code style="font-size: 11px;">{{ game.id }}</code></td>
+            <td style="padding: 8px;">
+                {% match game.lifecycle %}
+                    {% when GameLifecycle::Waiting %}
+                        <span style="color: #f39c12;">⏳ Waiting</span>
+                    {% when GameLifecycle::InProgress %}
+                        <span style="color: #27ae60;">▶ In Progress</span>
+                    {% when GameLifecycle::Finished %}
+                        <span style="color: #95a5a6;">✓ Finished</span>
+                {% endmatch %}
+            </td>
+            <td style="padding: 8px;">{{ game.player_count }}/{{ game.max_players }}</td>
+            <td style="padding: 8px;">{{ game.round }}</td>
+            <td style="padding: 8px;">{{ game.created_at }}</td>
+            <td style="padding: 8px;">
+                <a href="/game/{{ game.id }}" style="color: #667eea; font-size: 12px;">View</a>
+                <form method="POST" action="/admin/games/{{ game.id }}/delete" style="display: inline; margin-left: 5px;">
+                    <button type="submit" onclick="return confirm('Delete game {{ game.id }}?')"
+                            style="padding: 2px 6px; font-size: 11px; background: #e74c3c;">Delete</button>
+                </form>
+                {% match game.lifecycle %}
+                    {% when GameLifecycle::InProgress %}
+                        <form method="POST" action="/admin/games/{{ game.id }}/force-complete" style="display: inline; margin-left: 5px;">
+                            <button type="submit" onclick="return confirm('Force complete round?')"
+                                    style="padding: 2px 6px; font-size: 11px; background: #f39c12;">Force Round</button>
+                        </form>
+                    {% when GameLifecycle::Waiting %}
+                    {% when GameLifecycle::Finished %}
+                {% endmatch %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

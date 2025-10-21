@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Leaderboard - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>Leaderboard - {{ leaderboard_type }}</h2>
+
+<div style="display: flex; gap: 10px; margin: 20px 0;">
+    <a href="/leaderboard?sort_by=elo" class="button">ELO Rating</a>
+    <a href="/leaderboard?sort_by=wins" class="button" style="background: #f39c12;">Wins</a>
+    <a href="/leaderboard?sort_by=games" class="button" style="background: #3498db;">Games Played</a>
+</div>
+
+{% if entries.is_empty() %}
+<p style="margin: 20px 0;">No players yet. Be the first to register!</p>
+{% else %}
+<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 12px; text-align: left; width: 80px;">Rank</th>
+            <th style="padding: 12px; text-align: left;">Player</th>
+            <th style="padding: 12px; text-align: right;">{{ leaderboard_type }}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 12px;">
+                <strong style="
+                    {% if entry.rank == 1 %}
+                        color: #f39c12; font-size: 20px;
+                    {% else if entry.rank == 2 %}
+                        color: #95a5a6; font-size: 18px;
+                    {% else if entry.rank == 3 %}
+                        color: #cd7f32; font-size: 16px;
+                    {% endif %}
+                ">#{{ entry.rank }}</strong>
+            </td>
+            <td style="padding: 12px;">{{ entry.displayname }}</td>
+            <td style="padding: 12px; text-align: right; font-weight: bold;">{{ entry.value }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <a href="/dashboard" class="button" style="background: #95a5a6;">Back to Dashboard</a>
+</div>
+{% endblock %}
+

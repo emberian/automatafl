@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Register - AutomataFL{% endblock %}
+
+{% block content %}
+<h2>Register</h2>
+
+{% if let Some(err) = error %}
+<div class="error">{{ err }}</div>
+{% endif %}
+
+<form method="POST" action="/register">
+    <input type="text" name="displayname" placeholder="Username" required autofocus minlength="3" maxlength="50">
+    <input type="password" name="password" placeholder="Password (min 12 chars, needs uppercase, lowercase, digit)" required minlength="12" maxlength="128">
+    <input type="password" name="password_confirm" placeholder="Confirm Password" required minlength="12" maxlength="128">
+    <button type="submit">Create Account</button>
+</form>
+
+<div style="background: #e7f3ff; border-left: 4px solid #2196f3; padding: 15px; margin: 20px 0;">
+    <strong>Password Requirements:</strong>
+    <ul style="margin-top: 10px; line-height: 1.6;">
+        <li>Minimum 12 characters</li>
+        <li>At least one uppercase letter</li>
+        <li>At least one lowercase letter</li>
+        <li>At least one digit (0-9)</li>
+    </ul>
+</div>
+
+<p style="margin-top: 20px;">
+    Already have an account? <a href="/login">Login here</a>
+</p>
+{% endblock %}

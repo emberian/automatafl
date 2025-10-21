@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Event Logs - Admin{% endblock %}
+
+{% block content %}
+<h2>Game Event Logs</h2>
+
+<div style="margin: 20px 0;">
+    <a href="/admin" class="button" style="background: #95a5a6;">← Back to Admin</a>
+</div>
+
+<form method="GET" action="/admin/events" style="max-width: 600px; margin: 20px 0;">
+    <label>Filter by Game ID (optional):</label>
+    <div style="display: flex; gap: 10px;">
+        <input type="text" name="game_id" placeholder="game:abc123" value="{% if let Some(filter) = game_id_filter %}{{ filter }}{% endif %}">
+        <button type="submit">Filter</button>
+        {% if let Some(_) = game_id_filter %}
+        <a href="/admin/events" class="button" style="background: #95a5a6;">Clear</a>
+        {% endif %}
+    </div>
+</form>
+
+{% if events.is_empty() %}
+<p style="margin: 20px 0;">No events found.</p>
+{% else %}
+<h3>Recent Events ({{ events.len() }})</h3>
+<table style="width: 100%; font-size: 12px;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 8px; text-align: left;">Timestamp</th>
+            <th style="padding: 8px; text-align: left;">Game ID</th>
+            <th style="padding: 8px; text-align: left;">Event Type</th>
+            <th style="padding: 8px; text-align: left;">Details</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for event in events %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;">{{ event.timestamp }}</td>
+            <td style="padding: 8px;"><code style="font-size: 10px;">{{ event.game_id }}</code></td>
+            <td style="padding: 8px;"><strong>{{ event.event_type }}</strong></td>
+            <td style="padding: 8px; max-width: 400px; overflow: hidden; text-overflow: ellipsis;">
+                <pre style="margin: 0; font-size: 11px; white-space: pre-wrap;">{{ event.details }}</pre>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <p style="font-size: 12px; color: #6c757d;">
+        Showing up to 100 most recent events. Use the filter to narrow down by game.
+    </p>
+</div>
+{% endblock %}

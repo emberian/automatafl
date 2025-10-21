@@ -1,0 +1,50 @@
+# Automatafl AlphaZero Training Configuration
+
+[network]
+num_blocks = 10
+num_channels = 128
+policy_channels = 32
+value_channels = 32
+
+[self_play]
+mcts_simulations = 800
+temperature_init = 1.0
+temperature_final = 0.1
+temperature_threshold = 15
+c_puct = 1.0
+
+# Number of workers for parallel self-play
+num_workers = 4
+# Games per worker per iteration
+games_per_worker = 25
+
+[training]
+batch_size = 256
+learning_rate = 0.001
+weight_decay = 0.0001
+train_steps_per_iteration = 100
+
+[replay_buffer]
+capacity = 100000
+
+[evaluation]
+# Number of games to play for evaluation
+num_games = 40
+# MCTS simulations for evaluation (deterministic, temperature=0)
+mcts_simulations = 800
+# Win rate threshold to accept new model (AlphaZero uses 0.55)
+accept_threshold = 0.55
+
+[checkpoint]
+# Directory to save checkpoints
+checkpoint_dir = "./checkpoints"
+# Number of recent checkpoints to keep (0 = keep all)
+keep_last_n = 5
+# Save checkpoint every N iterations
+save_every = 10
+
+[general]
+# Total number of training iterations
+num_iterations = 1000
+# Random seed for reproducibility
+seed = 42

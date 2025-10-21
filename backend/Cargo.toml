@@ -1,0 +1,52 @@
+[package]
+name = "automatafl-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+automatafl-logic.workspace = true
+automatafl-api-types.workspace = true
+
+uuid = { version = "1", features = ["serde", "v4"] }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["cookie", "typed-header"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+tower = "0.5"
+tower-http = { version = "0.6", features = [
+    "cors",
+    "compression-br",
+    "compression-gzip", 
+    "compression-zstd",
+    "request-id",
+    "timeout",
+    "trace",
+    "sensitive-headers",
+    "catch-panic",
+    "util",
+    "limit",
+] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["async-runtime"] }
+
+# Password hashing
+argon2 = { version = "0.5", features = ["std"] }
+
+# Database
+surrealdb = { version = "=3.0.0-alpha.10", default-features = false, features = ["allocator", "kv-surrealkv"] }
+
+# Templating
+askama = "0.14"
+
+# State management
+dashmap = "5"
+moka = { version = "0.12", features = ["future"] }

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Matchmaking Queue - Admin{% endblock %}
+
+{% block content %}
+<h2>Matchmaking Queue</h2>
+
+<div style="margin: 20px 0;">
+    <a href="/admin" class="button" style="background: #95a5a6;">← Back to Admin</a>
+</div>
+
+<meta http-equiv="refresh" content="10">
+<div style="background: #e7f3ff; padding: 15px; margin: 20px 0; border-left: 4px solid #2196f3;">
+    <strong>Auto-refresh:</strong> This page automatically refreshes every 10 seconds. <span class="auto-refresh">⟳</span>
+</div>
+
+{% if queue.is_empty() %}
+<p style="margin: 20px 0;">No players in matchmaking queue.</p>
+{% else %}
+<h3>Players in Queue ({{ queue.len() }})</h3>
+<table style="width: 100%; font-size: 13px;">
+    <thead>
+        <tr style="background: #f8f9fa;">
+            <th style="padding: 8px; text-align: left;">Player ID</th>
+            <th style="padding: 8px; text-align: left;">Display Name</th>
+            <th style="padding: 8px; text-align: left;">ELO Rating</th>
+            <th style="padding: 8px; text-align: left;">Joined At</th>
+            <th style="padding: 8px; text-align: left;">Waiting Time</th>
+            <th style="padding: 8px; text-align: left;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in queue %}
+        <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;"><code style="font-size: 11px;">{{ entry.player_id }}</code></td>
+            <td style="padding: 8px;">{{ entry.displayname }}</td>
+            <td style="padding: 8px;">{{ entry.elo_rating }}</td>
+            <td style="padding: 8px;">{{ entry.joined_at }}</td>
+            <td style="padding: 8px;">{{ entry.waiting_time }}</td>
+            <td style="padding: 8px;">
+                <form method="POST" action="/admin/queue/{{ entry.player_id }}/remove" style="display: inline;">
+                    <button type="submit" onclick="return confirm('Remove {{ entry.displayname }} from queue?')"
+                            style="padding: 2px 6px; font-size: 11px; background: #e74c3c;">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,12 @@
+[package]
+name = "automatafl-api-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+uuid = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+automatafl-logic.workspace = true
