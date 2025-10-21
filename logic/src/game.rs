@@ -1,5 +1,6 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
+use vec_map::VecMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Game {
@@ -36,7 +37,7 @@ impl Game {
     ///
     /// Returns false if try_complete_round would panic.
     #[instrument]
-    pub fn propose_move(&mut self, m: Move) -> (MoveFeedback, bool) {
+    pub fn propose_move(&mut self, m: Move) -> ProposeFeedback {
         use MoveFeedback::*;
 
         let mut cfs = CoordsFeedback {
@@ -60,7 +61,8 @@ impl Game {
             res
         }
 
-        let res = if self.round == RoundState::GameOver {
+
+        return ProposeFeedback::Rejected(if self.round == RoundState::GameOver {
             GameOver
         } else if self.locked_players.contains(&m.who) {
             WaitYourTurn
@@ -72,17 +74,16 @@ impl Game {
             let from_ok = consider(&mut cfs, &self.board, m.from);
             let to_ok = consider(&mut cfs, &self.board, m.to);
             if from_ok && to_ok {
-                Committed
+                self.pending_moves.push(m);
+                if self.pending_moves.len() == self.player_count as usize {
+                    return ProposeFeedback::AcceptedAndReady;
+                } else {
+                    return ProposeFeedback::Accepted;
+                }
             } else {
                 SeeCoords(cfs)
             }
-        };
-
-        if res == Committed {
-            self.pending_moves.push(m);
-        }
-
-        (res, self.pending_moves.len() == self.player_count as usize)
+        });
     }
 
     /// Returns Ok with the list of applied move to apply, or else the list of
@@ -148,42 +149,144 @@ impl Game {
         }
     }
 
+    pub fn apply_moves(
+        &mut self,
+        moves_to_apply: SmallVec<[Move; 2]>,
+    ) -> SmallVec<[(Move, MoveResult); 2]> {
+        let mut results = SmallVec::<[(Move, MoveResult); 2]>::new();
+        let mut move_graph = VecMap::new();
+        let mut source_particles = VecMap::new();
+
+        // Mark all source squares as passable for occlusion checks
+        for m in &moves_to_apply {
+            self.board.mark_passable(m.from);
+        }
+
+        // 1. Validate moves based on occlusion by STATIC pieces and build the move graph.
+        //    We intentionally include moves from empty squares to build the full graph.
+        let mut valid_moves = SmallVec::<[Move; 2]>::new();
+        for &m in &moves_to_apply {
+            // Check for occlusion by non-moving pieces.
+            let delta = m.to - m.from;
+            let axis = delta.axial_unit();
+            let mut occluded = false;
+            // Check path *between* from and to
+            for offset in 1..delta.displacement() {
+                let c = m.from + axis.scale(offset as isize);
+                if self.board.particles[c.ix()].occludes() {
+                    results.push((m, MoveResult::OccupiedAt(c)));
+                    occluded = true;
+                    break;
+                }
+            }
+
+            if !occluded {
+                let from_key = m.from.to_key(self.board.size.x);
+                move_graph.insert(from_key, m.to);
+                if !self.board.is_vacuum(m.from) {
+                    source_particles.insert(from_key, self.board.particles[m.from.ix()].what);
+                }
+                valid_moves.push(m);
+            }
+        }
+
+        // 2. Determine final placement for each particle.
+        let mut final_placements = VecMap::new();
+        let mut visited_sources = VecMap::new(); // To avoid reprocessing chains
+
+        for (start_key, &particle) in &source_particles {
+            if visited_sources.contains_key(start_key) {
+                continue;
+            }
+
+            let mut path_keys: SmallVec<[usize; 5]> = smallvec::smallvec![start_key];
+
+            visited_sources.insert(start_key, ());
+            let mut current_key = start_key;
+
+            // Trace the chain of moves.
+            loop {
+                if let Some(next_pos) = move_graph.get(current_key) {
+                    let next_key = next_pos.to_key(self.board.size.x);
+                    // Cycle detected
+                    if let Some(cycle_start_index) = path_keys.iter().position(|&k| k == next_key) {
+                        let cycle_path = &path_keys[cycle_start_index..];
+                        // If the start of the cycle is an empty square, the piece does not move.
+                        if !source_particles.contains_key(next_key) {
+                            final_placements.insert(start_key, particle);
+                        } else {
+                            // All pieces in the cycle rotate.
+                            for i in 0..cycle_path.len() {
+                                let from_key = cycle_path[i];
+                                let to_key = cycle_path[(i + 1) % cycle_path.len()];
+                                final_placements.insert(to_key, source_particles[&from_key]);
+                            }
+                        }
+                        // Mark all nodes in the cycle as visited.
+                        for &key in cycle_path {
+                            visited_sources.insert(key, ());
+                        }
+                        break;
+                    }
+
+                    path_keys.push(next_key);
+                    visited_sources.insert(next_key, ());
+                    current_key = next_key;
+                } else {
+                    // End of a simple chain. The particle moves to the end of the chain.
+                    final_placements.insert(current_key, particle);
+                    break;
+                }
+            }
+        }
+
+        // 3. Apply moves: "lift" all moving pieces, then "place" them.
+        for key in source_particles.keys() {
+            let x = (key % self.board.size.x as usize) as u8;
+            let y = (key / self.board.size.x as usize) as u8;
+            self.board.place(Coord { x, y }, Particle::Vacuum);
+        }
+        for (key, particle) in final_placements {
+            let x = (key % self.board.size.x as usize) as u8;
+            let y = (key / self.board.size.x as usize) as u8;
+            self.board.place(Coord { x, y }, particle);
+        }
+
+        // 4. Record success for all valid moves. This is a simplification; a more robust
+        //    implementation might track which moves truly resulted in a state change.
+        //    For now, if it was part of a valid graph, we'll call it Applied.
+        for m in valid_moves {
+            // Check if move was already marked as failed (e.g., occluded)
+            if !results.iter().any(|(res_m, _)| res_m == &m) {
+                results.push((m, MoveResult::Applied));
+            }
+        }
+
+        // Add NoSource for moves from empty squares that weren't part of a longer chain.
+        for &m in &moves_to_apply {
+            if self.board.is_vacuum(m.from)
+                && !move_graph.values().any(|&to_coord| to_coord == m.from)
+            {
+                if !results.iter().any(|(res_m, _)| res_m == &m) {
+                    results.push((m, MoveResult::NoSource));
+                }
+            }
+        }
+
+        results
+    }
+
     /// Return the list of move results if everything was gucci, else enter conflict resolution.
     #[instrument]
-    pub fn try_complete_round(&mut self) -> Result<SmallVec<[(Move, MoveResult); 2]>, ()> {
-        if !(self.pending_moves.len() == self.player_count as usize) {
-            return Err(());
+    pub fn try_complete_round(&mut self) -> CompleteRoundFeedback {
+        let needed_moves = self.player_count as usize - self.pending_moves.len();
+        if needed_moves != 0 {
+            return CompleteRoundFeedback::WaitingForPlayers(needed_moves);
         }
 
         match self.resolve_conflicts() {
-            Ok(mut moves_to_apply) => {
-                // "Lift the moved pieces off the board" and mark paths as passable
-
-                for m in &moves_to_apply {
-                    self.board.mark_passable(m.from);
-                }
-
-                let mut results = SmallVec::with_capacity(moves_to_apply.len());
-
-                while moves_to_apply.len() != 0 {
-                    let mut made_progress = false;
-                    moves_to_apply.retain(|m| {
-                        if self.board.is_vacuum(m.from) {
-                            true
-                        } else {
-                            results.push((*m, self.board.do_move(m.from, m.to)));
-                            made_progress = true;
-                            false
-                        }
-                    });
-
-                    if !made_progress {
-                        for m in moves_to_apply.drain(..) {
-                            results.push((m, MoveResult::NoSource));
-                        }
-                    }
-                }
-
+            Ok(moves_to_apply) => {
+                let results = self.apply_moves(moves_to_apply);
                 self.update_automaton();
 
                 match self
@@ -206,7 +309,7 @@ impl Game {
                 // Clear pending moves for the next round
                 self.pending_moves.clear();
 
-                Ok(results)
+                CompleteRoundFeedback::CompletedMoves(results)
             }
             Err(moves_conflicted) => {
                 self.round = RoundState::ResolvingConflict;
@@ -222,93 +325,11 @@ impl Game {
                 self.pending_moves
                     .retain(|e| !moves_conflicted.contains(&e));
 
-                Err(())
+                CompleteRoundFeedback::Conflict(ConflictStatus {
+                    conflicted_moves: moves_conflicted,
+                    locked_players: self.locked_players.clone(),
+                })
             }
         }
-    }
-
-    /// Update the automaton, returning true if it moved
-    pub fn update_automaton(&mut self) {
-        let new_location = self.automaton_move();
-        if new_location != self.board.automaton_location {
-            debug_assert_eq!(
-                self.board
-                    .do_move(self.board.automaton_location, new_location),
-                MoveResult::Applied
-            );
-        }
-    }
-
-    /// Calculate the coordinate to which the automaton would move right now.
-    #[instrument]
-    pub(crate) fn automaton_move(&self) -> Coord {
-        #[instrument]
-        fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
-            use AutomatonDecision::*;
-            use Particle::{Attractor as A, Repulsor as R, Vacuum as V};
-
-            match (pos.what, neg.what) {
-                (A, R) if pos.dist > 1 => UnbalancedPair {
-                    pos: true,
-                    att_dist: pos.dist,
-                    rep_dist: neg.dist,
-                },
-                (R, A) if neg.dist > 1 => UnbalancedPair {
-                    pos: false,
-                    att_dist: neg.dist,
-                    rep_dist: pos.dist,
-                },
-                (R, R) if pos.dist != neg.dist => FromRepulsor {
-                    pos: pos.dist > neg.dist,
-                    rep_dist: std::cmp::min(pos.dist, neg.dist),
-                },
-                (R, V) if neg.dist > 1 => FromRepulsor {
-                    pos: false,
-                    rep_dist: pos.dist,
-                },
-                (V, R) if pos.dist > 1 => FromRepulsor {
-                    pos: true,
-                    rep_dist: neg.dist,
-                },
-                (A, A) if pos.dist != neg.dist => TowardAttractor {
-                    pos: pos.dist < neg.dist,
-                    att_dist: std::cmp::min(pos.dist, neg.dist),
-                },
-                (A, V) if pos.dist > 1 => TowardAttractor {
-                    pos: true,
-                    att_dist: pos.dist,
-                },
-                (V, A) if neg.dist > 1 => TowardAttractor {
-                    pos: false,
-                    att_dist: neg.dist,
-                },
-                _ => None,
-            }
-        }
-
-        /// Find the nearest particles in the four directions.
-        let xp = self.board.raycast(self.board.automaton_location, Delta::XP);
-        let xn = self.board.raycast(self.board.automaton_location, Delta::XN);
-        let yp = self.board.raycast(self.board.automaton_location, Delta::YP);
-        let yn = self.board.raycast(self.board.automaton_location, Delta::YN);
-
-        let x_decision = evaluate_axis(&xp, &xn);
-        let y_decision = evaluate_axis(&yp, &yn);
-
-        let offset = if x_decision > y_decision {
-            x_decision.delta(Delta::XP)
-        } else if y_decision > x_decision {
-            y_decision.delta(Delta::YP)
-        } else {
-            // Equal priority: apply column rule if enabled
-            if self.use_column_rule {
-                x_decision.delta(Delta::XP) // Column rule: prefer X axis
-            } else {
-                info!("avoided applying the column rule - no move");
-                Delta::ZERO
-            }
-        };
-
-        self.board.automaton_location + offset
     }
 }

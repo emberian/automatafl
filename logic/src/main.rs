@@ -19,29 +19,30 @@ fn main() {
         let dstx = spl.next().expect("need dstx").parse::<u8>().unwrap();
         let dsty = spl.next().expect("need dsty").parse::<u8>().unwrap();
 
-        let (fdb, go) = game.propose_move(Move {
+        let fdb = game.propose_move(Move {
             who: Pid(pid),
             from: Coord { x: srcx, y: srcy },
             to: Coord { x: dstx, y: dsty },
         });
         println!("Move feedback: {}", fdb);
-        if go {
+        if matches!(fdb, ProposeFeedback::AcceptedAndReady) {
             match game.try_complete_round() {
-                Ok(completed_moves) => {
+                CompleteRoundFeedback::CompletedMoves(completed_moves) => {
                     for (m, res) in completed_moves {
                         println!("Player {}: {}", m.who.0, res)
                     }
                 }
-                Err(()) => {
+                CompleteRoundFeedback::Conflict(conlict_info) => {
                     print!(
                         "Players locked: {}",
-                        game.locked_players
+                        conlict_info.locked_players
                             .iter()
                             .map(|p| p.0.to_string())
                             .collect::<Vec<String>>()
                             .join(", ")
                     );
-                }
+                },
+                CompleteRoundFeedback::WaitingForPlayers(_) => unreachable!("ProposeFeedback::AcceptedAndReady implies all moves are in"),
             }
         }
     }

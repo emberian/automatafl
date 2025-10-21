@@ -20,8 +20,6 @@ pub enum CoordFeedback {
 /// "Your move {}."
 #[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MoveFeedback {
-    /// is now pending waiting for the other player
-    Committed,
     /// had some problems: {0}
     SeeCoords(CoordsFeedback),
     /// must have different source and destination squares
@@ -34,7 +32,18 @@ pub enum MoveFeedback {
     GameOver,
 }
 
-/// Game status:
+/// "Your move {}."
+#[derive(Debug, Display, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProposeFeedback {
+    /// is now pending waiting for the other player
+    Accepted,
+    /// is now pending and all players have submitted moves
+    AcceptedAndReady,
+    /// is rejected: {0}, try again
+    Rejected(MoveFeedback),
+}
+
+/// Game round {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum RoundState {
     /// not yet started
@@ -47,34 +56,28 @@ pub enum RoundState {
     GameOver,
 }
 
-/// Player 0 move: {}
+/// Player move {}
 #[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MoveResult {
     /// failed because there was never a piece to move at the source.
     NoSource,
-    /// failed the move is occluded between source and destination by a piece at {0}.
+    /// failed because the move is occluded between source and destination by a piece at {0}.
     OccupiedAt(Coord),
     /// applied!
     Applied,
 }
 
-/// Decisions of the Automaton on one axis.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AutomatonDecision {
-    UnbalancedPair {
-        pos: bool,
-        att_dist: usize,
-        rep_dist: usize,
-    },
-    FromRepulsor {
-        pos: bool,
-        rep_dist: usize,
-    },
-    TowardAttractor {
-        pos: bool,
-        att_dist: usize,
-    },
-    None,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictStatus {
+    pub conflicted_moves: SmallVec<[Move; 2]>,
+    pub locked_players: SmallVec<[Pid; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompleteRoundFeedback {
+    CompletedMoves(SmallVec<[(Move, MoveResult); 2]>),
+    Conflict(ConflictStatus),
+    WaitingForPlayers(usize),
 }
 
 /// Player ID within a single game
@@ -111,4 +114,191 @@ pub(crate) struct Raycast {
     pub(crate) what: Particle,
     pub(crate) hit: Option<Coord>,
     pub(crate) dist: usize,
+}
+
+impl core::fmt::Display for CoordsFeedback {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        for (coord, feedback) in &self.data {
+            write!(f, "{} {}", coord, feedback)?
+        }
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for Coord {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+impl std::ops::Sub for Coord {
+    type Output = Delta;
+
+    fn sub(self, other: Coord) -> Delta {
+        Delta {
+            dx: (self.x as i16 - other.x as i16),
+            dy: (self.y as i16 - other.y as i16),
+        }
+    }
+}
+
+impl std::ops::Add<Delta> for Coord {
+    type Output = Coord;
+
+    fn add(self, other: Delta) -> Coord {
+        Coord {
+            x: (self.x as i16 + other.dx) as u8,
+            y: (self.y as i16 + other.dy) as u8,
+        }
+    }
+}
+
+impl Coord {
+    pub fn ix(self) -> (usize, usize) {
+        (self.y as usize, self.x as usize)
+    }
+
+    pub fn to_key(self, width: u8) -> usize {
+        self.y as usize * width as usize + self.x as usize
+    }
+}
+
+impl Delta {
+    pub(crate) const ZERO: Delta = Delta { dx: 0, dy: 0 };
+    pub(crate) const XP: Delta = Delta { dx: 1, dy: 0 };
+    pub(crate) const XN: Delta = Delta { dx: -1, dy: 0 };
+    pub(crate) const YP: Delta = Delta { dx: 0, dy: 1 };
+    pub(crate) const YN: Delta = Delta { dx: 0, dy: -1 };
+    #[cfg(test)]
+    pub(crate) const AXIAL_UNITS: [Delta; 4] = [Delta::XP, Delta::XN, Delta::YP, Delta::YN];
+
+    pub(crate) fn is_zero(self) -> bool {
+        self.dx == 0 && self.dy == 0
+    }
+
+    pub(crate) fn is_axial(self) -> bool {
+        self.dx == 0 || self.dy == 0 && !self.is_zero()
+    }
+
+    pub(crate) fn axial_unit(self) -> Delta {
+        if self.is_zero() {
+            Delta::ZERO
+        } else {
+            // Fencepost: prefer Y ("column rule"). This shouldn't be relied upon; in general, call
+            // this only on axial deltas.
+            if !self.is_axial() {
+                error!("{:?} is not an axial unit", self);
+            }
+            if self.dx.abs() > self.dy.abs() {
+                Delta {
+                    dx: self.dx.signum(),
+                    dy: 0,
+                }
+            } else {
+                Delta {
+                    dx: 0,
+                    dy: self.dy.signum(),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn displacement(self) -> usize {
+        self.dx.abs() as usize + self.dy.abs() as usize
+    }
+
+    pub fn scale(self, factor: isize) -> Delta {
+        Delta {
+            dx: self.dx * (factor as i16),
+            dy: self.dy * (factor as i16),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn perpendicular(self) -> Delta {
+        Delta {
+            dx: -self.dy,
+            dy: self.dx,
+        }
+    }
+}
+
+impl Particle {
+    pub(crate) fn is_vacuum(self) -> bool {
+        self == Particle::Vacuum
+    }
+}
+
+impl Cell {
+    pub(crate) fn occludes(&self) -> bool {
+        // Vacuum can always be passed through, non-vacuum if passable is set.
+        !(self.what.is_vacuum() || self.passable)
+    }
+}
+
+impl core::fmt::Debug for Board {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        // --- Header ---
+        writeln!(
+            f,
+            "Board ({}x{}) with automaton at {}",
+            self.size.x, self.size.y, self.automaton_location
+        )?;
+
+        write!(f, "  ┌")?;
+        for _ in 0..self.size.x {
+            write!(f, "───")?;
+        }
+        writeln!(f, "┐")?;
+
+        // --- Board Rows (from top to bottom) ---
+        // Y-axis is printed from highest to lowest to match typical top-left origin consoles
+        for y in (0..self.size.y).rev() {
+            write!(f, "{:2}│", y)?;
+
+            for x in 0..self.size.x {
+                let cell = self.particles[Coord { x, y }.ix()];
+
+                let conflict_char = if cell.conflict { '!' } else { ' ' };
+                let passable_char = if cell.passable { '~' } else { ' ' };
+
+                let particle_char = match cell.what {
+                    Particle::Repulsor => 'R',
+                    Particle::Attractor => 'A',
+                    Particle::Automaton => 'D', // 'D' for Daemon/Automaton
+                    Particle::Vacuum => '.',
+                };
+
+                // Format is: [Conflict Char][Particle Char][Passable Char]
+                // e.g., " R ", "!A ", " .~"
+                write!(f, "{}{}{}", conflict_char, particle_char, passable_char)?;
+            }
+            writeln!(f, "│")?;
+        }
+
+        write!(f, "  └")?;
+        for _ in 0..self.size.x {
+            write!(f, "───")?;
+        }
+        writeln!(f, "┘")?;
+        write!(f, "    ")?; // Padding for row headers
+
+        for x in 0..self.size.x {
+            write!(f, "{:<3}", x)?;
+        }
+        writeln!(f)?;
+
+        Ok(())
+    }
+}
+
+impl From<Particle> for Option<String> {
+    fn from(particle: Particle) -> Self {
+        match particle {
+            Particle::Repulsor => Some("repulsor".to_string()),
+            Particle::Attractor => Some("attractor".to_string()),
+            Particle::Automaton => Some("automaton".to_string()),
+            Particle::Vacuum => None,
+        }
+    }
 }

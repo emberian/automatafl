@@ -14,16 +14,18 @@
 //!   might break or the code might panic! Only calling methods will avoid this.
 //!   Inspect state away :)
 
+mod automaton;
 mod board;
 mod game;
-mod impls;
-#[cfg(test)]
-mod tests;
 mod types;
 
+pub use automaton::*;
 pub use board::*;
 pub use game::*;
 pub use types::*;
+
+#[cfg(test)]
+mod tests;
 
 use tracing::{error, info, instrument, trace};
 

@@ -46,8 +46,8 @@ In the event of a conflict, all players involved in the conflict must invalidate
 
 1. All temporary markers used in conflict resolution are cleared.
 2. All pieces specified as the source of a move are temporarily removed from the board, remembering the original position.
-3. Each piece removed is placed in the specified destination, but *only* if no other piece (which is not in the process of being moved) is on the straight-line path between the source and the destination (otherwise, the piece is placed at its original position). In particular, it is legal to specify a move that initially "goes through" another piece; should that other piece be moved by another player, the move will succeed.
-  * As a particular erratum, if a piece is moved into a square which is the source of another move, the piece participates in the move twice. That is, sort the moves topologically, with each move being an edge. Cycles are permissible--the piece simply doesn't move in this case.
+3. Each piece removed is placed in the specified destination, but *only* if no other piece (which is not in the process of being moved) is on the straight-line path between the source and the destination (otherwise, the piece is replaced at its original position). In particular, it is legal to specify a move that initially "goes through" another piece; should that other piece be moved by another player, the move will ultimately succeed.
+  * As a particular erratum, if a piece is moved into a square which is the source of another move, the piece participates in the move twice. That is, sort the moves topologically, with each move being an edge. Cycles are permissible, including a cycle involving an empty square--the piece simply doesn't move in this case.
 4. After all these resolve, any remaining move is simply marked "invalid", and causes no change in state.
 
 #### Automaton Step Phase

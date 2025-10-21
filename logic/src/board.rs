@@ -20,7 +20,6 @@ pub enum Particle {
     Vacuum,
 }
 
-// TODO: this is 3 bytes when it could be 1 :/
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub what: Particle,
@@ -158,6 +157,36 @@ impl Board {
             passable_list: SmallVec::new(),
         }
     }
+
+
+    /// Empty 6x6 board containing a lonely automaton.
+   pub fn stock_testing_empty_7() -> Board {
+        let o = Cell {
+            what: Particle::Vacuum,
+            conflict: false,
+            passable: false,
+        };
+        let d = Cell {
+            what: Particle::Automaton,
+            ..o
+        };
+        Board {
+            particles: arr2(&[
+                [o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o],
+                [o, o, o, d, o, o, o],
+                [o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o],
+                [o, o, o, o, o, o, o],
+            ]),
+            size: Coord { x: 7, y: 7 },
+            automaton_location: Coord { x: 3, y: 3 },
+            conflict_list: SmallVec::new(),
+            passable_list: SmallVec::new(),
+        }
+    }
+
     /// Place a particle on the board.
     ///
     /// If the particle isn't the automaton, this increases the matter on the
