@@ -59,35 +59,32 @@ impl Game {
             res
         }
 
-        if self.round == RoundState::GameOver {
-            return ProposeFeedback::Rejected(GameOver);
-        }
-        if self.locked_players.contains(&m.who) {
-            return ProposeFeedback::Rejected(WaitYourTurn);
-        }
-        if m.from == m.to {
-            return ProposeFeedback::Rejected(MustMove);
-        }
-        if !(m.from.x == m.to.x || m.from.y == m.to.y) {
-            return ProposeFeedback::Rejected(AxisAlignedOnly);
-        }
-
-        let mut cfs = CoordsFeedback {
-            data: SmallVec::new(),
-        };
-        let from_ok = consider(&mut cfs, &self.board, m.from);
-        let to_ok = consider(&mut cfs, &self.board, m.to);
-
-        if from_ok && to_ok {
-            self.pending_moves.push(m);
-            if self.pending_moves.len() == self.player_count as usize {
-                ProposeFeedback::AcceptedAndReady
-            } else {
-                ProposeFeedback::Accepted
-            }
+        return ProposeFeedback::Rejected(if self.round == RoundState::GameOver {
+            GameOver
+        } else if self.locked_players.contains(&m.who) {
+            WaitYourTurn
+        } else if m.from == m.to {
+            MustMove
+        } else if !(m.from.x == m.to.x || m.from.y == m.to.y) {
+            AxisAlignedOnly
         } else {
-            ProposeFeedback::Rejected(SeeCoords(cfs))
-        }
+            let mut cfs = CoordsFeedback {
+                data: SmallVec::new(),
+            };
+            let from_ok = consider(&mut cfs, &self.board, m.from);
+            let to_ok = consider(&mut cfs, &self.board, m.to);
+
+            if from_ok && to_ok {
+                self.pending_moves.push(m);
+                if self.pending_moves.len() == self.player_count as usize {
+                    return ProposeFeedback::AcceptedAndReady;
+                } else {
+                    return ProposeFeedback::Accepted;
+                }
+            }
+
+            SeeCoords(cfs)
+        });
     }
 
     #[instrument]
