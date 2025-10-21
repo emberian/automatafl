@@ -8,7 +8,7 @@ pub struct Board {
     pub particles: Grid<Cell>,
     pub size: Coord,
     pub automaton_location: Coord,
-    pub conflict_list: SmallVec<[Coord; 16]>, // TODO: compare performance scanning this list to scanning the whole grid
+    pub conflict_list: SmallVec<[Coord; 16]>,
     pub passable_list: SmallVec<[Coord; 16]>,
 }
 
@@ -158,9 +158,8 @@ impl Board {
         }
     }
 
-
     /// Empty 6x6 board containing a lonely automaton.
-   pub fn stock_testing_empty_7() -> Board {
+    pub fn stock_testing_empty_7() -> Board {
         let o = Cell {
             what: Particle::Vacuum,
             conflict: false,
@@ -215,11 +214,14 @@ impl Board {
     /// absolutely no bounds checking, and thus can panic if the coordinate is
     /// out of bounds.
     pub(crate) fn force_move(&mut self, from: Coord, to: Coord) {
+        let is_automaton_move = self.particles[from.ix()].what == Particle::Automaton;
         self.particles.swap(from.ix(), to.ix());
 
-        if self.automaton_location == from {
-            debug_assert_eq!(self.particles[to.ix()].what, Particle::Automaton);
+        if is_automaton_move {
+            debug_assert_eq!(self.automaton_location, from);
             self.automaton_location = to;
+        } else if self.automaton_location == to {
+            self.automaton_location = from;
         }
     }
 

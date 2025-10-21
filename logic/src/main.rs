@@ -35,14 +35,17 @@ fn main() {
                 CompleteRoundFeedback::Conflict(conlict_info) => {
                     print!(
                         "Players locked: {}",
-                        conlict_info.locked_players
+                        conlict_info
+                            .locked_players
                             .iter()
                             .map(|p| p.0.to_string())
                             .collect::<Vec<String>>()
                             .join(", ")
                     );
-                },
-                CompleteRoundFeedback::WaitingForPlayers(_) => unreachable!("ProposeFeedback::AcceptedAndReady implies all moves are in"),
+                }
+                CompleteRoundFeedback::WaitingForPlayers(_) => {
+                    unreachable!("ProposeFeedback::AcceptedAndReady implies all moves are in")
+                }
             }
         }
     }

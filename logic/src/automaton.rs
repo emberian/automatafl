@@ -52,10 +52,12 @@ fn evaluate_axis(pos: &Raycast, neg: &Raycast) -> AutomatonDecision {
             pos: true,
             rep_dist: neg.dist,
         },
-        (A, A) if pos.dist != neg.dist && std::cmp::min(pos.dist, neg.dist) > 1 => TowardAttractor {
-            pos: pos.dist < neg.dist,
-            att_dist: std::cmp::min(pos.dist, neg.dist),
-        },
+        (A, A) if pos.dist != neg.dist && std::cmp::min(pos.dist, neg.dist) > 1 => {
+            TowardAttractor {
+                pos: pos.dist < neg.dist,
+                att_dist: std::cmp::min(pos.dist, neg.dist),
+            }
+        }
         (A, V) if pos.dist > 1 => TowardAttractor {
             pos: true,
             att_dist: pos.dist,

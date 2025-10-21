@@ -102,7 +102,7 @@ pub struct Delta {
     pub dy: i16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Move {
     pub who: Pid,
     pub from: Coord,

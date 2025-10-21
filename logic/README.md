@@ -36,19 +36,21 @@ All players secretly write down a move, which is a sequence of two coordinates (
 *Before* moves "resolve", players must check for *conflicts*  a conflict occurs if:
 
 * Multiple players specify the same source; or
-* Multiple players specify the same destination.
+* Multiple players specify the same destination with a non-vacuum source.
 
 Except two players specifying an identical (same sources, same targets) move is not a conflict.
 
-In the event of a conflict, all players involved in the conflict must invalidate their previous move and prepare another move. It is illegal to specify as a source or destination the *exact* coordinate which was conflicted upon (that is, in a source conflict, that piece becomes immovable; in a destination conflict, that square can no longer be moved to); this is often indicated with a temporary marker, such as overturning a conflicted source piece, or putting a coin on the conflicted destination. After all involved players have prepared their respective moves, they are revealed simultaneously, and, if needed, the conflict resolution will recurse (from "before moves resolve" above), possibly with only a subset of involved players.
+In the event of a conflict, all players involved in the conflict must invalidate their previous move and prepare another move. It is illegal to specify as a source or destination the *exact* coordinate which was conflicted upon (that is, in a source conflict, that source piece becomes immovable by all; in a destination conflict, that destination square can no longer be moved to by anyone); this is often indicated with a temporary marker, such as overturning a conflicted source piece, or putting a coin on the conflicted destination. After all involved players have prepared their respective moves, they are revealed simultaneously, and, if needed, the conflict resolution will recurse (from "before moves resolve" above), possibly with only a subset of involved players.
 
 *Only* once conflict resolution is complete do moves resolve, as follows:
 
 1. All temporary markers used in conflict resolution are cleared.
 2. All pieces specified as the source of a move are temporarily removed from the board, remembering the original position.
-3. Each piece removed is placed in the specified destination, but *only* if no other piece (which is not in the process of being moved) is on the straight-line path between the source and the destination (otherwise, the piece is replaced at its original position). In particular, it is legal to specify a move that initially "goes through" another piece; should that other piece be moved by another player, the move will ultimately succeed.
-  * As a particular erratum, if a piece is moved into a square which is the source of another move, the piece participates in the move twice. That is, sort the moves topologically, with each move being an edge. Cycles are permissible, including a cycle involving an empty square--the piece simply doesn't move in this case.
+3. Each piece removed is placed in the specified destination, but *only* if no other piece (which is not in the process of being moved) is on the straight-line path between the source and the destination (otherwise, the piece is replaced at its original position). In particular, it is legal to specify a move that initially "goes through" another piece; should that other piece be moved by another player, the move will ultimately succeed. Anytime a piece is placed into a source position of some specified move, as long as there is no destination piece already present the piece will obey the move and be placed to the destination (this applies recursively).
+  * As a particular erratum, if a piece is moved into a square which is the source of another move, the piece participates in the move twice. That is, sort the moves topologically, with each move being an edge. Cycles are permissible, including a move from an empty square directly back to some source square--the piece simply doesn't move in this case.
 4. After all these resolve, any remaining move is simply marked "invalid", and causes no change in state.
+
+The conflict rules are intented to be the weakest precondition that structurally ensures that following move resolution has a deterministic result.
 
 #### Automaton Step Phase
 
