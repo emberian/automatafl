@@ -1,4 +1,9 @@
-use crate::*;
+use automatafl_v8n::*;
+
+// these were the original tests written all those years ago, plus a few more
+// to try and capture n-player mechanics correctly.
+
+// it might be nice someday to clean these up with a DSL or something parsey.
 
 #[derive(Debug)]
 #[allow(unused)] // the Debug impl IS the use, as far as tests are concerned :)

@@ -1,0 +1,44 @@
+# Nextest configuration for automatafl
+# See: https://nexte.st/book/configuration.html
+
+[profile.default]
+# Run tests in parallel using all available CPUs
+test-threads = "num-cpus"
+
+# Don't retry tests by default in development
+retries = 0
+
+# Show test output for failures
+failure-output = "immediate-final"
+
+# Show final status at the end
+final-status-level = "fail"
+
+[profile.ci]
+# Slower timeout for CI environments
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# Fail fast on first test failure to save CI time (optional)
+# fail-fast = true
+
+# Ensure output is captured for CI logs
+failure-output = "final"
+success-output = "never"
+
+[test-groups]
+# Limit parallel execution for resource-intensive stress tests
+stress = { max-threads = 4 }
+
+# Integration tests can run more concurrently
+integration = { max-threads = "num-cpus" }
+
+[[profile.default.overrides]]
+# Mark stress tests - these are slower and more resource intensive
+filter = 'test(stress)'
+test-group = 'stress'
+slow-timeout = { period = "120s" }
+
+[[profile.default.overrides]]
+# Mark property-based tests - these may take longer
+filter = 'test(proptest)'
+slow-timeout = { period = "60s" }

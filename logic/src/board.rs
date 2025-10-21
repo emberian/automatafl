@@ -202,7 +202,7 @@ impl Board {
     }
 
     /// Mark a coordinate as passable, because some move specifies it as a source.
-    pub(crate) fn mark_passable(&mut self, c: Coord) {
+    pub fn mark_passable(&mut self, c: Coord) {
         self.particles[c.ix()].passable = true;
         self.passable_list.push(c);
     }
@@ -213,7 +213,7 @@ impl Board {
     /// illogical things, like swapping conflict flags. This method also does
     /// absolutely no bounds checking, and thus can panic if the coordinate is
     /// out of bounds.
-    pub(crate) fn force_move(&mut self, from: Coord, to: Coord) {
+    pub fn force_move(&mut self, from: Coord, to: Coord) {
         let is_automaton_move = self.particles[from.ix()].what == Particle::Automaton;
         self.particles.swap(from.ix(), to.ix());
 
@@ -239,7 +239,7 @@ impl Board {
     /// particle is Vacuum). (These facts are depended upon in the automaton's reasoning; see
     /// evaluate_axis.)
     #[instrument]
-    pub(crate) fn raycast(&self, from: Coord, axis: Delta) -> Raycast {
+    pub fn raycast(&self, from: Coord, axis: Delta) -> Raycast {
         debug_assert_ne!(axis, Delta::ZERO);
 
         for i in 1isize.. {
@@ -276,7 +276,7 @@ impl Board {
     /// Conflicted cells come about during conflict resolution (RoundState::ResolvingConflict) to
     /// indicate that two plebeians attempted to move the same particle differently, or move
     /// different particles to the same cell. When conflict resolution ends, the marks are cleared.
-    pub(crate) fn mark_conflict(&mut self, c: Coord) {
+    pub fn mark_conflict(&mut self, c: Coord) {
         self.particles[c.ix()].conflict = true;
         self.conflict_list.push(c);
     }
@@ -284,7 +284,7 @@ impl Board {
     /// Clear all conflict/passable marks.
     ///
     /// This is done at the end of conflict resolution (RoundState::ResolvingConflict).
-    pub(crate) fn clear_marks(&mut self) {
+    pub fn clear_marks(&mut self) {
         for c in self.conflict_list.drain(..) {
             self.particles[c.ix()].conflict = false;
         }
@@ -297,17 +297,17 @@ impl Board {
     ///
     /// If this is true, the cell may not be specified as a source or destination of any move
     /// (MoveError::Conflicted).
-    pub(crate) fn is_conflict(&self, c: Coord) -> bool {
+    pub fn is_conflict(&self, c: Coord) -> bool {
         self.particles[c.ix()].conflict
     }
 
     /// Test whether the addressed cell is vacuum.
-    pub(crate) fn is_vacuum(&self, c: Coord) -> bool {
+    pub fn is_vacuum(&self, c: Coord) -> bool {
         self.particles[c.ix()].what.is_vacuum()
     }
 
     /// Test whether the addressed cell is the automaton.
-    pub(crate) fn is_automaton(&self, c: Coord) -> bool {
+    pub fn is_automaton(&self, c: Coord) -> bool {
         self.automaton_location == c
     }
 
@@ -315,7 +315,7 @@ impl Board {
     ///
     /// It is illegal to specify an out-of-bounds coordinate as the source or destination of a move
     /// (MoveError::Oob).
-    pub(crate) fn inbounds(&self, c: Coord) -> bool {
+    pub fn inbounds(&self, c: Coord) -> bool {
         c.x < self.size.x && c.y < self.size.y
     }
 
@@ -323,7 +323,7 @@ impl Board {
     ///
     /// This method considers it allowable to move the automaton, and is part of the call graph
     /// of Game::update_automaton.
-    pub(crate) fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
+    pub fn do_move(&mut self, from: Coord, to: Coord) -> MoveResult {
         use MoveResult::*;
 
         // debug_assert checks invariants that should be established by propose_move

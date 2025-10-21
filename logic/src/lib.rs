@@ -24,9 +24,6 @@ pub use board::*;
 pub use game::*;
 pub use types::*;
 
-#[cfg(test)]
-mod tests;
-
 use tracing::{error, info, instrument, trace};
 
 use ndarray::arr2;

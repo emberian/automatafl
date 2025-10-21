@@ -110,10 +110,10 @@ pub struct Move {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Raycast {
-    pub(crate) what: Particle,
-    pub(crate) hit: Option<Coord>,
-    pub(crate) dist: usize,
+pub struct Raycast {
+    pub what: Particle,
+    pub hit: Option<Coord>,
+    pub dist: usize,
 }
 
 impl core::fmt::Display for CoordsFeedback {
@@ -164,23 +164,22 @@ impl Coord {
 }
 
 impl Delta {
-    pub(crate) const ZERO: Delta = Delta { dx: 0, dy: 0 };
-    pub(crate) const XP: Delta = Delta { dx: 1, dy: 0 };
-    pub(crate) const XN: Delta = Delta { dx: -1, dy: 0 };
-    pub(crate) const YP: Delta = Delta { dx: 0, dy: 1 };
-    pub(crate) const YN: Delta = Delta { dx: 0, dy: -1 };
-    #[cfg(test)]
-    pub(crate) const AXIAL_UNITS: [Delta; 4] = [Delta::XP, Delta::XN, Delta::YP, Delta::YN];
+    pub const ZERO: Delta = Delta { dx: 0, dy: 0 };
+    pub const XP: Delta = Delta { dx: 1, dy: 0 };
+    pub const XN: Delta = Delta { dx: -1, dy: 0 };
+    pub const YP: Delta = Delta { dx: 0, dy: 1 };
+    pub const YN: Delta = Delta { dx: 0, dy: -1 };
+    pub const AXIAL_UNITS: [Delta; 4] = [Delta::XP, Delta::XN, Delta::YP, Delta::YN];
 
-    pub(crate) fn is_zero(self) -> bool {
+    pub fn is_zero(self) -> bool {
         self.dx == 0 && self.dy == 0
     }
 
-    pub(crate) fn is_axial(self) -> bool {
+    pub fn is_axial(self) -> bool {
         self.dx == 0 || self.dy == 0 && !self.is_zero()
     }
 
-    pub(crate) fn axial_unit(self) -> Delta {
+    pub fn axial_unit(self) -> Delta {
         if self.is_zero() {
             Delta::ZERO
         } else {
@@ -203,7 +202,7 @@ impl Delta {
         }
     }
 
-    pub(crate) fn displacement(self) -> usize {
+    pub fn displacement(self) -> usize {
         self.dx.abs() as usize + self.dy.abs() as usize
     }
 
@@ -214,8 +213,7 @@ impl Delta {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn perpendicular(self) -> Delta {
+    pub fn perpendicular(self) -> Delta {
         Delta {
             dx: -self.dy,
             dy: self.dx,
@@ -224,13 +222,13 @@ impl Delta {
 }
 
 impl Particle {
-    pub(crate) fn is_vacuum(self) -> bool {
+    pub fn is_vacuum(self) -> bool {
         self == Particle::Vacuum
     }
 }
 
 impl Cell {
-    pub(crate) fn occludes(&self) -> bool {
+    pub fn occludes(&self) -> bool {
         // Vacuum can always be passed through, non-vacuum if passable is set.
         !(self.what.is_vacuum() || self.passable)
     }

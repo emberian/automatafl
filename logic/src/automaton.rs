@@ -85,7 +85,7 @@ impl Game {
 
     /// Calculate the coordinate to which the automaton would move right now.
     #[instrument]
-    pub(crate) fn automaton_move(&self) -> Coord {
+    pub fn automaton_move(&self) -> Coord {
         /// Find the nearest particles in the four directions.
         let xp = self.board.raycast(self.board.automaton_location, Delta::XP);
         let xn = self.board.raycast(self.board.automaton_location, Delta::XN);
@@ -159,7 +159,7 @@ impl Ord for AutomatonDecision {
 }
 
 impl AutomatonDecision {
-    pub(crate) fn priority(&self) -> usize {
+    pub fn priority(&self) -> usize {
         match self {
             UnbalancedPair { .. } => 30,
             // "Frank correction": this is higher priority
@@ -169,7 +169,7 @@ impl AutomatonDecision {
         }
     }
 
-    pub(crate) fn delta(&self, axis: Delta) -> Delta {
+    pub fn delta(&self, axis: Delta) -> Delta {
         fn sgn(&b: &bool) -> isize {
             if b { 1 } else { -1 }
         }
