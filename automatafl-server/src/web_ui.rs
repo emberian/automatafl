@@ -2252,7 +2252,8 @@ function handleMmStatus(status) {
   }
 }
 
-async function loadLobby() {
+async function loadLobby(force) {
+  if (!force && typeof document !== 'undefined' && document.hidden) return;
   const res = await fetch('/api/games');
   const games = await res.json();
   const tbody = document.getElementById('lobby-tables');
@@ -2752,7 +2753,8 @@ function updateHeaderStatusPill(st, rttMs) {
   const ramEl = document.getElementById('nav-ram-txt');
   if (!pingEl) return;
 
-  const rssMib = (st.resources.rss_bytes / 1048576).toFixed(1);
+  const memBytes = st.resources.memory_current_bytes || st.resources.rss_bytes || 0;
+  const rssMib = (memBytes / 1048576).toFixed(1);
   const maxMib = (st.resources.memory_max_bytes || 268435456) / 1048576;
   const memPct = (rssMib / maxMib) * 100;
   const srvUs = st.http_latency.p50_us;
@@ -2806,7 +2808,8 @@ function renderStatusDashboard(st, rttMs) {
   const res = st.resources;
   document.getElementById('st-cgroup-path').textContent = 'automatafl.slice';
 
-  const rssMib = res.rss_bytes / 1048576;
+  const memBytes = res.memory_current_bytes || res.rss_bytes || 0;
+  const rssMib = memBytes / 1048576;
   const maxMib = (res.memory_max_bytes || 268435456) / 1048576;
   const peakMib = res.memory_peak_bytes / 1048576;
   const memPct = (rssMib / maxMib) * 100;
@@ -2932,10 +2935,12 @@ function renderStatusDashboard(st, rttMs) {
   }
 }
 
-async function pollServerStatus() {
+async function pollServerStatus(force) {
+  if (!force && typeof document !== 'undefined' && document.hidden) return;
   try {
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    const res = await fetch('/api/status', { cache: 'no-store' });
+    const url = isStatusPage ? '/api/status' : '/api/status?lite=1';
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return;
     const st = await res.json();
     if (!st || !st.resources || !st.http_latency || !st.lean_ffi_latency) return;
@@ -2951,14 +2956,23 @@ async function pollServerStatus() {
   } catch (e) {}
 }
 
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      pollServerStatus(true);
+      if (!isStatusPage && !isGamePage) loadLobby(true);
+    }
+  });
+}
+
 if (isStatusPage) {
   document.getElementById('status-view').style.display = 'block';
-  pollServerStatus();
-  setInterval(pollServerStatus, 2000);
+  pollServerStatus(true);
+  setInterval(() => pollServerStatus(false), 2000);
 } else if (isGamePage) {
   document.getElementById('game-view').style.display = 'block';
-  pollServerStatus();
-  setInterval(pollServerStatus, 10000);
+  pollServerStatus(true);
+  setInterval(() => pollServerStatus(false), 10000);
   if (urlParams.get('join') === '1' && !getStoredToken(currentGameId)) {
     joinOpenSeat();
   } else {
@@ -2967,10 +2981,10 @@ if (isStatusPage) {
   }
 } else {
   document.getElementById('lobby-view').style.display = 'block';
-  loadLobby();
-  pollServerStatus();
-  setInterval(loadLobby, 5000);
-  setInterval(pollServerStatus, 10000);
+  loadLobby(true);
+  pollServerStatus(true);
+  setInterval(() => loadLobby(false), 5000);
+  setInterval(() => pollServerStatus(false), 10000);
 }
 </script>
 </body>

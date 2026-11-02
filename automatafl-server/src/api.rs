@@ -127,9 +127,6 @@ impl AppState {
 
     pub fn insert_session(&self, session: GameSession) -> Result<(), String> {
         self.store.save_game(&session)?;
-        global_telemetry()
-            .disk_saves_total
-            .fetch_add(1, Ordering::Relaxed);
         self.update_lobby_summary(&session);
         let id = session.id.clone();
         let (tx, _) = broadcast::channel(64);
@@ -153,9 +150,6 @@ impl AppState {
         }
         // Not in RAM: check durable disk store outside the games lock.
         let mut loaded = self.store.load_game(game_id).ok().flatten()?;
-        global_telemetry()
-            .disk_loads_total
-            .fetch_add(1, Ordering::Relaxed);
         loaded.last_active_ms = now_ms();
         self.update_lobby_summary(&loaded);
         let arc = Arc::new(Mutex::new(loaded));
@@ -207,10 +201,12 @@ impl AppState {
         let mut evicted_arcs = Vec::with_capacity(excess);
         {
             let mut notifiers = self.notifiers.write().expect("notifiers lock");
+            let mut summaries = self.lobby_summaries.write().expect("lobby_summaries lock");
             for (id, _, _) in candidates.into_iter().take(excess) {
                 if let Some(arc) = games.remove(&id) {
                     evicted_arcs.push(arc);
                 }
+                summaries.remove(&id);
                 if let Some(tx) = notifiers.get(&id) {
                     if tx.receiver_count() == 0 {
                         notifiers.remove(&id);
@@ -229,16 +225,16 @@ impl AppState {
         // Persist any evicted sessions outside `games` and `notifiers` write locks so readers never wait on disk I/O
         for arc in evicted_arcs {
             if let Ok(s) = arc.try_lock() {
-                if self.store.save_game(&s).is_ok() {
-                    global_telemetry()
-                        .disk_saves_total
-                        .fetch_add(1, Ordering::Relaxed);
-                }
+                let _ = self.store.save_game(&s);
             }
         }
     }
 
     pub fn status_snapshot(&self) -> StatusSnapshot {
+        self.status_snapshot_with_options(true)
+    }
+
+    pub fn status_snapshot_with_options(&self, include_history: bool) -> StatusSnapshot {
         let (in_memory_games, active_games, finished_games_in_ram) = {
             let games = self.games.read().expect("games lock");
             let total = games.len();
@@ -267,7 +263,7 @@ impl AppState {
             .lock()
             .map(|mm| mm.waiting_count())
             .unwrap_or(0);
-        global_telemetry().snapshot(
+        global_telemetry().snapshot_with_options(
             in_memory_games,
             self.max_in_memory_games,
             active_games,
@@ -275,6 +271,7 @@ impl AppState {
             lobby_public_games,
             matchmaking_queued,
             self.store.root_dir(),
+            include_history,
         )
     }
 
@@ -413,48 +410,69 @@ async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
 }
 
-async fn server_status(State(state): State<Arc<AppState>>) -> Json<StatusSnapshot> {
-    Json(state.status_snapshot())
+#[derive(Debug, Default, Deserialize)]
+pub struct StatusQuery {
+    #[serde(default)]
+    pub lite: Option<u8>,
+}
+
+async fn server_status(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<StatusQuery>,
+) -> Response {
+    let include_history = q.lite != Some(1);
+    tokio::task::spawn_blocking(move || {
+        Json(state.status_snapshot_with_options(include_history)).into_response()
+    })
+    .await
+    .unwrap_or_else(|e| bad_request(format!("status task error: {e}")))
 }
 
 async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
-    let snap = state.status_snapshot();
-    let body = global_telemetry().render_prometheus_metrics(&snap);
-    (
-        StatusCode::OK,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )],
-        body,
-    )
-        .into_response()
+    tokio::task::spawn_blocking(move || {
+        let snap = state.status_snapshot_with_options(false);
+        let body = global_telemetry().render_prometheus_metrics(&snap);
+        (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response()
+    })
+    .await
+    .unwrap_or_else(|e| bad_request(format!("metrics task error: {e}")))
 }
 
-fn record_session_transition_telemetry(
+struct PendingTransitionTelemetry {
+    game_id: String,
+    dur_us: u64,
+    turns_delta: u64,
+    clashes_delta: u64,
+    primary_kind: &'static str,
+    primary_summary: String,
+    finished: Option<(Option<Seat>, String)>,
+}
+
+fn capture_session_transition_telemetry(
     session: &GameSession,
     prev_turns: usize,
     prev_round: usize,
     prev_ended: bool,
     dur_us: u64,
     action_label: &str,
-) {
-    let tel = global_telemetry();
+) -> PendingTransitionTelemetry {
     let new_turns = session.turns_played.len();
-    if new_turns > prev_turns {
+    let (turns_delta, clashes_delta, primary_kind, primary_summary) = if new_turns > prev_turns {
         let delta = (new_turns - prev_turns) as u64;
-        tel.turns_resolved_total.fetch_add(delta, Ordering::Relaxed);
         if let Some(last_t) = session.turns_played.last() {
             let clash_cnt = last_t.conflict_subs.len();
-            if clash_cnt > 0 {
-                tel.conflicts_triggered_total
-                    .fetch_add(clash_cnt as u64, Ordering::Relaxed);
-            }
-            tel.trace_event(
-                "INFO",
+            (
+                delta,
+                clash_cnt as u64,
                 "TURN_RESOLVE",
-                Some(&session.id),
-                Some(dur_us),
                 format!(
                     "turn={} auto=({},{})->({},{}) clashes={} ({})",
                     last_t.turn_no,
@@ -465,41 +483,81 @@ fn record_session_transition_telemetry(
                     clash_cnt,
                     last_t.auto_step.why
                 ),
-            );
+            )
+        } else {
+            (delta, 0, "TURN_RESOLVE", format!("turn={}", session.turn_no))
         }
     } else if session.conflict_subs.len() > prev_round {
-        tel.conflicts_triggered_total
-            .fetch_add(1, Ordering::Relaxed);
-        tel.trace_event(
-            "INFO",
+        (
+            0,
+            1,
             "CONFLICT_CLASH",
-            Some(&session.id),
-            Some(dur_us),
             format!(
                 "turn={} clash_round={} marks={}",
                 session.turn_no,
                 session.conflict_subs.len(),
                 session.marks.len()
             ),
-        );
+        )
     } else {
-        tel.trace_event(
-            "INFO",
+        (
+            0,
+            0,
             "ROUND_SEAL",
-            Some(&session.id),
-            Some(dur_us),
             format!(
                 "{} turn={} phase={:?} (fog-of-war sealed)",
                 action_label,
                 session.turn_no,
                 session.phase()
             ),
-        );
-    }
+        )
+    };
 
-    if session.ended && !prev_ended {
+    let finished = if session.ended && !prev_ended {
+        Some((
+            session.winner,
+            format!(
+                "winner={:?} reason={:?} turns={}",
+                session.winner,
+                session.finish_reason,
+                session.turns_played.len()
+            ),
+        ))
+    } else {
+        None
+    };
+
+    PendingTransitionTelemetry {
+        game_id: session.id.clone(),
+        dur_us,
+        turns_delta,
+        clashes_delta,
+        primary_kind,
+        primary_summary,
+        finished,
+    }
+}
+
+fn emit_transition_telemetry(pending: PendingTransitionTelemetry) {
+    let tel = global_telemetry();
+    if pending.turns_delta > 0 {
+        tel.turns_resolved_total
+            .fetch_add(pending.turns_delta, Ordering::Relaxed);
+    }
+    if pending.clashes_delta > 0 {
+        tel.conflicts_triggered_total
+            .fetch_add(pending.clashes_delta, Ordering::Relaxed);
+    }
+    tel.trace_event(
+        "INFO",
+        pending.primary_kind,
+        Some(&pending.game_id),
+        Some(pending.dur_us),
+        pending.primary_summary,
+    );
+    if let Some((winner, fin_summary)) = pending.finished {
         tel.games_finished_total.fetch_add(1, Ordering::Relaxed);
-        match session.winner {
+        match winner {
             Some(Seat::A) => {
                 tel.wins_seat_a.fetch_add(1, Ordering::Relaxed);
             }
@@ -513,14 +571,9 @@ fn record_session_transition_telemetry(
         tel.trace_event(
             "INFO",
             "GAME_FINISH",
-            Some(&session.id),
-            Some(dur_us),
-            format!(
-                "winner={:?} reason={:?} turns={}",
-                session.winner,
-                session.finish_reason,
-                session.turns_played.len()
-            ),
+            Some(&pending.game_id),
+            Some(pending.dur_us),
+            fin_summary,
         );
     }
 }
@@ -529,26 +582,13 @@ async fn list_games(State(state): State<Arc<AppState>>) -> Json<Vec<LobbyGameSum
     global_telemetry()
         .ep_list_games
         .fetch_add(1, Ordering::Relaxed);
-    let entries: Vec<(String, Arc<Mutex<GameSession>>)> = {
-        let games = state.games.read().expect("games lock");
-        games.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect()
-    };
-    let mut list: Vec<LobbyGameSummary> = Vec::with_capacity(entries.len());
-    for (id, arc) in entries {
-        if let Ok(s) = arc.try_lock() {
-            if s.is_public {
-                list.push(s.lobby_summary());
-            }
-        } else if let Some(cached) = state
-            .lobby_summaries
-            .read()
-            .expect("lobby_summaries lock")
-            .get(&id)
-            .cloned()
-        {
-            list.push(cached);
-        }
-    }
+    let mut list: Vec<LobbyGameSummary> = state
+        .lobby_summaries
+        .read()
+        .expect("lobby_summaries lock")
+        .values()
+        .cloned()
+        .collect();
     list.sort_by(|a, b| b.id.cmp(&a.id));
     Json(list)
 }
@@ -857,7 +897,7 @@ async fn submit_move(
         let Some(session_arc) = state.get_or_load_session(&id) else {
             return not_found(format!("game {id} not found"));
         };
-        let view = {
+        let (view, pending_tel) = {
             let mut session = session_arc.lock().expect("session lock");
             session.last_active_ms = now_ms();
             let Some(seat) = session.authenticate(tok.as_deref()) else {
@@ -879,7 +919,7 @@ async fn submit_move(
             }
             state.update_lobby_summary(&session);
             let dur_us = t0.elapsed().as_micros() as u64;
-            record_session_transition_telemetry(
+            let pending = capture_session_transition_telemetry(
                 &session,
                 prev_turns,
                 prev_round,
@@ -887,9 +927,10 @@ async fn submit_move(
                 dur_us,
                 &format!("submit seat={}", seat.label()),
             );
-            session.view_for(Some(seat))
+            (session.view_for(Some(seat)), pending)
         };
         drop(session_arc);
+        emit_transition_telemetry(pending_tel);
         state.evict_excess_games(None);
         state.notify_game(&id);
         Json(ActionResponse { view }).into_response()
@@ -928,7 +969,7 @@ async fn commit_move(
         let Some(session_arc) = state.get_or_load_session(&id) else {
             return not_found(format!("game {id} not found"));
         };
-        let view = {
+        let (view, pending_tel) = {
             let mut session = session_arc.lock().expect("session lock");
             session.last_active_ms = now_ms();
             let Some(seat) = session.authenticate(tok.as_deref()) else {
@@ -963,7 +1004,7 @@ async fn commit_move(
             }
             state.update_lobby_summary(&session);
             let dur_us = t0.elapsed().as_micros() as u64;
-            record_session_transition_telemetry(
+            let pending = capture_session_transition_telemetry(
                 &session,
                 prev_turns,
                 prev_round,
@@ -971,9 +1012,10 @@ async fn commit_move(
                 dur_us,
                 &format!("commit seat={}", seat.label()),
             );
-            session.view_for(Some(seat))
+            (session.view_for(Some(seat)), pending)
         };
         drop(session_arc);
+        emit_transition_telemetry(pending_tel);
         state.evict_excess_games(None);
         state.notify_game(&id);
         Json(ActionResponse { view }).into_response()
@@ -1010,7 +1052,7 @@ async fn reveal_round(
         let Some(session_arc) = state.get_or_load_session(&id) else {
             return not_found(format!("game {id} not found"));
         };
-        let view = {
+        let (view, pending_tel) = {
             let mut session = session_arc.lock().expect("session lock");
             session.last_active_ms = now_ms();
             let Some(seat) = session.authenticate(tok.as_deref()) else {
@@ -1038,7 +1080,7 @@ async fn reveal_round(
             }
             state.update_lobby_summary(&session);
             let dur_us = t0.elapsed().as_micros() as u64;
-            record_session_transition_telemetry(
+            let pending = capture_session_transition_telemetry(
                 &session,
                 prev_turns,
                 prev_round,
@@ -1046,9 +1088,10 @@ async fn reveal_round(
                 dur_us,
                 &format!("reveal seat={}", seat.label()),
             );
-            session.view_for(Some(seat))
+            (session.view_for(Some(seat)), pending)
         };
         drop(session_arc);
+        emit_transition_telemetry(pending_tel);
         state.evict_excess_games(None);
         state.notify_game(&id);
         Json(ActionResponse { view }).into_response()
@@ -1072,7 +1115,7 @@ async fn resolve_round(
         let Some(session_arc) = state.get_or_load_session(&id) else {
             return not_found(format!("game {id} not found"));
         };
-        let view = {
+        let (view, pending_tel) = {
             let mut session = session_arc.lock().expect("session lock");
             session.last_active_ms = now_ms();
             let viewer = session.authenticate(tok.as_deref());
@@ -1092,7 +1135,7 @@ async fn resolve_round(
             }
             state.update_lobby_summary(&session);
             let dur_us = t0.elapsed().as_micros() as u64;
-            record_session_transition_telemetry(
+            let pending = capture_session_transition_telemetry(
                 &session,
                 prev_turns,
                 prev_round,
@@ -1100,9 +1143,10 @@ async fn resolve_round(
                 dur_us,
                 "resolve_round",
             );
-            session.view_for(viewer)
+            (session.view_for(viewer), pending)
         };
         drop(session_arc);
+        emit_transition_telemetry(pending_tel);
         state.evict_excess_games(None);
         state.notify_game(&id);
         Json(ActionResponse { view }).into_response()
@@ -1128,46 +1172,51 @@ async fn resign_game(
         .ep_resign_game
         .fetch_add(1, Ordering::Relaxed);
     let t0 = Instant::now();
-    let Some(session_arc) = state.get_or_load_session(&id) else {
-        return not_found(format!("game {id} not found"));
-    };
     let tok = extract_token(&headers, &query);
-    let view = {
-        let mut session = session_arc.lock().expect("session lock");
-        session.last_active_ms = now_ms();
-        let Some(seat) = session.authenticate(tok.as_deref()) else {
-            return unauthorized("valid seat token required to resign");
+    tokio::task::spawn_blocking(move || {
+        let Some(session_arc) = state.get_or_load_session(&id) else {
+            return not_found(format!("game {id} not found"));
         };
-        let req = body.map(|b| b.0).unwrap_or_default();
-        if req.seat.is_some_and(|expected| expected != seat) {
-            return unauthorized("seat token does not match requested seat");
-        }
-        let prev_turns = session.turns_played.len();
-        let prev_round = session.conflict_subs.len();
-        let prev_ended = session.ended;
+        let (view, pending_tel) = {
+            let mut session = session_arc.lock().expect("session lock");
+            session.last_active_ms = now_ms();
+            let Some(seat) = session.authenticate(tok.as_deref()) else {
+                return unauthorized("valid seat token required to resign");
+            };
+            let req = body.map(|b| b.0).unwrap_or_default();
+            if req.seat.is_some_and(|expected| expected != seat) {
+                return unauthorized("seat token does not match requested seat");
+            }
+            let prev_turns = session.turns_played.len();
+            let prev_round = session.conflict_subs.len();
+            let prev_ended = session.ended;
 
-        if let Err(e) = session.resign(seat) {
-            return bad_request(e);
-        }
-        if let Err(e) = state.store.save_game(&session) {
-            return bad_request(e);
-        }
-        state.update_lobby_summary(&session);
-        let dur_us = t0.elapsed().as_micros() as u64;
-        record_session_transition_telemetry(
-            &session,
-            prev_turns,
-            prev_round,
-            prev_ended,
-            dur_us,
-            &format!("resign seat={}", seat.label()),
-        );
-        session.view_for(Some(seat))
-    };
-    drop(session_arc);
-    state.evict_excess_games(None);
-    state.notify_game(&id);
-    Json(ActionResponse { view }).into_response()
+            if let Err(e) = session.resign(seat) {
+                return bad_request(e);
+            }
+            if let Err(e) = state.store.save_game(&session) {
+                return bad_request(e);
+            }
+            state.update_lobby_summary(&session);
+            let dur_us = t0.elapsed().as_micros() as u64;
+            let pending = capture_session_transition_telemetry(
+                &session,
+                prev_turns,
+                prev_round,
+                prev_ended,
+                dur_us,
+                &format!("resign seat={}", seat.label()),
+            );
+            (session.view_for(Some(seat)), pending)
+        };
+        drop(session_arc);
+        emit_transition_telemetry(pending_tel);
+        state.evict_excess_games(None);
+        state.notify_game(&id);
+        Json(ActionResponse { view }).into_response()
+    })
+    .await
+    .unwrap_or_else(|e| bad_request(format!("resign_game task error: {e}")))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1189,26 +1238,30 @@ async fn export_replay(
     global_telemetry()
         .ep_replay
         .fetch_add(1, Ordering::Relaxed);
-    let Some(session_arc) = state.get_or_load_session(&id) else {
-        return not_found(format!("game {id} not found"));
-    };
-    let export = {
-        let session = session_arc.lock().expect("session lock");
-        let replay_verified = session.verify_replay().is_ok();
-        ReplayExport {
-            game_id: session.id.clone(),
-            config: session.config.clone(),
-            initial_board_wire: session.start_board.to_wire(),
-            current_board_wire: session.board.to_wire(),
-            turns_played: session.turns_played.clone(),
-            winner: session.winner,
-            finish_reason: session.finish_reason.clone(),
-            replay_verified,
-        }
-    };
-    drop(session_arc);
-    state.evict_excess_games(None);
-    Json(export).into_response()
+    tokio::task::spawn_blocking(move || {
+        let Some(session_arc) = state.get_or_load_session(&id) else {
+            return not_found(format!("game {id} not found"));
+        };
+        let export = {
+            let session = session_arc.lock().expect("session lock");
+            let replay_verified = session.verify_replay().is_ok();
+            ReplayExport {
+                game_id: session.id.clone(),
+                config: session.config.clone(),
+                initial_board_wire: session.start_board.to_wire(),
+                current_board_wire: session.board.to_wire(),
+                turns_played: session.turns_played.clone(),
+                winner: session.winner,
+                finish_reason: session.finish_reason.clone(),
+                replay_verified,
+            }
+        };
+        drop(session_arc);
+        state.evict_excess_games(None);
+        Json(export).into_response()
+    })
+    .await
+    .unwrap_or_else(|e| bad_request(format!("export_replay task error: {e}")))
 }
 
 struct SseStreamGuard;

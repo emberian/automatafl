@@ -2138,6 +2138,13 @@ async fn telemetry_status_dashboard_metrics_and_fog_of_war_redaction() {
 
     // Also verify `/metrics` does not leak sealed move coordinates:
     assert!(!metrics_text.contains("(3,4)"));
+
+    // 6. Verify `/api/status?lite=1` omits `series` and `recent_events` for lightweight header polling:
+    let (st_lite, lite_json) = get_json(&app, "/api/status?lite=1", None).await;
+    assert_eq!(st_lite, StatusCode::OK);
+    assert!(lite_json["series"].as_array().unwrap().is_empty());
+    assert!(lite_json["recent_events"].as_array().unwrap().is_empty());
+    assert!(lite_json["lean_ffi_calls_total"].as_u64().unwrap() > 0);
 }
 
 

@@ -73,6 +73,15 @@ struct RollingState {
     last_sample_cpu_usec: u64,
     last_sample_wall_us: u64,
     last_cpu_pct: f64,
+    cached_resources: Option<ResourceTelemetry>,
+    last_disk_scan_sec: u64,
+    last_disk_saves: u64,
+    cached_disk_used_bytes: u64,
+    cached_persisted_files: usize,
+    cached_http_count: u64,
+    cached_http_latency: Option<LatencyStats>,
+    cached_lean_count: u64,
+    cached_lean_latency: Option<LatencyStats>,
 }
 
 pub struct ServerTelemetry {
@@ -347,6 +356,15 @@ impl ServerTelemetry {
                 last_sample_cpu_usec: 0,
                 last_sample_wall_us: 0,
                 last_cpu_pct: 0.0,
+                cached_resources: None,
+                last_disk_scan_sec: 0,
+                last_disk_saves: u64::MAX,
+                cached_disk_used_bytes: 0,
+                cached_persisted_files: 0,
+                cached_http_count: u64::MAX,
+                cached_http_latency: None,
+                cached_lean_count: u64::MAX,
+                cached_lean_latency: None,
             }),
         }
     }
@@ -501,9 +519,32 @@ impl ServerTelemetry {
         matchmaking_queued: usize,
         data_dir: Option<&Path>,
     ) -> StatusSnapshot {
+        self.snapshot_with_options(
+            in_memory_games,
+            max_in_memory_games,
+            active_games,
+            finished_games_in_ram,
+            lobby_public_games,
+            matchmaking_queued,
+            data_dir,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn snapshot_with_options(
+        &self,
+        in_memory_games: usize,
+        max_in_memory_games: usize,
+        active_games: usize,
+        finished_games_in_ram: usize,
+        lobby_public_games: usize,
+        matchmaking_queued: usize,
+        data_dir: Option<&Path>,
+        include_history: bool,
+    ) -> StatusSnapshot {
         let uptime_secs = self.start_instant.elapsed().as_secs();
         let wall_us = self.start_instant.elapsed().as_micros() as u64;
-        let mut res = read_os_and_cgroup_resources(data_dir);
 
         let http_count = self.http_requests_total.load(Ordering::Relaxed);
         let http_total_us = self.http_duration_us_total.load(Ordering::Relaxed);
@@ -522,11 +563,26 @@ impl ServerTelemetry {
         let bot_avg_us = bot_total_us.checked_div(bot_count).unwrap_or(0);
 
         let active_sse = self.active_sse_streams.load(Ordering::Relaxed);
+        let disk_saves = self.disk_saves_total.load(Ordering::Relaxed);
 
-        let (http_latency, lean_ffi_latency, series, recent_events) = {
+        let (res, http_latency, lean_ffi_latency, series, recent_events) = {
             let mut g = self.rolling.lock().expect("telemetry lock");
             let now_sec = now_epoch_ms() / 1000;
-            if now_sec > g.last_sample_sec {
+            let res = if now_sec > g.last_sample_sec || g.cached_resources.is_none() {
+                let scan_disk = now_sec >= g.last_disk_scan_sec.saturating_add(15)
+                    || disk_saves != g.last_disk_saves;
+                let mut fresh_res = read_os_and_cgroup_resources(
+                    data_dir,
+                    scan_disk,
+                    (g.cached_disk_used_bytes, g.cached_persisted_files),
+                );
+                if scan_disk {
+                    g.last_disk_scan_sec = now_sec;
+                    g.last_disk_saves = disk_saves;
+                    g.cached_disk_used_bytes = fresh_res.disk_used_bytes;
+                    g.cached_persisted_files = fresh_res.persisted_files_count;
+                }
+
                 let dt_sec = (now_sec - g.last_sample_sec).max(1);
                 let d_reqs = http_count.saturating_sub(g.last_sample_reqs);
                 let rps = if g.last_sample_sec == 0 {
@@ -536,16 +592,16 @@ impl ServerTelemetry {
                 };
 
                 let dt_wall_us = wall_us.saturating_sub(g.last_sample_wall_us);
-                let d_cpu_us = res.cpu_usage_usec.saturating_sub(g.last_sample_cpu_usec);
+                let d_cpu_us = fresh_res.cpu_usage_usec.saturating_sub(g.last_sample_cpu_usec);
                 if g.last_sample_wall_us > 0 && dt_wall_us > 0 {
                     g.last_cpu_pct =
                         ((d_cpu_us as f64 / dt_wall_us as f64) * 100.0).clamp(0.0, 400.0);
                 }
-                res.cpu_percent = g.last_cpu_pct;
+                fresh_res.cpu_percent = g.last_cpu_pct;
 
                 g.last_sample_sec = now_sec;
                 g.last_sample_reqs = http_count;
-                g.last_sample_cpu_usec = res.cpu_usage_usec;
+                g.last_sample_cpu_usec = fresh_res.cpu_usage_usec;
                 g.last_sample_wall_us = wall_us;
 
                 let http_avg = http_total_us.checked_div(http_count).unwrap_or(0);
@@ -560,32 +616,56 @@ impl ServerTelemetry {
                     http_avg_us: http_avg,
                     lean_avg_us: lean_avg,
                     bot_avg_us,
-                    rss_bytes: res.memory_current_bytes,
-                    cpu_pct: res.cpu_percent,
+                    rss_bytes: fresh_res.memory_current_bytes,
+                    cpu_pct: fresh_res.cpu_percent,
                     active_games,
                     active_sse,
                 });
+                g.cached_resources = Some(fresh_res.clone());
+                fresh_res
             } else {
-                res.cpu_percent = g.last_cpu_pct;
-            }
+                g.cached_resources.clone().unwrap()
+            };
 
-            let http_lat = Self::compute_percentiles(
-                &g.http_latencies_us,
-                http_count,
-                http_total_us,
-                http_last_us,
-                http_max_us,
-            );
-            let lean_lat = Self::compute_percentiles(
-                &g.lean_latencies_us,
-                lean_count,
-                lean_total_us,
-                lean_last_us,
-                lean_max_us,
-            );
-            let ser: Vec<TelemetrySample> = g.series.iter().cloned().collect();
-            let evs: Vec<TraceEvent> = g.events.iter().rev().cloned().collect();
-            (http_lat, lean_lat, ser, evs)
+            let http_lat = if g.cached_http_count == http_count {
+                g.cached_http_latency.clone().unwrap()
+            } else {
+                let lat = Self::compute_percentiles(
+                    &g.http_latencies_us,
+                    http_count,
+                    http_total_us,
+                    http_last_us,
+                    http_max_us,
+                );
+                g.cached_http_count = http_count;
+                g.cached_http_latency = Some(lat.clone());
+                lat
+            };
+
+            let lean_lat = if g.cached_lean_count == lean_count {
+                g.cached_lean_latency.clone().unwrap()
+            } else {
+                let lat = Self::compute_percentiles(
+                    &g.lean_latencies_us,
+                    lean_count,
+                    lean_total_us,
+                    lean_last_us,
+                    lean_max_us,
+                );
+                g.cached_lean_count = lean_count;
+                g.cached_lean_latency = Some(lat.clone());
+                lat
+            };
+
+            let (ser, evs) = if include_history {
+                (
+                    g.series.iter().cloned().collect(),
+                    g.events.iter().rev().cloned().collect(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            (res, http_lat, lean_lat, ser, evs)
         };
 
         StatusSnapshot {
@@ -761,7 +841,11 @@ fn read_u64_file(path: impl AsRef<Path>) -> Option<u64> {
     s.trim().parse::<u64>().ok()
 }
 
-fn read_os_and_cgroup_resources(data_dir: Option<&Path>) -> ResourceTelemetry {
+fn read_os_and_cgroup_resources(
+    data_dir: Option<&Path>,
+    scan_disk: bool,
+    prev_disk: (u64, usize),
+) -> ResourceTelemetry {
     let mut rss_bytes = 0u64;
     let mut hwm_bytes = 0u64;
     let mut vmsize_bytes = 0u64;
@@ -891,26 +975,31 @@ fn read_os_and_cgroup_resources(data_dir: Option<&Path>) -> ResourceTelemetry {
         }
     }
 
-    let mut disk_used_bytes = 0u64;
-    let mut persisted_files_count = 0usize;
-    if let Some(dir) = data_dir {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_file() {
-                        disk_used_bytes += meta.len();
-                        let is_json = entry
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|n| !n.starts_with('.') && n.ends_with(".json"));
-                        if is_json {
-                            persisted_files_count += 1;
+    let (disk_used_bytes, persisted_files_count) = if scan_disk {
+        let mut used = 0u64;
+        let mut count = 0usize;
+        if let Some(dir) = data_dir {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_file() {
+                            used += meta.len();
+                            let is_json = entry
+                                .file_name()
+                                .to_str()
+                                .is_some_and(|n| !n.starts_with('.') && n.ends_with(".json"));
+                            if is_json {
+                                count += 1;
+                            }
                         }
                     }
                 }
             }
         }
-    }
+        (used, count)
+    } else {
+        prev_disk
+    };
 
     ResourceTelemetry {
         memory_current_bytes,

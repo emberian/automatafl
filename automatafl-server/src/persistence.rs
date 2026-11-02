@@ -9,9 +9,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use crate::session::GameSession;
+use crate::telemetry::global_telemetry;
 
 /// Hard upper bound on persisted game JSON files on disk (~1 KB each -> < 4 MiB total).
 pub const MAX_PERSISTED_GAMES_ON_DISK: usize = 2048;
+
+/// Maximum number of recent games eagerly loaded into RAM on server boot (older games remain
+/// on disk and are transparently lazy-loaded on demand via `AppState::get_or_load_session`).
+pub const MAX_STARTUP_LOAD_GAMES: usize = 256;
 
 static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -61,7 +66,7 @@ impl GameStore {
         };
         let target = self.game_path(root, &session.id)?;
         let tmp = root.join(format!(".{}.json.tmp", session.id));
-        let payload = serde_json::to_vec_pretty(session)
+        let payload = serde_json::to_vec(session)
             .map_err(|e| format!("failed to serialize game {}: {e}", session.id))?;
         if let Err(e) = fs::write(&tmp, &payload) {
             self.prune_excess_disk_files(root);
@@ -75,6 +80,9 @@ impl GameStore {
                 target.display()
             )
         })?;
+        global_telemetry()
+            .disk_saves_total
+            .fetch_add(1, Ordering::Relaxed);
         if SAVE_COUNTER.fetch_add(1, Ordering::Relaxed).is_multiple_of(64) {
             self.prune_excess_disk_files(root);
         }
@@ -91,7 +99,7 @@ impl GameStore {
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if name.starts_with(".g-") && name.ends_with(".tmp") {
+            if name.starts_with('.') && name.ends_with(".tmp") {
                 let _ = fs::remove_file(&path);
                 continue;
             }
@@ -129,17 +137,21 @@ impl GameStore {
         session
             .verify_replay()
             .map_err(|e| format!("replay verification failed for {}: {e}", session.id))?;
+        global_telemetry()
+            .disk_loads_total
+            .fetch_add(1, Ordering::Relaxed);
         Ok(Some(session))
     }
 
-    /// Load all persisted games from the directory and verify every game's replay integrity.
+    /// Load up to `MAX_STARTUP_LOAD_GAMES` most recently modified persisted games from the directory
+    /// and verify every loaded game's replay integrity (older games remain on disk for lazy loading).
     pub fn load_all_and_verify(&self) -> Result<Vec<GameSession>, String> {
         let Some(ref root) = self.root else {
             return Ok(Vec::new());
         };
         let entries = fs::read_dir(root)
             .map_err(|e| format!("failed to read persistence dir {}: {e}", root.display()))?;
-        let mut sessions = Vec::new();
+        let mut candidates: Vec<(PathBuf, SystemTime)> = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
             let path = entry.path();
@@ -149,6 +161,18 @@ impl GameStore {
             if name.starts_with('.') || !name.ends_with(".json") {
                 continue;
             }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            candidates.push((path, mtime));
+        }
+        if candidates.len() > MAX_STARTUP_LOAD_GAMES {
+            candidates.sort_by(|a, b| b.1.cmp(&a.1));
+            candidates.truncate(MAX_STARTUP_LOAD_GAMES);
+        }
+        let mut sessions = Vec::with_capacity(candidates.len());
+        for (path, _) in candidates {
             let bytes =
                 fs::read(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
             let session: GameSession = serde_json::from_slice(&bytes)
