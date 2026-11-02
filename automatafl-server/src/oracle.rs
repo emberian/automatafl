@@ -6,12 +6,14 @@
 //! formally verified Lean 4 core (`automatafl_lean::rules_wire`).
 
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::protocol::{
     ATT, AUTO, AutomatonSense, Board, BoardPreset, ConfluenceMode, Coord, Decision, GameConfig,
     Move, REP, Raycast, RoundOutcome, Sightline, Standing, TieBreakMode, VAC, coords_from_wire,
     coords_wire, goals_wire, moves_from_wire, moves_wire, pids_from_wire, pids_wire,
 };
+use crate::telemetry::global_telemetry;
 
 type FfiWireFn = fn(&str) -> Result<String, String>;
 
@@ -25,10 +27,18 @@ pub fn register_lean_ffi(handler: FfiWireFn) {
 /// Dispatch a wire string to the linked Lean FFI handler if registered, or execute the
 /// compiled Lean 4 C FFI (`automatafl_lean::rules_wire`) by default.
 pub fn call_wire(wire: &str) -> Result<String, String> {
-    if let Some(f) = LEAN_FFI_HANDLER.get() {
-        return f(wire);
-    }
-    Ok(automatafl_lean::rules_wire(wire))
+    let t0 = Instant::now();
+    let res = if let Some(f) = LEAN_FFI_HANDLER.get() {
+        f(wire)
+    } else {
+        Ok(automatafl_lean::rules_wire(wire))
+    };
+    let dur_us = t0.elapsed().as_micros() as u64;
+    let ok = res
+        .as_ref()
+        .is_ok_and(|s| s.split_whitespace().next() == Some("1"));
+    global_telemetry().record_lean_ffi(dur_us, ok);
+    res
 }
 
 /// Canonical `AutomataflFFI.rulesWire` evaluation delegated directly to `automatafl-lean`.

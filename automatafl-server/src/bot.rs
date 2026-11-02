@@ -6,11 +6,13 @@
 //! in the arguments passed to the bot, making move leakage impossible.
 
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::oracle::{executable_targets, legal_targets, move_legal};
 use crate::protocol::{AUTO, Board, Coord, GameConfig, Move, Seat, VAC};
+use crate::telemetry::global_telemetry;
 
 /// Selectable computer opponent strategy / difficulty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -220,6 +222,38 @@ pub fn choose_bot_move(
 /// Config- and cooldown-aware bot move selector delegating to `automatafl_ai::BotEngine`
 /// over `PackedBoard` while strictly isolating secret moves.
 pub fn choose_bot_move_with_config(
+    strategy: BotStrategy,
+    cfg: &GameConfig,
+    last_auto_step: Option<Coord>,
+    cooldown_squares: &[Coord],
+    board: &Board,
+    goals: &[(Coord, u32)],
+    marks: &[Coord],
+    locked: &[Move],
+    bot_seat: Seat,
+    seed: u64,
+) -> Option<Move> {
+    let t0 = Instant::now();
+    let res = choose_bot_move_with_config_inner(
+        strategy,
+        cfg,
+        last_auto_step,
+        cooldown_squares,
+        board,
+        goals,
+        marks,
+        locked,
+        bot_seat,
+        seed,
+    );
+    let dur_us = t0.elapsed().as_micros() as u64;
+    if res.is_some() {
+        global_telemetry().record_bot_move(strategy, dur_us);
+    }
+    res
+}
+
+fn choose_bot_move_with_config_inner(
     strategy: BotStrategy,
     cfg: &GameConfig,
     last_auto_step: Option<Coord>,

@@ -11,10 +11,11 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -29,6 +30,7 @@ use crate::matchmaking::{MatchmakingQueue, SeekRequest};
 use crate::persistence::GameStore;
 use crate::protocol::{Coord, GameConfig, Seat};
 use crate::session::{FinishReason, GameSession, GameView, LobbyGameSummary, PlayedTurn};
+use crate::telemetry::{StatusSnapshot, global_telemetry};
 use crate::web_ui::INDEX_HTML;
 
 pub const DEFAULT_MAX_IN_MEMORY_GAMES: usize = 256;
@@ -125,6 +127,9 @@ impl AppState {
 
     pub fn insert_session(&self, session: GameSession) -> Result<(), String> {
         self.store.save_game(&session)?;
+        global_telemetry()
+            .disk_saves_total
+            .fetch_add(1, Ordering::Relaxed);
         self.update_lobby_summary(&session);
         let id = session.id.clone();
         let (tx, _) = broadcast::channel(64);
@@ -148,6 +153,9 @@ impl AppState {
         }
         // Not in RAM: check durable disk store outside the games lock.
         let mut loaded = self.store.load_game(game_id).ok().flatten()?;
+        global_telemetry()
+            .disk_loads_total
+            .fetch_add(1, Ordering::Relaxed);
         loaded.last_active_ms = now_ms();
         self.update_lobby_summary(&loaded);
         let arc = Arc::new(Mutex::new(loaded));
@@ -212,12 +220,62 @@ impl AppState {
         }
         drop(games);
 
+        if !evicted_arcs.is_empty() {
+            global_telemetry()
+                .cache_evictions_total
+                .fetch_add(evicted_arcs.len() as u64, Ordering::Relaxed);
+        }
+
         // Persist any evicted sessions outside `games` and `notifiers` write locks so readers never wait on disk I/O
         for arc in evicted_arcs {
             if let Ok(s) = arc.try_lock() {
-                let _ = self.store.save_game(&s);
+                if self.store.save_game(&s).is_ok() {
+                    global_telemetry()
+                        .disk_saves_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
+    }
+
+    pub fn status_snapshot(&self) -> StatusSnapshot {
+        let (in_memory_games, active_games, finished_games_in_ram) = {
+            let games = self.games.read().expect("games lock");
+            let total = games.len();
+            let mut active = 0usize;
+            let mut finished = 0usize;
+            for arc in games.values() {
+                if let Ok(s) = arc.try_lock() {
+                    if s.ended {
+                        finished += 1;
+                    } else {
+                        active += 1;
+                    }
+                } else {
+                    active += 1;
+                }
+            }
+            (total, active, finished)
+        };
+        let lobby_public_games = self
+            .lobby_summaries
+            .read()
+            .expect("lobby_summaries lock")
+            .len();
+        let matchmaking_queued = self
+            .matchmaking
+            .lock()
+            .map(|mm| mm.waiting_count())
+            .unwrap_or(0);
+        global_telemetry().snapshot(
+            in_memory_games,
+            self.max_in_memory_games,
+            active_games,
+            finished_games_in_ram,
+            lobby_public_games,
+            matchmaking_queued,
+            self.store.root_dir(),
+        )
     }
 
     fn notify_game(&self, game_id: &str) {
@@ -232,12 +290,28 @@ impl AppState {
     }
 }
 
+async fn http_telemetry_middleware(req: Request, next: Next) -> Response {
+    let path = req.uri().path();
+    let skip_health_count = path == "/api/health" || path == "/api/status" || path == "/metrics";
+    let t0 = Instant::now();
+    let resp = next.run(req).await;
+    if !skip_health_count {
+        let dur_us = t0.elapsed().as_micros() as u64;
+        global_telemetry().record_http_request(resp.status().as_u16(), dur_us);
+    }
+    resp
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(serve_index))
+        .route("/status", get(serve_index))
+        .route("/lag", get(serve_index))
         .route("/game/{id}", get(serve_index))
         .route("/watch/{id}", get(serve_index))
         .route("/api/health", get(health_check))
+        .route("/api/status", get(server_status))
+        .route("/metrics", get(prometheus_metrics))
         .route("/api/games", get(list_games).post(create_game))
         .route("/api/games/{id}", get(get_game_view))
         .route("/api/games/{id}/join", post(join_game))
@@ -255,6 +329,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/matchmaking/seek/{ticket_id}",
             delete(matchmaking_cancel),
         )
+        .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state)
 }
 
@@ -338,7 +413,122 @@ async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true }))
 }
 
+async fn server_status(State(state): State<Arc<AppState>>) -> Json<StatusSnapshot> {
+    Json(state.status_snapshot())
+}
+
+async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> Response {
+    let snap = state.status_snapshot();
+    let body = global_telemetry().render_prometheus_metrics(&snap);
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
+fn record_session_transition_telemetry(
+    session: &GameSession,
+    prev_turns: usize,
+    prev_round: usize,
+    prev_ended: bool,
+    dur_us: u64,
+    action_label: &str,
+) {
+    let tel = global_telemetry();
+    let new_turns = session.turns_played.len();
+    if new_turns > prev_turns {
+        let delta = (new_turns - prev_turns) as u64;
+        tel.turns_resolved_total.fetch_add(delta, Ordering::Relaxed);
+        if let Some(last_t) = session.turns_played.last() {
+            let clash_cnt = last_t.conflict_subs.len();
+            if clash_cnt > 0 {
+                tel.conflicts_triggered_total
+                    .fetch_add(clash_cnt as u64, Ordering::Relaxed);
+            }
+            tel.trace_event(
+                "INFO",
+                "TURN_RESOLVE",
+                Some(&session.id),
+                Some(dur_us),
+                format!(
+                    "turn={} auto=({},{})->({},{}) clashes={} ({})",
+                    last_t.turn_no,
+                    last_t.auto_step.from.0,
+                    last_t.auto_step.from.1,
+                    last_t.auto_step.to.0,
+                    last_t.auto_step.to.1,
+                    clash_cnt,
+                    last_t.auto_step.why
+                ),
+            );
+        }
+    } else if session.conflict_subs.len() > prev_round {
+        tel.conflicts_triggered_total
+            .fetch_add(1, Ordering::Relaxed);
+        tel.trace_event(
+            "INFO",
+            "CONFLICT_CLASH",
+            Some(&session.id),
+            Some(dur_us),
+            format!(
+                "turn={} clash_round={} marks={}",
+                session.turn_no,
+                session.conflict_subs.len(),
+                session.marks.len()
+            ),
+        );
+    } else {
+        tel.trace_event(
+            "INFO",
+            "ROUND_SEAL",
+            Some(&session.id),
+            Some(dur_us),
+            format!(
+                "{} turn={} phase={:?} (fog-of-war sealed)",
+                action_label,
+                session.turn_no,
+                session.phase()
+            ),
+        );
+    }
+
+    if session.ended && !prev_ended {
+        tel.games_finished_total.fetch_add(1, Ordering::Relaxed);
+        match session.winner {
+            Some(Seat::A) => {
+                tel.wins_seat_a.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(Seat::B) => {
+                tel.wins_seat_b.fetch_add(1, Ordering::Relaxed);
+            }
+            None => {
+                tel.draws_total.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        tel.trace_event(
+            "INFO",
+            "GAME_FINISH",
+            Some(&session.id),
+            Some(dur_us),
+            format!(
+                "winner={:?} reason={:?} turns={}",
+                session.winner,
+                session.finish_reason,
+                session.turns_played.len()
+            ),
+        );
+    }
+}
+
 async fn list_games(State(state): State<Arc<AppState>>) -> Json<Vec<LobbyGameSummary>> {
+    global_telemetry()
+        .ep_list_games
+        .fetch_add(1, Ordering::Relaxed);
     let entries: Vec<(String, Arc<Mutex<GameSession>>)> = {
         let games = state.games.read().expect("games lock");
         games.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect()
@@ -404,14 +594,22 @@ async fn create_game(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateGameRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_create_game
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     tokio::task::spawn_blocking(move || {
         let (game_id, seed) = state.allocate_game_id();
         let table_name = req
             .name
             .unwrap_or_else(|| format!("Table {game_id}"));
+        let vs_bot = req.vs_bot;
+        let is_public = req.is_public;
+        let preset = req.config.preset;
+        let confluence = req.config.confluence;
         let mut session = match GameSession::new(
             game_id.clone(),
-            table_name,
+            table_name.clone(),
             req.is_public,
             req.config,
             seed,
@@ -452,6 +650,20 @@ async fn create_game(
             return bad_request(e);
         }
 
+        let dur_us = t0.elapsed().as_micros() as u64;
+        let tel = global_telemetry();
+        tel.games_created_total.fetch_add(1, Ordering::Relaxed);
+        tel.trace_event(
+            "INFO",
+            "GAME_CREATE",
+            Some(&game_id),
+            Some(dur_us),
+            format!(
+                "name={:?} public={} preset={:?} confluence={:?} bot={:?}",
+                table_name, is_public, preset, confluence, vs_bot
+            ),
+        );
+
         Json(CreateGameResponse {
             game_id,
             creator_seat,
@@ -471,6 +683,9 @@ async fn get_game_view(
     Query(query): Query<TokenQuery>,
     headers: HeaderMap,
 ) -> Response {
+    global_telemetry()
+        .ep_get_view
+        .fetch_add(1, Ordering::Relaxed);
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -511,6 +726,10 @@ async fn join_game(
     Path(id): Path<String>,
     Json(req): Json<JoinGameRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_join_game
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
             return not_found(format!("game {id} not found"));
@@ -521,7 +740,7 @@ async fn join_game(
         let (seat, seat_token, view) = {
             let mut session = session_arc.lock().expect("session lock");
             session.last_active_ms = now_ms();
-            let (seat, seat_token) = match session.join_seat(req.preferred_seat, p_name) {
+            let (seat, seat_token) = match session.join_seat(req.preferred_seat, p_name.clone()) {
                 Ok(res) => res,
                 Err(e) => return bad_request(e),
             };
@@ -535,6 +754,15 @@ async fn join_game(
         drop(session_arc);
         state.evict_excess_games(None);
         state.notify_game(&id);
+
+        let dur_us = t0.elapsed().as_micros() as u64;
+        global_telemetry().trace_event(
+            "INFO",
+            "SEAT_JOIN",
+            Some(&id),
+            Some(dur_us),
+            format!("seat={} player={:?}", seat.label(), p_name),
+        );
 
         Json(JoinGameResponse {
             game_id: id,
@@ -567,6 +795,9 @@ async fn select_piece(
     headers: HeaderMap,
     Json(req): Json<SelectPieceRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_select_piece
+        .fetch_add(1, Ordering::Relaxed);
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -617,6 +848,10 @@ async fn submit_move(
     headers: HeaderMap,
     Json(req): Json<SubmitMoveRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_submit_move
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -631,6 +866,9 @@ async fn submit_move(
             if req.seat.is_some_and(|expected| expected != seat) {
                 return unauthorized("seat token does not match requested seat");
             }
+            let prev_turns = session.turns_played.len();
+            let prev_round = session.conflict_subs.len();
+            let prev_ended = session.ended;
             if let Err(e) =
                 session.submit_move_with_revision(seat, req.from, req.to, req.expected_revision)
             {
@@ -640,6 +878,15 @@ async fn submit_move(
                 return bad_request(e);
             }
             state.update_lobby_summary(&session);
+            let dur_us = t0.elapsed().as_micros() as u64;
+            record_session_transition_telemetry(
+                &session,
+                prev_turns,
+                prev_round,
+                prev_ended,
+                dur_us,
+                &format!("submit seat={}", seat.label()),
+            );
             session.view_for(Some(seat))
         };
         drop(session_arc);
@@ -672,6 +919,10 @@ async fn commit_move(
     headers: HeaderMap,
     Json(req): Json<CommitRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_commit_move
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -686,6 +937,10 @@ async fn commit_move(
             if req.seat.is_some_and(|expected| expected != seat) {
                 return unauthorized("seat token does not match requested seat");
             }
+
+            let prev_turns = session.turns_played.len();
+            let prev_round = session.conflict_subs.len();
+            let prev_ended = session.ended;
 
             if let Some(hash) = req.commitment_hash {
                 if let Err(e) =
@@ -707,6 +962,15 @@ async fn commit_move(
                 return bad_request(e);
             }
             state.update_lobby_summary(&session);
+            let dur_us = t0.elapsed().as_micros() as u64;
+            record_session_transition_telemetry(
+                &session,
+                prev_turns,
+                prev_round,
+                prev_ended,
+                dur_us,
+                &format!("commit seat={}", seat.label()),
+            );
             session.view_for(Some(seat))
         };
         drop(session_arc);
@@ -737,6 +1001,10 @@ async fn reveal_round(
     headers: HeaderMap,
     body: Option<Json<RevealRequest>>,
 ) -> Response {
+    global_telemetry()
+        .ep_reveal_round
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -753,6 +1021,10 @@ async fn reveal_round(
             if req.seat.is_some_and(|expected| expected != seat) {
                 return unauthorized("seat token does not match requested seat");
             }
+            let prev_turns = session.turns_played.len();
+            let prev_round = session.conflict_subs.len();
+            let prev_ended = session.ended;
+
             let details = match (req.from, req.to, req.nonce) {
                 (Some(f), Some(t), Some(n)) => Some((f, t, n)),
                 _ => None,
@@ -765,6 +1037,15 @@ async fn reveal_round(
                 return bad_request(e);
             }
             state.update_lobby_summary(&session);
+            let dur_us = t0.elapsed().as_micros() as u64;
+            record_session_transition_telemetry(
+                &session,
+                prev_turns,
+                prev_round,
+                prev_ended,
+                dur_us,
+                &format!("reveal seat={}", seat.label()),
+            );
             session.view_for(Some(seat))
         };
         drop(session_arc);
@@ -782,6 +1063,10 @@ async fn resolve_round(
     Query(query): Query<TokenQuery>,
     headers: HeaderMap,
 ) -> Response {
+    global_telemetry()
+        .ep_resolve_round
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let tok = extract_token(&headers, &query);
     tokio::task::spawn_blocking(move || {
         let Some(session_arc) = state.get_or_load_session(&id) else {
@@ -795,6 +1080,10 @@ async fn resolve_round(
             if viewer.is_none() && !both_bots {
                 return unauthorized("valid seat token required to resolve round");
             }
+            let prev_turns = session.turns_played.len();
+            let prev_round = session.conflict_subs.len();
+            let prev_ended = session.ended;
+
             if let Err(e) = session.resolve_round() {
                 return bad_request(e);
             }
@@ -802,6 +1091,15 @@ async fn resolve_round(
                 return bad_request(e);
             }
             state.update_lobby_summary(&session);
+            let dur_us = t0.elapsed().as_micros() as u64;
+            record_session_transition_telemetry(
+                &session,
+                prev_turns,
+                prev_round,
+                prev_ended,
+                dur_us,
+                "resolve_round",
+            );
             session.view_for(viewer)
         };
         drop(session_arc);
@@ -826,6 +1124,10 @@ async fn resign_game(
     headers: HeaderMap,
     body: Option<Json<ResignRequest>>,
 ) -> Response {
+    global_telemetry()
+        .ep_resign_game
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let Some(session_arc) = state.get_or_load_session(&id) else {
         return not_found(format!("game {id} not found"));
     };
@@ -840,6 +1142,10 @@ async fn resign_game(
         if req.seat.is_some_and(|expected| expected != seat) {
             return unauthorized("seat token does not match requested seat");
         }
+        let prev_turns = session.turns_played.len();
+        let prev_round = session.conflict_subs.len();
+        let prev_ended = session.ended;
+
         if let Err(e) = session.resign(seat) {
             return bad_request(e);
         }
@@ -847,6 +1153,15 @@ async fn resign_game(
             return bad_request(e);
         }
         state.update_lobby_summary(&session);
+        let dur_us = t0.elapsed().as_micros() as u64;
+        record_session_transition_telemetry(
+            &session,
+            prev_turns,
+            prev_round,
+            prev_ended,
+            dur_us,
+            &format!("resign seat={}", seat.label()),
+        );
         session.view_for(Some(seat))
     };
     drop(session_arc);
@@ -871,6 +1186,9 @@ async fn export_replay(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
+    global_telemetry()
+        .ep_replay
+        .fetch_add(1, Ordering::Relaxed);
     let Some(session_arc) = state.get_or_load_session(&id) else {
         return not_found(format!("game {id} not found"));
     };
@@ -891,6 +1209,25 @@ async fn export_replay(
     drop(session_arc);
     state.evict_excess_games(None);
     Json(export).into_response()
+}
+
+struct SseStreamGuard;
+
+impl SseStreamGuard {
+    fn new() -> Self {
+        let tel = global_telemetry();
+        tel.active_sse_streams.fetch_add(1, Ordering::Relaxed);
+        tel.sse_connections_total.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for SseStreamGuard {
+    fn drop(&mut self) {
+        global_telemetry()
+            .active_sse_streams
+            .fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 async fn game_events_sse(
@@ -936,7 +1273,14 @@ async fn game_events_sse(
         Some(Ok::<Event, Infallible>(Event::default().data(json)))
     });
 
-    let stream = initial_stream.chain(updates_stream);
+    let sse_guard = SseStreamGuard::new();
+    let stream = initial_stream.chain(updates_stream).map(move |item| {
+        let _keep = &sse_guard;
+        global_telemetry()
+            .sse_events_sent_total
+            .fetch_add(1, Ordering::Relaxed);
+        item
+    });
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
         .into_response()
@@ -946,6 +1290,10 @@ async fn matchmaking_seek(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SeekRequest>,
 ) -> Response {
+    global_telemetry()
+        .ep_matchmaking
+        .fetch_add(1, Ordering::Relaxed);
+    let t0 = Instant::now();
     let (ticket_id, assignment_opt) = {
         let mut mm = state.matchmaking.lock().expect("matchmaking lock");
         match mm.enqueue(req) {
@@ -970,14 +1318,25 @@ async fn matchmaking_seek(
         let name_a = assignment.name_a.clone().unwrap_or_else(|| "Player A".to_string());
         let name_b = assignment.name_b.clone().unwrap_or_else(|| "Player B".to_string());
         let (_, token_a) = session
-            .join_seat(Some(Seat::A), name_a)
+            .join_seat(Some(Seat::A), name_a.clone())
             .expect("seat A open");
         let (_, token_b) = session
-            .join_seat(Some(Seat::B), name_b)
+            .join_seat(Some(Seat::B), name_b.clone())
             .expect("seat B open");
         if let Err(e) = state.insert_session(session) {
             return bad_request(e);
         }
+        let dur_us = t0.elapsed().as_micros() as u64;
+        let tel = global_telemetry();
+        tel.games_created_total.fetch_add(1, Ordering::Relaxed);
+        tel.matchmaking_paired_total.fetch_add(1, Ordering::Relaxed);
+        tel.trace_event(
+            "INFO",
+            "MATCH_PAIRED",
+            Some(&game_id),
+            Some(dur_us),
+            format!("seat_a={:?} vs seat_b={:?}", name_a, name_b),
+        );
         let mut mm = state.matchmaking.lock().expect("matchmaking lock");
         mm.record_match(&assignment, &game_id, &token_a, &token_b);
         let status = mm

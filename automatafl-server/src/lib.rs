@@ -20,4 +20,5 @@ pub mod oracle;
 pub mod persistence;
 pub mod protocol;
 pub mod session;
+pub mod telemetry;
 pub mod web_ui;

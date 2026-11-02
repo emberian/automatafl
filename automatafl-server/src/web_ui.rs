@@ -372,6 +372,168 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
     border-bottom: 1px solid #262421;
   }
   .history-entry:last-child { border-bottom: none; }
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+  }
+  .nav-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.36rem 0.7rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: 0.78rem;
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.15s ease;
+  }
+  .nav-pill:hover {
+    border-color: var(--accent);
+    color: var(--text-bright);
+  }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #629924;
+    box-shadow: 0 0 6px #629924;
+    display: inline-block;
+  }
+  .status-dot.warn {
+    background: var(--amber);
+    box-shadow: 0 0 6px var(--amber);
+  }
+  .status-dot.crit {
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
+  }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .spark-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  @media (max-width: 980px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .spark-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .kpi-grid { grid-template-columns: 1fr; }
+  }
+  .kpi-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    border-top: 3px solid var(--accent);
+  }
+  .kpi-card.blue { border-top-color: var(--seat-a); }
+  .kpi-card.amber { border-top-color: var(--amber); }
+  .kpi-card.frost { border-top-color: var(--frost); }
+  .kpi-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+  }
+  .kpi-val {
+    font-size: 1.65rem;
+    font-weight: 800;
+    color: var(--text-bright);
+    line-height: 1.15;
+  }
+  .kpi-sub {
+    font-size: 0.76rem;
+    color: var(--text);
+    margin-top: 0.35rem;
+  }
+  .gauge-row {
+    margin-bottom: 0.8rem;
+  }
+  .gauge-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    margin-bottom: 0.25rem;
+  }
+  .gauge-bar-bg {
+    width: 100%;
+    height: 9px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .gauge-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #629924, #84c832);
+    width: 0%;
+    transition: width 0.25s ease;
+  }
+  .gauge-bar-fill.warn {
+    background: linear-gradient(90deg, #d59120, #f0ad4e);
+  }
+  .gauge-bar-fill.crit {
+    background: linear-gradient(90deg, #cc3333, #ff5555);
+  }
+  .spark-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.4rem;
+    height: 112px;
+    position: relative;
+  }
+  .spark-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .stat-kv-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.55rem;
+    margin-bottom: 0.75rem;
+  }
+  .stat-kv {
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.45rem 0.65rem;
+  }
+  .stat-kv .k {
+    font-size: 0.72rem;
+    color: var(--text);
+  }
+  .stat-kv .v {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-bright);
+  }
+  .trace-kind {
+    display: inline-block;
+    padding: 0.1rem 0.42rem;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+  .trace-kind.GAME_CREATE { background: #1e3a56; color: #8cd0ff; }
+  .trace-kind.SEAT_JOIN { background: #264a36; color: #98f5be; }
+  .trace-kind.ROUND_SEAL { background: #3b2e58; color: #d6bfff; }
+  .trace-kind.TURN_RESOLVE { background: #4a3818; color: #ffd280; }
+  .trace-kind.GAME_FINISH { background: #5a1e1e; color: #ff9e9e; }
+  .trace-kind.MATCH_PAIRED { background: #1f4c4c; color: #8ff5f5; }
 </style>
 </head>
 <body>
@@ -380,7 +542,18 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
     AUTOMATAFL
     <span class="sub">Lean 4 Verified Simultaneous-Move Platform</span>
   </a>
-  <div>
+  <div class="nav-right">
+    <a href="/status" id="nav-status-pill" class="nav-pill mono" title="Live System Load, Network RTT Ping &amp; Lean 4 FFI Lag (Click for Dashboard)">
+      <span id="nav-status-dot" class="status-dot"></span>
+      <span id="nav-ping-txt">PING --ms</span>
+      <span style="color:#555;">|</span>
+      <span id="nav-srv-txt">SRV --µs</span>
+      <span style="color:#555;">|</span>
+      <span id="nav-ffi-txt">FFI --µs</span>
+      <span style="color:#555;">|</span>
+      <span id="nav-ram-txt">RAM --MiB</span>
+    </a>
+    <a href="/status" class="btn secondary">Status</a>
     <a href="/" class="btn secondary">Lobby</a>
   </div>
 </header>
@@ -587,6 +760,183 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
           <div id="variant-badges" style="margin-bottom:0.6rem;"></div>
           <div id="share-links" style="font-size:0.82rem;"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="status-view" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.6rem;">
+      <div>
+        <h2 style="margin:0;color:var(--text-bright);font-size:1.25rem;">System Load, Network Lag &amp; Lean 4 FFI Telemetry</h2>
+        <div style="font-size:0.82rem;color:var(--text);">
+          Live 2s polling • Strict cgroup v2 &amp; ext4 loopback containment • Fog-of-war move coordinates strictly redacted
+        </div>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+        <button class="secondary" onclick="pollServerStatus()">Refresh Now</button>
+        <a href="/api/status" target="_blank" class="btn secondary mono">/api/status (JSON)</a>
+        <a href="/metrics" target="_blank" class="btn secondary mono">/metrics (Prometheus)</a>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-title">Client Network Ping (RTT)</div>
+        <div id="st-kpi-ping" class="kpi-val mono">-- ms</div>
+        <div id="st-kpi-ping-sub" class="kpi-sub mono">min --ms • avg --ms • jitter --ms</div>
+      </div>
+      <div class="kpi-card blue">
+        <div class="kpi-title">Server HTTP Processing Lag</div>
+        <div id="st-kpi-http" class="kpi-val mono">-- µs</div>
+        <div id="st-kpi-http-sub" class="kpi-sub mono">p50 --µs • p95 --µs • p99 --µs</div>
+      </div>
+      <div class="kpi-card amber">
+        <div class="kpi-title">Lean 4 Verified C FFI Oracle</div>
+        <div id="st-kpi-ffi" class="kpi-val mono">-- µs</div>
+        <div id="st-kpi-ffi-sub" class="kpi-sub mono">p95 --µs • max --µs • 0 errors</div>
+      </div>
+      <div class="kpi-card frost">
+        <div class="kpi-title">Uptime &amp; Active Streams</div>
+        <div id="st-kpi-uptime" class="kpi-val mono">--</div>
+        <div id="st-kpi-uptime-sub" class="kpi-sub mono">SSE: 0 • Active Games: 0</div>
+      </div>
+    </div>
+
+    <div class="spark-grid">
+      <div class="card" style="margin-bottom:0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
+          <h3 style="border:none;padding:0;margin:0;font-size:0.92rem;">Client Network Ping (ms) — Last 60 Samples</h3>
+          <span id="spark-ping-label" class="mono" style="font-size:0.78rem;color:#84c832;">-- ms</span>
+        </div>
+        <div class="spark-box">
+          <svg id="spark-ping-svg" class="spark-svg" viewBox="0 0 360 96" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
+          <h3 style="border:none;padding:0;margin:0;font-size:0.92rem;">Server HTTP p95 &amp; Lean 4 FFI Avg Latency (µs) — 60s Window</h3>
+          <span id="spark-lat-label" class="mono" style="font-size:0.78rem;color:#6cb8ff;">HTTP --µs / FFI --µs</span>
+        </div>
+        <div class="spark-box">
+          <svg id="spark-lat-svg" class="spark-svg" viewBox="0 0 360 96" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
+          <h3 style="border:none;padding:0;margin:0;font-size:0.92rem;">Cgroup Memory RSS (MiB) vs 256 MiB Hard Cap — 60s Window</h3>
+          <span id="spark-mem-label" class="mono" style="font-size:0.78rem;color:#f0ad4e;">-- MiB</span>
+        </div>
+        <div class="spark-box">
+          <svg id="spark-mem-svg" class="spark-svg" viewBox="0 0 360 96" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem;">
+          <h3 style="border:none;padding:0;margin:0;font-size:0.92rem;">HTTP Request Rate (req/s) &amp; Active SSE Streams — 60s Window</h3>
+          <span id="spark-rps-label" class="mono" style="font-size:0.78rem;color:#98f5be;">-- req/s</span>
+        </div>
+        <div class="spark-box">
+          <svg id="spark-rps-svg" class="spark-svg" viewBox="0 0 360 96" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="lobby-grid">
+      <div class="card">
+        <h3>Resource Containment Gauges (<span id="st-cgroup-path" class="mono" style="font-size:0.82rem;color:#8cd0ff;">automatafl.slice</span>)</h3>
+
+        <div class="gauge-row">
+          <div class="gauge-head">
+            <span><strong>Memory RSS</strong> (High: 192 MiB / Hard Cap: 256 MiB, Swap: 0)</span>
+            <span id="gauge-mem-txt" class="mono">-- / 256.0 MiB (--%)</span>
+          </div>
+          <div class="gauge-bar-bg"><div id="gauge-mem-bar" class="gauge-bar-fill"></div></div>
+          <div id="gauge-mem-sub" class="mono" style="font-size:0.74rem;color:var(--text);margin-top:0.2rem;">Peak RSS: -- MiB</div>
+        </div>
+
+        <div class="gauge-row">
+          <div class="gauge-head">
+            <span><strong>CPU Quota Utilization</strong> (Cap: 100% of 1 vCPU)</span>
+            <span id="gauge-cpu-txt" class="mono">--% / 100%</span>
+          </div>
+          <div class="gauge-bar-bg"><div id="gauge-cpu-bar" class="gauge-bar-fill"></div></div>
+          <div id="gauge-cpu-sub" class="mono" style="font-size:0.74rem;color:var(--text);margin-top:0.2rem;">Total CPU: --s • Host LoadAvg: -- / -- / --</div>
+        </div>
+
+        <div class="gauge-row">
+          <div class="gauge-head">
+            <span><strong>Dedicated Loopback Disk</strong> (<span class="mono">/var/lib/automatafl</span> 64 MiB ext4)</span>
+            <span id="gauge-disk-txt" class="mono">-- / 55.0 MiB (--%)</span>
+          </div>
+          <div class="gauge-bar-bg"><div id="gauge-disk-bar" class="gauge-bar-fill"></div></div>
+          <div id="gauge-disk-sub" class="mono" style="font-size:0.74rem;color:var(--text);margin-top:0.2rem;">Persisted Game Files: -- / 2048 (Auto-Pruned)</div>
+        </div>
+
+        <div class="gauge-row">
+          <div class="gauge-head">
+            <span><strong>In-Memory Session LRU Cache</strong> (Cap: 256 Active Games)</span>
+            <span id="gauge-lru-txt" class="mono">-- / 256 (--%)</span>
+          </div>
+          <div class="gauge-bar-bg"><div id="gauge-lru-bar" class="gauge-bar-fill"></div></div>
+          <div id="gauge-lru-sub" class="mono" style="font-size:0.74rem;color:var(--text);margin-top:0.2rem;">Saves: 0 • Loads: 0 • LRU Evictions: 0 • Disk Prunes: 0</div>
+        </div>
+
+        <div class="gauge-row" style="margin-bottom:0;">
+          <div class="gauge-head">
+            <span><strong>Open File Descriptors &amp; OS Tasks</strong> (NOFILE: 2048, TasksMax: 128)</span>
+            <span id="gauge-fd-txt" class="mono">FDs: -- / 2048 • Tasks: -- / 128</span>
+          </div>
+          <div class="gauge-bar-bg"><div id="gauge-fd-bar" class="gauge-bar-fill"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Simultaneous-Move Lifecycle, AI Bot Engine &amp; Endpoint Breakdown</h3>
+        <div class="stat-kv-grid">
+          <div class="stat-kv"><div class="k">Games Created / Done</div><div id="st-games-cnt" class="v mono">0 / 0</div></div>
+          <div class="stat-kv"><div class="k">Turns / Rounds Resolved</div><div id="st-turns-cnt" class="v mono">0 / 0</div></div>
+          <div class="stat-kv"><div class="k">Conflict Clashes (×)</div><div id="st-clash-cnt" class="v mono" style="color:#ff9e9e;">0</div></div>
+          <div class="stat-kv"><div class="k">Seat A / B Wins / Draw</div><div id="st-wins-cnt" class="v mono">0 / 0 / 0</div></div>
+          <div class="stat-kv"><div class="k">Matchmaking Queue / Paired</div><div id="st-mm-cnt" class="v mono">0 / 0</div></div>
+          <div class="stat-kv"><div class="k">SSE Connections / Events</div><div id="st-sse-cnt" class="v mono">0 / 0</div></div>
+        </div>
+
+        <h3 style="font-size:0.9rem;margin-top:0.85rem;">Server-Hosted AI Bot Search Telemetry (Client-Local AI = 0 Server Load)</h3>
+        <div id="st-bot-summary" class="mono" style="font-size:0.8rem;margin-bottom:0.65rem;background:var(--bg);padding:0.55rem;border-radius:4px;border:1px solid var(--border);">
+          Loading AI telemetry...
+        </div>
+
+        <h3 style="font-size:0.9rem;margin-top:0.85rem;">HTTP Endpoint Hit Distribution</h3>
+        <div id="st-ep-grid" class="mono" style="font-size:0.78rem;display:grid;grid-template-columns:repeat(3,1fr);gap:0.35rem;">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+        <h3 style="border:none;margin:0;padding:0;">Live Structured Event Trace (<span class="mono">journald</span> + Ring Buffer)</h3>
+        <span style="font-size:0.76rem;color:#98f5be;" class="mono">🔒 Fog-of-War Sealed Coordinates Never Logged Before Turn Resolution</span>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:0.55rem 0;">
+      <div style="max-height:320px;overflow-y:auto;">
+        <table class="table-list mono" style="font-size:0.79rem;">
+          <thead>
+            <tr>
+              <th>Seq</th>
+              <th>Time (UTC)</th>
+              <th>Kind</th>
+              <th>Game</th>
+              <th>Latency</th>
+              <th>Sanitized Event Summary</th>
+            </tr>
+          </thead>
+          <tbody id="st-trace-body">
+            <tr><td colspan="6">Waiting for trace events...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -2326,8 +2676,289 @@ function connectSse() {
   };
 }
 
-if (isGamePage) {
+// ============================================================================
+// Live Telemetry, Network Ping & Lichess-Style System Status Dashboard
+// ============================================================================
+const isStatusPage = pathParts[0] === 'status' || pathParts[0] === 'lag';
+const clientPingHistory = [];
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatDurationSec(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function setGaugeBar(barId, pct) {
+  const el = document.getElementById(barId);
+  if (!el) return;
+  const clamped = Math.max(0, Math.min(100, pct || 0));
+  el.style.width = clamped.toFixed(1) + '%';
+  el.className = 'gauge-bar-fill' + (clamped >= 85 ? ' crit' : clamped >= 65 ? ' warn' : '');
+}
+
+function renderSparklineSvg(svgId, seriesList, fixedMax) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  const W = 360, H = 96, PAD = 6;
+  let maxVal = fixedMax || 1;
+  for (const s of seriesList) {
+    for (const v of s.values) {
+      if (v > maxVal) maxVal = v;
+    }
+  }
+  if (maxVal <= 0) maxVal = 1;
+
+  let html = '';
+  for (let g = 1; g <= 3; g++) {
+    const gy = Math.round((H / 4) * g);
+    html += `<line x1="0" y1="${gy}" x2="${W}" y2="${gy}" stroke="#262421" stroke-width="1"/>`;
+  }
+
+  for (const s of seriesList) {
+    const vals = s.values;
+    if (!vals || vals.length === 0) continue;
+    const pts = vals.map((v, i) => {
+      const x = vals.length === 1 ? W : (i / (vals.length - 1)) * W;
+      const y = H - PAD - (Math.min(v, maxVal) / maxVal) * (H - PAD * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    if (s.fill) {
+      const areaPts = [`0,${H}`, ...pts, `${W},${H}`].join(' ');
+      html += `<polygon points="${areaPts}" fill="${s.fill}" />`;
+    }
+    html += `<polyline fill="none" stroke="${s.color}" stroke-width="2" points="${pts.join(' ')}" />`;
+  }
+  svg.innerHTML = html;
+}
+
+function updateHeaderStatusPill(st, rttMs) {
+  const dot = document.getElementById('nav-status-dot');
+  const pingEl = document.getElementById('nav-ping-txt');
+  const srvEl = document.getElementById('nav-srv-txt');
+  const ffiEl = document.getElementById('nav-ffi-txt');
+  const ramEl = document.getElementById('nav-ram-txt');
+  if (!pingEl) return;
+
+  const rssMib = (st.resources.rss_bytes / 1048576).toFixed(1);
+  const maxMib = (st.resources.memory_max_bytes || 268435456) / 1048576;
+  const memPct = (rssMib / maxMib) * 100;
+  const srvUs = st.http_latency.p50_us;
+  const ffiUs = st.lean_ffi_latency.avg_us;
+
+  pingEl.textContent = `PING ${rttMs.toFixed(1)}ms`;
+  srvEl.textContent = `SRV ${srvUs}µs`;
+  ffiEl.textContent = `FFI ${ffiUs}µs`;
+  ramEl.textContent = `RAM ${rssMib}MiB`;
+
+  if (dot) {
+    if (rttMs > 350 || memPct > 85 || st.lean_ffi_errors_total > 0) {
+      dot.className = 'status-dot crit';
+    } else if (rttMs > 150 || memPct > 65) {
+      dot.className = 'status-dot warn';
+    } else {
+      dot.className = 'status-dot';
+    }
+  }
+}
+
+function renderStatusDashboard(st, rttMs) {
+  const pings = clientPingHistory;
+  const minPing = pings.length ? Math.min(...pings) : rttMs;
+  const avgPing = pings.length ? (pings.reduce((a, b) => a + b, 0) / pings.length) : rttMs;
+  let jitter = 0;
+  if (pings.length > 1) {
+    let diffSum = 0;
+    for (let i = 1; i < pings.length; i++) diffSum += Math.abs(pings[i] - pings[i - 1]);
+    jitter = diffSum / (pings.length - 1);
+  }
+
+  document.getElementById('st-kpi-ping').textContent = `${rttMs.toFixed(1)} ms`;
+  document.getElementById('st-kpi-ping-sub').textContent =
+    `min ${minPing.toFixed(1)}ms • avg ${avgPing.toFixed(1)}ms • jitter ±${jitter.toFixed(1)}ms`;
+
+  const hLat = st.http_latency;
+  document.getElementById('st-kpi-http').textContent = `${hLat.p50_us} µs`;
+  document.getElementById('st-kpi-http-sub').textContent =
+    `avg ${hLat.avg_us}µs • p95 ${hLat.p95_us}µs • p99 ${hLat.p99_us}µs • reqs ${st.http_requests_total}`;
+
+  const fLat = st.lean_ffi_latency;
+  document.getElementById('st-kpi-ffi').textContent = `${fLat.avg_us} µs`;
+  document.getElementById('st-kpi-ffi-sub').textContent =
+    `p95 ${fLat.p95_us}µs • max ${fLat.max_us}µs • calls ${st.lean_ffi_calls_total} (${st.lean_ffi_errors_total} err)`;
+
+  document.getElementById('st-kpi-uptime').textContent = formatDurationSec(st.uptime_secs);
+  document.getElementById('st-kpi-uptime-sub').textContent =
+    `SSE Streams: ${st.active_sse_streams} • Active Games: ${st.games.active_games}`;
+
+  const res = st.resources;
+  document.getElementById('st-cgroup-path').textContent = 'automatafl.slice';
+
+  const rssMib = res.rss_bytes / 1048576;
+  const maxMib = (res.memory_max_bytes || 268435456) / 1048576;
+  const peakMib = res.memory_peak_bytes / 1048576;
+  const memPct = (rssMib / maxMib) * 100;
+  document.getElementById('gauge-mem-txt').textContent =
+    `${rssMib.toFixed(2)} / ${maxMib.toFixed(0)} MiB (${memPct.toFixed(2)}%)`;
+  document.getElementById('gauge-mem-sub').textContent =
+    `Peak RSS: ${peakMib.toFixed(2)} MiB • Soft High: ${((res.memory_high_bytes || 201326592) / 1048576).toFixed(0)} MiB`;
+  setGaugeBar('gauge-mem-bar', memPct);
+
+  const hist = st.series || [];
+  const latestSample = hist.length ? hist[hist.length - 1] : null;
+  const cpuPct = res.cpu_percent || (latestSample ? latestSample.cpu_pct : 0);
+  const cpuSec = (res.cpu_usage_usec / 1e6).toFixed(2);
+  document.getElementById('gauge-cpu-txt').textContent = `${cpuPct.toFixed(2)}% / ${(res.cpu_quota_pct || 100).toFixed(0)}%`;
+  document.getElementById('gauge-cpu-sub').textContent =
+    `Cumulative CPU: ${cpuSec}s (user ${(res.cpu_user_usec / 1e6).toFixed(2)}s / sys ${(res.cpu_system_usec / 1e6).toFixed(2)}s) • LoadAvg: ${res.load_avg_1m.toFixed(2)} / ${res.load_avg_5m.toFixed(2)} / ${res.load_avg_15m.toFixed(2)}`;
+  setGaugeBar('gauge-cpu-bar', cpuPct);
+
+  const diskMib = res.disk_used_bytes / 1048576;
+  const diskMaxMib = res.disk_max_bytes / 1048576;
+  const diskPct = (res.disk_used_bytes / Math.max(1, res.disk_max_bytes)) * 100;
+  document.getElementById('gauge-disk-txt').textContent =
+    `${diskMib.toFixed(3)} / ${diskMaxMib.toFixed(0)} MiB (${diskPct.toFixed(2)}%)`;
+  document.getElementById('gauge-disk-sub').textContent =
+    `Persisted Session Files: ${res.persisted_files_count} / ${res.max_persisted_files} (Auto-Pruned)`;
+  setGaugeBar('gauge-disk-bar', Math.max(diskPct, (res.persisted_files_count / Math.max(1, res.max_persisted_files)) * 100));
+
+  const g = st.games;
+  const lruPct = (g.in_memory_games / Math.max(1, g.max_in_memory_games)) * 100;
+  document.getElementById('gauge-lru-txt').textContent =
+    `${g.in_memory_games} / ${g.max_in_memory_games} (${lruPct.toFixed(1)}%)`;
+  document.getElementById('gauge-lru-sub').textContent =
+    `Disk Saves: ${g.disk_saves_total} • Disk Loads: ${g.disk_loads_total} • LRU Evictions: ${g.cache_evictions_total}`;
+  setGaugeBar('gauge-lru-bar', lruPct);
+
+  const fdPct = (res.open_fds / Math.max(1, res.max_fds || 2048)) * 100;
+  document.getElementById('gauge-fd-txt').textContent =
+    `FDs: ${res.open_fds} / ${res.max_fds || 2048} • Tasks: ${res.tasks_current} / ${res.tasks_max || 128}`;
+  setGaugeBar('gauge-fd-bar', fdPct);
+
+  document.getElementById('st-games-cnt').textContent = `${g.games_created_total} / ${g.games_finished_total}`;
+  document.getElementById('st-turns-cnt').textContent = `${g.turns_resolved_total}`;
+  document.getElementById('st-clash-cnt').textContent = `${g.conflicts_triggered_total}`;
+  document.getElementById('st-wins-cnt').textContent = `${g.wins_seat_a} / ${g.wins_seat_b} / ${g.draws_total}`;
+  document.getElementById('st-mm-cnt').textContent = `${g.matchmaking_queued} / ${g.matchmaking_paired_total}`;
+  document.getElementById('st-sse-cnt').textContent = `${st.sse_connections_total} / ${st.sse_events_sent_total}`;
+
+  const b = st.bot;
+  const bStrat = b.by_strategy || {};
+  document.getElementById('st-bot-summary').innerHTML =
+    `<div><strong>Total Server AI Moves:</strong> ${b.moves_total} • <strong>Avg Search:</strong> ${(b.avg_us / 1000).toFixed(2)} ms • <strong>Last:</strong> ${(b.last_us / 1000).toFixed(2)} ms • <strong>Max:</strong> ${(b.max_us / 1000).toFixed(2)} ms</div>` +
+    `<div style="margin-top:0.3rem;color:#bababa;">Decoupled UCT: <strong>${bStrat.decoupled_uct || 0}</strong> • Regret Matching: <strong>${bStrat.regret_matching || 0}</strong> • Minimax: <strong>${bStrat.minimax || 0}</strong> • Tactical: <strong>${bStrat.tactical || 0}</strong> • Novice: <strong>${bStrat.novice || 0}</strong></div>`;
+
+  const ep = st.endpoints || {};
+  const epEntries = [
+    ['list_games', ep.list_games || 0],
+    ['create_game', ep.create_game || 0],
+    ['get_view', ep.get_view || 0],
+    ['join_game', ep.join_game || 0],
+    ['select_piece', ep.select_piece || 0],
+    ['submit_move', ep.submit_move || 0],
+    ['commit_move', ep.commit_move || 0],
+    ['reveal_round', ep.reveal_round || 0],
+    ['resolve_round', ep.resolve_round || 0],
+    ['resign_game', ep.resign_game || 0],
+    ['replay', ep.replay || 0],
+    ['matchmaking', ep.matchmaking || 0]
+  ];
+  document.getElementById('st-ep-grid').innerHTML = epEntries
+    .map(([k, v]) => `<div style="background:var(--panel-alt);padding:0.25rem 0.45rem;border-radius:3px;border:1px solid var(--border);display:flex;justify-content:space-between;"><span>${k}</span><strong style="color:#fff;">${v}</strong></div>`)
+    .join('');
+
+  // Render 4 Sparklines
+  document.getElementById('spark-ping-label').textContent = `${rttMs.toFixed(1)} ms`;
+  renderSparklineSvg('spark-ping-svg', [
+    { values: pings, color: '#84c832', fill: 'rgba(132, 200, 50, 0.16)' }
+  ], 50);
+
+  const httpAvgSeries = hist.map(h => h.http_avg_us);
+  const ffiAvgSeries = hist.map(h => h.lean_avg_us);
+  document.getElementById('spark-lat-label').textContent = `HTTP p95 ${hLat.p95_us}µs / FFI ${fLat.avg_us}µs`;
+  renderSparklineSvg('spark-lat-svg', [
+    { values: httpAvgSeries, color: '#3893e8', fill: 'rgba(56, 147, 232, 0.14)' },
+    { values: ffiAvgSeries, color: '#f0ad4e', fill: null }
+  ], 500);
+
+  const memSeries = hist.map(h => h.rss_bytes / 1048576);
+  document.getElementById('spark-mem-label').textContent = `${rssMib.toFixed(2)} / ${maxMib.toFixed(0)} MiB`;
+  renderSparklineSvg('spark-mem-svg', [
+    { values: memSeries, color: '#f0ad4e', fill: 'rgba(240, 173, 78, 0.16)' }
+  ], Math.max(16, rssMib * 1.5));
+
+  const rpsSeries = hist.map(h => h.req_per_sec);
+  const sseSeries = hist.map(h => h.active_sse);
+  const curRps = latestSample ? latestSample.req_per_sec : 0;
+  document.getElementById('spark-rps-label').textContent = `${curRps} req/s • ${st.active_sse_streams} SSE`;
+  renderSparklineSvg('spark-rps-svg', [
+    { values: rpsSeries, color: '#98f5be', fill: 'rgba(152, 245, 190, 0.14)' },
+    { values: sseSeries, color: '#6cb8ff', fill: null }
+  ], 5);
+
+  // Render Trace Feed
+  const traces = st.recent_events || [];
+  const tbody = document.getElementById('st-trace-body');
+  if (traces.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:#888;">No trace events recorded yet. Start or play a game to see live structured traces!</td></tr>';
+  } else {
+    tbody.innerHTML = traces.map(t => {
+      const dt = new Date(t.ts_ms).toISOString().replace('T', ' ').replace('Z', '');
+      const gameCell = t.game_id
+        ? `<a href="/watch/${encodeURIComponent(t.game_id)}" style="color:#6cb8ff;">${escapeHtml(t.game_id)}</a>`
+        : '<span style="color:#666;">-</span>';
+      const durCell = t.duration_us != null ? `${t.duration_us} µs` : '-';
+      return `<tr>
+        <td style="color:#888;">#${t.seq}</td>
+        <td>${dt}</td>
+        <td><span class="trace-kind ${escapeHtml(t.kind)}">${escapeHtml(t.kind)}</span></td>
+        <td>${gameCell}</td>
+        <td>${durCell}</td>
+        <td>${escapeHtml(t.summary)}</td>
+      </tr>`;
+    }).join('');
+  }
+}
+
+async function pollServerStatus() {
+  try {
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const res = await fetch('/api/status', { cache: 'no-store' });
+    if (!res.ok) return;
+    const st = await res.json();
+    if (!st || !st.resources || !st.http_latency || !st.lean_ffi_latency) return;
+    const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const rttMs = Math.max(0.1, t1 - t0);
+    clientPingHistory.push(rttMs);
+    if (clientPingHistory.length > 60) clientPingHistory.shift();
+
+    updateHeaderStatusPill(st, rttMs);
+    if (isStatusPage) {
+      renderStatusDashboard(st, rttMs);
+    }
+  } catch (e) {}
+}
+
+if (isStatusPage) {
+  document.getElementById('status-view').style.display = 'block';
+  pollServerStatus();
+  setInterval(pollServerStatus, 2000);
+} else if (isGamePage) {
   document.getElementById('game-view').style.display = 'block';
+  pollServerStatus();
+  setInterval(pollServerStatus, 10000);
   if (urlParams.get('join') === '1' && !getStoredToken(currentGameId)) {
     joinOpenSeat();
   } else {
@@ -2337,7 +2968,9 @@ if (isGamePage) {
 } else {
   document.getElementById('lobby-view').style.display = 'block';
   loadLobby();
+  pollServerStatus();
   setInterval(loadLobby, 5000);
+  setInterval(pollServerStatus, 10000);
 }
 </script>
 </body>

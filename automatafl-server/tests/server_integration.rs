@@ -2016,3 +2016,128 @@ globalThis.clearInterval = () => {{}};
     );
 }
 
+#[tokio::test]
+async fn telemetry_status_dashboard_metrics_and_fog_of_war_redaction() {
+    let app = build_router(AppState::new_in_memory());
+
+    // 1. Verify `/status` and `/lag` serve the Lichess-style dashboard view:
+    for route in ["/status", "/lag"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(route)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("id=\"status-view\""));
+        assert!(html.contains("System Load, Network Lag"));
+    }
+
+    // 2. Create a 2-player game and seal Seat A's move `(3,1) -> (3,4)` under fog of war:
+    let (st_create, created) = send_json(
+        &app,
+        "POST",
+        "/api/games",
+        None,
+        serde_json::json!({
+            "name": "Telemetry Fog Check",
+            "creator_seat": "A",
+            "player_name": "Alice"
+        }),
+    )
+    .await;
+    assert_eq!(st_create, StatusCode::OK);
+    let game_id = created["game_id"].as_str().unwrap().to_string();
+    let token_a = created["creator_token"].as_str().unwrap().to_string();
+    let token_b = created["open_invite_token"].as_str().unwrap().to_string();
+
+    let (st_mv_a, _) = send_json(
+        &app,
+        "POST",
+        &format!("/api/games/{game_id}/move"),
+        Some(&token_a),
+        serde_json::json!({ "from": [3, 1], "to": [3, 4] }),
+    )
+    .await;
+    assert_eq!(st_mv_a, StatusCode::OK);
+
+    // 3. Query `/api/status` while Seat A's move is sealed & unrevealed:
+    let (st_status1, status_json1) = get_json(&app, "/api/status", None).await;
+    assert_eq!(st_status1, StatusCode::OK);
+    assert!(status_json1["lean_ffi_calls_total"].as_u64().unwrap() > 0);
+    assert_eq!(status_json1["lean_ffi_errors_total"].as_u64().unwrap(), 0);
+    assert!(status_json1["games"]["active_games"].as_u64().unwrap() >= 1);
+
+    // Verify fog-of-war redaction in `recent_events` — must NOT contain `(3,1)` or `(3,4)`:
+    let traces1 = status_json1["recent_events"].as_array().unwrap();
+    let game_traces: Vec<&serde_json::Value> = traces1
+        .iter()
+        .filter(|t| t["game_id"].as_str() == Some(game_id.as_str()))
+        .collect();
+    assert!(
+        game_traces.iter().any(|t| t["kind"] == "ROUND_SEAL"),
+        "expected ROUND_SEAL trace for {game_id}"
+    );
+    for t in &game_traces {
+        let summary = t["summary"].as_str().unwrap_or("");
+        assert!(
+            !summary.contains("(3,1)") && !summary.contains("(3,4)") && !summary.contains("[3,1]"),
+            "Fog-of-war violation: sealed trace leaked secret coordinates: {summary}"
+        );
+    }
+
+    // 4. Seal Seat B's move `(7,9) -> (7,8)` to resolve Turn 1:
+    let (st_mv_b, _) = send_json(
+        &app,
+        "POST",
+        &format!("/api/games/{game_id}/move"),
+        Some(&token_b),
+        serde_json::json!({ "from": [7, 9], "to": [7, 8] }),
+    )
+    .await;
+    assert_eq!(st_mv_b, StatusCode::OK);
+
+    let (st_status2, status_json2) = get_json(&app, "/api/status", None).await;
+    assert_eq!(st_status2, StatusCode::OK);
+    assert!(status_json2["games"]["turns_resolved_total"].as_u64().unwrap() >= 1);
+    let traces2 = status_json2["recent_events"].as_array().unwrap();
+    assert!(
+        traces2
+            .iter()
+            .any(|t| t["game_id"].as_str() == Some(game_id.as_str()) && t["kind"] == "TURN_RESOLVE"),
+        "expected TURN_RESOLVE trace after both seats sealed"
+    );
+
+    // 5. Verify `/metrics` Prometheus exposition endpoint:
+    let resp_metrics = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp_metrics.status(), StatusCode::OK);
+    let metrics_bytes = to_bytes(resp_metrics.into_body(), usize::MAX).await.unwrap();
+    let metrics_text = String::from_utf8(metrics_bytes.to_vec()).unwrap();
+    assert!(metrics_text.contains("automatafl_http_requests_total"));
+    assert!(metrics_text.contains("automatafl_lean_ffi_calls_total "));
+    assert!(metrics_text.contains("automatafl_turns_resolved_total "));
+    assert!(metrics_text.contains("automatafl_memory_current_bytes "));
+    assert!(metrics_text.contains("automatafl_disk_used_bytes "));
+
+    // Also verify `/metrics` does not leak sealed move coordinates:
+    assert!(!metrics_text.contains("(3,4)"));
+}
+
+
