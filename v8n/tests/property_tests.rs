@@ -326,4 +326,115 @@ proptest! {
         prop_assert_eq!(recording.rounds.len(), num_rounds);
         prop_assert_eq!(recording.metadata.round_count, num_rounds);
     }
+
+    /// Submission order permutation invariance: proposing identical move sets in any
+    /// seat order must yield identical round outcomes and resulting board states.
+    #[test]
+    fn move_submission_order_is_permutation_invariant(
+        seed in 0u64..2000,
+    ) {
+        let board = Board::stock_two_player();
+        let mut g_ab = Game::new_default_modes(board.clone(), 2, true);
+        let mut g_ba = Game::new_default_modes(board, 2, true);
+
+        let mut rgen = RandomMoveGen::new(seed);
+        let moves = rgen.generate_moves(&g_ab);
+        if moves.len() == 2 {
+            let m0 = moves[0];
+            let m1 = moves[1];
+
+            let _ = g_ab.propose_move(m0);
+            let _ = g_ab.propose_move(m1);
+            let out_ab = g_ab.try_complete_round();
+
+            let _ = g_ba.propose_move(m1);
+            let _ = g_ba.propose_move(m0);
+            let out_ba = g_ba.try_complete_round();
+
+            prop_assert_eq!(g_ab.board, g_ba.board);
+            prop_assert_eq!(g_ab.winner, g_ba.winner);
+            prop_assert_eq!(g_ab.round, g_ba.round);
+            prop_assert_eq!(
+                matches!(out_ab, CompleteRoundFeedback::CompletedMoves(_)),
+                matches!(out_ba, CompleteRoundFeedback::CompletedMoves(_))
+            );
+        }
+    }
+
+    /// Piece conservation across multi-round gameplay under DetectAndConflict and BunchBeforeMerge.
+    #[test]
+    fn multi_round_gameplay_conserves_pieces_and_replays_cleanly(
+        seed in 0u64..1000,
+        steps in 1usize..6,
+        use_bunch in any::<bool>(),
+    ) {
+        let board = Board::stock_testing();
+        let count_pieces = |b: &Board| -> (usize, usize, usize) {
+            let mut rep = 0;
+            let mut att = 0;
+            let mut auto = 0;
+            for y in 0..b.size.y {
+                for x in 0..b.size.x {
+                    match b.particles[Coord { x, y }.ix()].what {
+                        Particle::Repulsor => rep += 1,
+                        Particle::Attractor => att += 1,
+                        Particle::Automaton => auto += 1,
+                        Particle::Vacuum => {}
+                    }
+                }
+            }
+            (rep, att, auto)
+        };
+        let init_counts = count_pieces(&board);
+        let merge_mode = if use_bunch {
+            MergeResolutionMode::BunchBeforeMerge
+        } else {
+            MergeResolutionMode::DetectAndConflict
+        };
+        let mut game = Game::new(
+            board.clone(),
+            2,
+            true,
+            merge_mode,
+            CycleBehaviorMode::RotatePieces,
+        );
+        let mut rec = GameRecording::new("proptest".to_string(), board, 2, true);
+        let mut rgen = RandomMoveGen::new(seed);
+
+        for _ in 0..steps {
+            if game.round == RoundState::GameOver {
+                break;
+            }
+            let moves = rgen.generate_moves(&game);
+            let mut submitted = SmallVec::new();
+            for m in moves {
+                if matches!(
+                    game.propose_move(m),
+                    ProposeFeedback::Accepted | ProposeFeedback::AcceptedAndReady
+                ) {
+                    submitted.push(m);
+                }
+            }
+            if game.pending_moves.len() == game.player_count as usize {
+                let fb = game.try_complete_round();
+                prop_assert_eq!(count_pieces(&game.board), init_counts);
+                if !use_bunch {
+                    match fb {
+                        CompleteRoundFeedback::CompletedMoves(res) => {
+                            rec.add_round(submitted, RoundResult::Completed(res));
+                        }
+                        CompleteRoundFeedback::Conflict(st) => {
+                            rec.add_round(submitted, RoundResult::Conflict(st));
+                        }
+                        CompleteRoundFeedback::WaitingForPlayers(_) => {}
+                    }
+                }
+            }
+        }
+        if !use_bunch {
+            prop_assert!(rec.validate().is_ok());
+            let replayed = rec.replay().expect("recording replay should succeed");
+            prop_assert_eq!(replayed.board, game.board);
+        }
+    }
 }

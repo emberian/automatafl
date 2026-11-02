@@ -1,0 +1,20 @@
+automatafl.fg-goose.online {
+    encode zstd gzip
+
+    # SSE event stream requires immediate flushing (no proxy buffering)
+    @sse path /api/games/*/events
+    reverse_proxy @sse automatafl-server:3030 {
+        flush_interval -1
+        header_up X-Accel-Buffering no
+    }
+
+    reverse_proxy automatafl-server:3030 {
+        flush_interval -1
+    }
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

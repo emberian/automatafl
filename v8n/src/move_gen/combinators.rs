@@ -4,7 +4,7 @@
 //! to create more sophisticated and exhaustive testing scenarios.
 
 use super::MoveGenerator;
-use automatafl_logic::*;
+use crate::*;
 use rand::Rng;
 use smallvec::SmallVec;
 
@@ -292,8 +292,6 @@ impl MoveGenerator for RoundRobinGen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board_builders::*;
-    use crate::move_gen::basic::*;
 
     #[test]
     fn test_sequential_gen() {

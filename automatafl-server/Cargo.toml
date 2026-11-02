@@ -1,0 +1,30 @@
+[package]
+name = "automatafl-server"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ember Arlynx <ember@lunar.town>", "Graham Northup <grissess@nexusg.org>"]
+license = "Apache-2.0 OR MIT"
+description = "Fog-of-war simultaneous-move commit-phase server, matchmaking, persistence, and web surface for Automatafl."
+
+[[bin]]
+name = "automatafl-server"
+path = "src/bin/automatafl-server.rs"
+
+[dependencies]
+automatafl-lean = { path = "../automatafl-lean" }
+automatafl-ai = { path = "../automatafl-ai" }
+axum = { version = "0.8" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+rand = "0.9"
+tracing = "0.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
+proptest = "1.5"
+automatafl-client = { path = "../automatafl-client" }
+

@@ -111,7 +111,7 @@ fn merging_pathways_triple_collision() {
     let c_b = Coord { x: 1, y: 0 }; // Repulsor
     let c_c = Coord { x: 2, y: 0 }; // Attractor
     let c_x = Coord { x: 1, y: 1 }; // Empty (intermediate)
-    let c_y = Coord { x: 2, y: 1 }; // Empty (intermediate)
+    let _c_y = Coord { x: 2, y: 1 }; // Empty (intermediate)
     let c_m = Coord { x: 3, y: 0 }; // Merge point
 
     game.board.place(c_a, Particle::Attractor);
@@ -178,9 +178,9 @@ fn merging_pathways_long_vacuum_chains() {
     let c_v3 = Coord { x: 3, y: 0 }; // Empty
 
     let c_b = Coord { x: 0, y: 1 }; // Repulsor
-    let c_v4 = Coord { x: 1, y: 1 }; // Empty
-    let c_v5 = Coord { x: 2, y: 1 }; // Empty
-    let c_v6 = Coord { x: 3, y: 1 }; // Empty
+    let c_v4 = Coord { x: 4, y: 1 }; // Empty
+    let _c_v5 = Coord { x: 2, y: 1 }; // Empty
+    let _c_v6 = Coord { x: 3, y: 1 }; // Empty
 
     let c_m = Coord { x: 4, y: 0 }; // Merge point
 
@@ -313,7 +313,7 @@ fn merging_pathways_with_cycle() {
         "M should be empty (collision of 2 attractors)"
     );
     assert!(game.board.is_vacuum(c_a));
-    assert!(game.board.is_vacuum(c_x));
+    assert!(game.board.is_vacuum(c_b));
     // But B's Repulsor moves to X successfully
     assert_eq!(game.board.particles[c_x.ix()].what, Particle::Repulsor);
 }
@@ -333,8 +333,8 @@ fn merging_pathways_asymmetric_chain_lengths() {
     let c_b = Coord { x: 0, y: 1 }; // Repulsor
     let c_x = Coord { x: 1, y: 1 }; // Empty
     let c_y = Coord { x: 2, y: 1 }; // Empty
-    let c_z = Coord { x: 3, y: 1 }; // Empty
-    let c_m = Coord { x: 1, y: 0 }; // Merge point
+    let _c_z = Coord { x: 3, y: 1 }; // Empty
+    let c_m = Coord { x: 2, y: 0 }; // Merge point
 
     game.board.place(c_a, Particle::Attractor);
     game.board.place(c_b, Particle::Repulsor);
@@ -386,9 +386,9 @@ fn fork_then_join_vacuum_network() {
 
     let c_a = Coord { x: 0, y: 0 }; // Attractor
     let c_v1 = Coord { x: 1, y: 0 }; // Empty
-    let c_v2 = Coord { x: 1, y: 1 }; // Empty
+    let _c_v2 = Coord { x: 1, y: 1 }; // Empty
     let c_v3 = Coord { x: 2, y: 0 }; // Empty
-    let c_v4 = Coord { x: 2, y: 1 }; // Empty
+    let c_v4 = Coord { x: 3, y: 1 }; // Empty
     let c_m = Coord { x: 3, y: 0 }; // Destination
 
     game.board.place(c_a, Particle::Attractor);

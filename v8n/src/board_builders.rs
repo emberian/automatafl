@@ -1,4 +1,4 @@
-use automatafl_logic::*;
+use crate::*;
 use ndarray::Array2;
 use rand::Rng;
 use smallvec::SmallVec;
@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 pub fn create_large_board(
     width: u8,
     height: u8,
-    num_players: u8,
+    _num_players: u8,
     density: f32,
     seed: u64,
 ) -> Board {
@@ -47,8 +47,8 @@ pub fn create_large_board(
     // Place particles randomly
     let mut placed = 0;
     while placed < target_particles {
-        let x = rng.gen_range(0..width);
-        let y = rng.gen_range(0..height);
+        let x = rng.random_range(0..width);
+        let y = rng.random_range(0..height);
         let coord = Coord { x, y };
 
         if coord == automaton_location || !particles[coord.ix()].what.is_vacuum() {
@@ -56,7 +56,7 @@ pub fn create_large_board(
         }
 
         // Randomly choose particle type (roughly equal distribution)
-        let particle_type = if rng.gen_bool(0.5) {
+        let particle_type = if rng.random_bool(0.5) {
             Particle::Repulsor
         } else {
             Particle::Attractor
@@ -128,7 +128,7 @@ pub fn create_symmetric_board(size: u8, num_players: u8, seed: u64) -> Board {
                 let coord = Coord { x: px, y: py };
 
                 if coord != automaton_location && particles[coord.ix()].what.is_vacuum() {
-                    let particle_type = if rng.gen_bool(0.5) {
+                    let particle_type = if rng.random_bool(0.5) {
                         Particle::Repulsor
                     } else {
                         Particle::Attractor

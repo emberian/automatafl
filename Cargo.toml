@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["logic", "v8n"]
+members = ["v8n", "automatafl-lean", "automatafl-ai", "automatafl-server", "automatafl-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,7 +9,10 @@ authors = ["Ember Arlynx <ember@lunar.town>", "Graham Northup <grissess@nexusg.o
 license = "Apache-2.0 OR MIT"
 
 [workspace.dependencies]
-automatafl-logic = { path = "logic" }
+automatafl-lean = { path = "automatafl-lean" }
+automatafl-ai = { path = "automatafl-ai" }
+automatafl-server = { path = "automatafl-server" }
+automatafl-client = { path = "automatafl-client" }
 
 [profile.release]
 lto = true

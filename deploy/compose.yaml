@@ -1,0 +1,38 @@
+services:
+  automatafl-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: automatafl-server
+    restart: unless-stopped
+    environment:
+      - AUTOMATAFL_BIND=0.0.0.0:3030
+      - AUTOMATAFL_DATA_DIR=/data
+    volumes:
+      - automatafl_data:/data
+    expose:
+      - "3030"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: automatafl-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - automatafl-server
+
+volumes:
+  automatafl_data:
+  caddy_data:
+  caddy_config:

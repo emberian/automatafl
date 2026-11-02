@@ -1,5 +1,5 @@
 use super::MoveGenerator;
-use automatafl_logic::*;
+use crate::*;
 use rand::Rng;
 use smallvec::SmallVec;
 use std::collections::HashSet;
@@ -26,11 +26,11 @@ pub fn random_valid_move<R: Rng>(
 ) -> Option<Coord> {
     // Choose random direction
     let directions = [Delta::XP, Delta::XN, Delta::YP, Delta::YN];
-    let dir = directions[rng.gen_range(0..4)];
+    let dir = directions[rng.random_range(0..4)];
 
     // Choose random distance (1 to 5 cells)
     let max_dist = 5.min(board.size.x.max(board.size.y) as usize);
-    let dist = rng.gen_range(1..=max_dist);
+    let dist = rng.random_range(1..=max_dist);
 
     let to = from + dir.scale(dist as isize);
 
@@ -60,7 +60,7 @@ impl RandomMoveGen {
     }
 
     pub fn new_random() -> Self {
-        use rand::{SeedableRng, Rng};
+        use rand::SeedableRng;
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(rand::random()),
         }
@@ -86,7 +86,7 @@ impl MoveGenerator for RandomMoveGen {
             // Pick a random piece and generate a random move
             let mut attempts = 0;
             while attempts < 10 {
-                let from = pieces[self.rng.gen_range(0..pieces.len())];
+                let from = pieces[self.rng.random_range(0..pieces.len())];
                 if let Some(to) = random_valid_move(&mut self.rng, &game.board, from) {
                     moves.push(Move { who: pid, from, to });
                     break;
@@ -129,9 +129,9 @@ impl MoveGenerator for ConflictSeekingGen {
         // Strategy: Try to move different pieces to the same destination (destination conflict)
         // or move the same piece to different destinations (source conflict)
 
-        if self.rng.gen_bool(0.5) {
+        if self.rng.random_bool(0.5) {
             // Destination conflict: multiple pieces to same spot
-            let target = pieces[self.rng.gen_range(0..pieces.len())];
+            let target = pieces[self.rng.random_range(0..pieces.len())];
 
             for player_id in 0..game.player_count.min(2) {
                 let pid = Pid(player_id);
@@ -141,7 +141,7 @@ impl MoveGenerator for ConflictSeekingGen {
 
                 if player_id == 0 {
                     // First player picks a random piece
-                    let from = pieces[self.rng.gen_range(0..pieces.len())];
+                    let from = pieces[self.rng.random_range(0..pieces.len())];
                     if from != target && game.board.inbounds(target) {
                         moves.push(Move {
                             who: pid,
@@ -151,7 +151,7 @@ impl MoveGenerator for ConflictSeekingGen {
                     }
                 } else {
                     // Second player tries to move to the same target
-                    let from = pieces[self.rng.gen_range(0..pieces.len())];
+                    let from = pieces[self.rng.random_range(0..pieces.len())];
                     if from != target && game.board.inbounds(target) && from != moves[0].from {
                         moves.push(Move {
                             who: pid,
@@ -163,7 +163,7 @@ impl MoveGenerator for ConflictSeekingGen {
             }
         } else {
             // Source conflict: same piece to different destinations
-            let shared_source = pieces[self.rng.gen_range(0..pieces.len())];
+            let shared_source = pieces[self.rng.random_range(0..pieces.len())];
 
             for player_id in 0..game.player_count.min(2) {
                 let pid = Pid(player_id);
@@ -188,7 +188,7 @@ impl MoveGenerator for ConflictSeekingGen {
                 continue;
             }
 
-            let from = pieces[self.rng.gen_range(0..pieces.len())];
+            let from = pieces[self.rng.random_range(0..pieces.len())];
             if let Some(to) = random_valid_move(&mut self.rng, &game.board, from) {
                 moves.push(Move { who: pid, from, to });
             }
@@ -237,7 +237,7 @@ impl MoveGenerator for ChainMakingGen {
         for _ in 0..chain_length {
             let mut idx;
             loop {
-                idx = self.rng.gen_range(0..pieces.len());
+                idx = self.rng.random_range(0..pieces.len());
                 if !used_indices.contains(&idx) {
                     break;
                 }
@@ -247,7 +247,7 @@ impl MoveGenerator for ChainMakingGen {
         }
 
         // Decide if this is a cycle or a chain
-        let is_cycle = self.rng.gen_bool(0.3);
+        let is_cycle = self.rng.random_bool(0.3);
 
         for (i, &from) in chain_pieces.iter().enumerate() {
             let pid = Pid(i as u8);
@@ -316,7 +316,7 @@ impl MoveGenerator for GoalOrientedGen {
             // Find this player's goal (if any)
             let goal = game.goals.iter().find(|(_, p)| *p == pid).map(|(c, _)| c);
 
-            let from = pieces[self.rng.gen_range(0..pieces.len())];
+            let from = pieces[self.rng.random_range(0..pieces.len())];
 
             let to = if let Some(&goal_coord) = goal {
                 // Try to move toward the goal
@@ -337,11 +337,11 @@ impl MoveGenerator for GoalOrientedGen {
                     }
                 } else {
                     // Already at goal on one axis, pick random
-                    [Delta::XP, Delta::XN, Delta::YP, Delta::YN][self.rng.gen_range(0..4)]
+                    [Delta::XP, Delta::XN, Delta::YP, Delta::YN][self.rng.random_range(0..4)]
                 };
 
                 // Move in that direction
-                let dist = self.rng.gen_range(1..=3) as isize;
+                let dist = self.rng.random_range(1..=3) as isize;
                 let candidate = from + preferred_dir.scale(dist);
 
                 if game.board.inbounds(candidate)

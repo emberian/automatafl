@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-automatafl-logic = { path = "../logic" }
+automatafl-lean = { path = "../automatafl-lean" }
+automatafl-ai = { path = "../automatafl-ai" }
 rand = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 smallvec = { version = "1.15", features = ["serde", "drain_filter"] }

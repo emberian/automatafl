@@ -11,10 +11,11 @@
 //! to combine and build on each other for more creative and exhaustive testing.
 
 pub mod board_builders;
+pub mod lean_game;
 pub mod move_gen;
 pub mod recording;
 
-pub use automatafl_logic::*;
 pub use board_builders::*;
+pub use lean_game::*;
 pub use move_gen::*;
 pub use recording::*;

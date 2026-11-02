@@ -223,7 +223,7 @@ class Game():
         moves = set(self.pending_moves.values())
         for src, dst in moves:
             self.board[src] |= Board.PC_F_PASSABLE
-            self.board[dst] |= Board.PC_F_PASSABLE
+            #self.board[dst] |= Board.PC_F_PASSABLE # why was this ever here?
 
         success = {}
         while moves:

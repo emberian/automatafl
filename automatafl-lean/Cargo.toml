@@ -1,0 +1,22 @@
+[package]
+name = "automatafl-lean"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ember Arlynx <ember@lunar.town>", "Graham Northup <grissess@nexusg.org>"]
+license = "Apache-2.0 OR MIT"
+description = "Zero-twin Rust FFI bindings to the formally verified Lean 4 Automatafl core (native & wasm32)."
+build = "build.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[build-dependencies]
+cc = "1.0"
+
+[dev-dependencies]
+proptest = "1.5"
+

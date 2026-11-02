@@ -1,0 +1,19 @@
+[package]
+name = "automatafl-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Simultaneous-move AI search engines (Decoupled UCT, Minimax, Regret Matching) over allocation-free PackedBoard for Automatafl."
+
+[dependencies]
+automatafl-lean = { path = "../automatafl-lean" }
+serde = { version = "1.0", features = ["derive"] }
+smallvec = { version = "1.15", features = ["serde"] }
+
+[features]
+default = ["lean-bridge"]
+lean-bridge = []
+
+[dev-dependencies]
+proptest = "1.5"

@@ -1,4 +1,4 @@
-use automatafl_logic::*;
+use crate::*;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::path::Path;

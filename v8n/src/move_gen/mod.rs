@@ -22,7 +22,7 @@
 //! let moves = generator.generate_moves(&game);
 //! ```
 
-use automatafl_logic::*;
+use crate::*;
 use smallvec::SmallVec;
 
 /// Core trait for all move generators.
@@ -43,3 +43,7 @@ pub use basic::*;
 // Composable combinators
 pub mod combinators;
 pub use combinators::*;
+
+// Simultaneous-move AI search generators
+pub mod ai;
+pub use ai::*;
